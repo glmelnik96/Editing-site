@@ -10,6 +10,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from server.app.auth.routes import me_router
+from server.app.auth.routes import router as auth_router
 from server.app.config import Settings
 from server.app.errors import ApiError, install_error_handlers
 from server.app.health import router as health_router
@@ -72,9 +74,11 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     install_error_handlers(app)
     install_origin_check(app)
     app.include_router(health_router)
+    app.include_router(auth_router)
+    app.include_router(me_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
-        "/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
+        "/api/{rest:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
     )
     def _api_not_found(rest: str) -> None:
         raise ApiError(404, "not_found", "Нет такого маршрута")
