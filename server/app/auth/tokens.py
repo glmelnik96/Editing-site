@@ -10,6 +10,11 @@ from server.app.util import iso, new_id, now_iso, parse_iso, sha256_hex, utcnow
 TOKEN_PREFIX = "vt_"
 TOUCH_INTERVAL = timedelta(minutes=1)
 MAX_TOKEN_DAYS = 3650
+MAX_ACTIVE_TOKENS = 20
+
+
+class TokenLimitError(ValueError):
+    """У пользователя уже MAX_ACTIVE_TOKENS живых токенов."""
 
 
 def hash_token(secret: str) -> str:
@@ -34,6 +39,11 @@ def create_token(
     now = utcnow()
     if expires_in_days is not None and not (1 <= expires_in_days <= MAX_TOKEN_DAYS):
         raise ValueError(f"expires_in_days должен быть от 1 до {MAX_TOKEN_DAYS}")
+    active = conn.execute(
+        "SELECT count(*) FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL", (user_id,)
+    ).fetchone()[0]
+    if active >= MAX_ACTIVE_TOKENS:
+        raise TokenLimitError(f"не больше {MAX_ACTIVE_TOKENS} активных токенов; отзовите ненужные")
     expires_at = iso(now + timedelta(days=expires_in_days)) if expires_in_days is not None else None
     conn.execute(
         "INSERT INTO api_tokens "
