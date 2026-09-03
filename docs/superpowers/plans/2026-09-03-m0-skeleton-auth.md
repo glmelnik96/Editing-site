@@ -134,9 +134,9 @@ VIDEO_YANDEX_CLIENT_SECRET=
 # Почта первого администратора: всегда в whitelist, роль admin
 VIDEO_ADMIN_EMAIL=
 
-# За HTTPS обязательно true (cookie только по HTTPS); true также включает доверие к X-Forwarded-For от Caddy
+# За HTTPS обязательно true (cookie только по HTTPS). IP клиента за Caddy восстанавливает сам uvicorn:
+# флаги --proxy-headers --forwarded-allow-ips=127.0.0.1 в systemd-юните, в коде X-Forwarded-For не разбирается.
 VIDEO_COOKIE_SECURE=false
-VIDEO_TRUST_PROXY=false
 
 # Сессии и лимиты
 VIDEO_SESSION_ABSOLUTE_DAYS=30
@@ -289,7 +289,6 @@ class Settings(BaseSettings):
     yandex_client_secret: str = ""
     admin_email: str = ""
     cookie_secure: bool = False
-    trust_proxy: bool = False
     session_absolute_days: int = 30
     session_idle_days: int = 7
     max_sessions_per_user: int = 5
@@ -793,7 +792,8 @@ def app(settings):
 
 @pytest.fixture
 def client(app):
-    with TestClient(app) as c:
+    # Origin по умолчанию: проверка cross-site считает запрос без Origin чужим (Task 4), а браузер шлёт его всегда.
+    with TestClient(app, headers={"Origin": "http://testserver"}) as c:
         yield c
 
 
@@ -1140,9 +1140,9 @@ import sqlite3
 from datetime import timedelta
 
 from server.app.config import Settings
+from server.app.security import SESSION_COOKIE
 from server.app.util import iso, parse_iso, utcnow
 
-SESSION_COOKIE = "vsid"
 TOUCH_INTERVAL = timedelta(minutes=1)
 
 _USER_COLUMNS = "u.id, u.email, u.name, u.role, u.disabled"
@@ -1520,7 +1520,7 @@ STATE_COOKIE_PATH = "/api/v1/auth"
 @router.get("/login")
 def login(request: Request) -> RedirectResponse:
     settings = request.app.state.settings
-    if not request.app.state.login_limiter.allow(client_ip(request, settings.trust_proxy)):
+    if not request.app.state.login_limiter.allow(client_ip(request)):
         raise ApiError(429, "rate_limited", "Слишком много попыток входа, подождите минуту")
     if not settings.yandex_client_id:
         raise ApiError(503, "oauth_not_configured", "Yandex OAuth не настроен")
@@ -1589,15 +1589,9 @@ def me(user: CurrentUser = Depends(current_user)) -> dict:
     return user.model_dump()
 ```
 
-- [ ] **Step 6: Убрать дубль имени cookie в `server/app/security.py`**
+- [ ] **Step 6: Имя cookie**
 
-Заменить строку `SESSION_COOKIE = "vsid"` на импорт:
-
-```python
-from server.app.auth.sessions import SESSION_COOKIE  # noqa: E402  (единственный источник имени cookie)
-```
-
-Импорт поставить рядом с остальными импортами в начале файла (после `from server.app.errors import error_body`), а строку с константой удалить.
+Ничего не менять: `SESSION_COOKIE` живёт в `server/app/security.py`, а `server/app/auth/sessions.py` импортирует его оттуда (см. Task 6). Направление зависимостей: низкоуровневый `security.py` ничего не знает про сессии.
 
 - [ ] **Step 7: Подключить роутеры в `server/app/main.py`**
 
@@ -2350,7 +2344,6 @@ if [ ! -f "$APP_DIR/.env" ]; then
     VIDEO_DATA_DIR=$DATA_DIR/data
     VIDEO_PUBLIC_BASE_URL=https://$DOMAIN
     VIDEO_COOKIE_SECURE=true
-    VIDEO_TRUST_PROXY=true
     VIDEO_YANDEX_CLIENT_ID / VIDEO_YANDEX_CLIENT_SECRET / VIDEO_ADMIN_EMAIL
 EOF
 fi
@@ -2713,4 +2706,4 @@ git push
 
 **Осознанно не в M0:** квота в `/me` (нужны ассеты, M1), `/files/*` и forward_auth (M1), воркер и пульс (M1; `/healthz` уже умеет его читать), egress-allowlist (M4).
 
-**Согласованность имён между задачами:** `SESSION_COOKIE` живёт в `server/app/auth/sessions.py`, `security.py` импортирует его (Task 7, Step 6); `resolve_session` возвращает строку с `session_id` и полями пользователя, `resolve_token` — с `token_id`; `CurrentUser.auth` принимает `"cookie"` или `"token"`; `disk_free_pct` определён в `health.py` и переиспользуется в `admin/routes.py`; `normalize_email` определён в `users.py` и переиспользуется в `admin/routes.py`; `client_ip` из `security.py` используется в `routes.py`.
+**Согласованность имён между задачами:** `SESSION_COOKIE` живёт в `server/app/security.py`, `sessions.py` импортирует его (Task 6); `resolve_session` возвращает строку с `session_id` и полями пользователя, `resolve_token` — с `token_id`; `CurrentUser.auth` принимает `"cookie"` или `"token"`; `disk_free_pct` определён в `health.py` и переиспользуется в `admin/routes.py`; `normalize_email` определён в `users.py` и переиспользуется в `admin/routes.py`; `client_ip` из `security.py` используется в `routes.py`.
