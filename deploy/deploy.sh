@@ -24,10 +24,15 @@ health_ok() {
   run_as_video .venv/bin/python - "$HEALTH_URL" <<'EOF'
 import json
 import sys
+import urllib.error
 import urllib.request
 
 try:
     body = json.load(urllib.request.urlopen(sys.argv[1], timeout=2))
+except urllib.error.HTTPError as exc:
+    # 503 при degraded: печатаем тело, чтобы было видно, какая проверка упала.
+    print("healthz:", exc.code, exc.read().decode("utf-8", errors="replace"))
+    sys.exit(1)
 except Exception as exc:  # noqa: BLE001
     print("healthz:", exc)
     sys.exit(1)

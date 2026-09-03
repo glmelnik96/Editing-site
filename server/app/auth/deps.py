@@ -27,7 +27,8 @@ class CurrentUser(BaseModel):
 
 def _user(row: sqlite3.Row, auth: str, settings: Settings) -> CurrentUser:
     admin_email = normalize_email(settings.admin_email) if settings.admin_email else ""
-    role = "admin" if admin_email and row["email"] == admin_email else "user"
+    # Роль считается от VIDEO_ADMIN_EMAIL на каждом запросе; users.role не является источником прав.
+    role = "admin" if admin_email and normalize_email(row["email"]) == admin_email else "user"
     return CurrentUser(id=row["id"], email=row["email"], name=row["name"], role=role, auth=auth)
 
 
