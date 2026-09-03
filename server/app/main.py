@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.app.auth.routes import me_router
 from server.app.auth.routes import router as auth_router
+from server.app.auth.token_routes import router as tokens_router
 from server.app.config import Settings
 from server.app.errors import ApiError, install_error_handlers
 from server.app.health import router as health_router
@@ -76,6 +77,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(me_router)
+    app.include_router(tokens_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
         "/api/{rest:path}",
