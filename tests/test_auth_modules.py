@@ -176,3 +176,12 @@ def test_upsert_user_reenables_only_the_config_admin(db):
     assert upsert_user(db, email="admin@ya.ru", name="A", admin_email="admin@ya.ru")["disabled"] == 0
     assert upsert_user(db, email="u@ya.ru", name="U", admin_email="admin@ya.ru")["disabled"] == 1
     assert admin["id"] != user["id"]
+
+
+def test_corrupt_last_used_does_not_break_token(db):
+    uid = upsert_user(db, email="u@ya.ru", name="U", admin_email="")["id"]
+    view, secret = create_token(db, user_id=uid, name="agent", expires_in_days=None)
+    db.execute("UPDATE api_tokens SET last_used_at = 'garbage' WHERE id = ?", (view["id"],))
+    assert resolve_token(db, secret) is not None
+    last_used = db.execute("SELECT last_used_at FROM api_tokens WHERE id = ?", (view["id"],)).fetchone()[0]
+    assert last_used != "garbage"

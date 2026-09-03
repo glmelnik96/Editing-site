@@ -1,7 +1,7 @@
 """GET /healthz: база, свободный диск, пульс воркера. Без авторизации; поля описаны в схеме ответа.
 
-Любая поломка базы, диска или пульса даёт статус degraded и 200, а не 500: внешний пинг и deploy.sh
-читают тело.
+Любая поломка базы, диска или пульса даёт status=degraded и код 503, чтобы внешний пинг заметил; deploy.sh
+читает тело.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from server.app.util import parse_iso, utcnow
@@ -65,14 +65,16 @@ def worker_age_sec(conn: sqlite3.Connection) -> tuple[int | None, bool]:
 
 
 @router.get("/healthz", response_model=Health)
-def healthz(request: Request) -> Health:
+def healthz(request: Request, response: Response) -> Health:
     settings = request.app.state.settings
     free = disk_free_pct_safe(settings.data_dir)
     try:
         conn = connect(settings.db_path)
     except sqlite3.Error as exc:
         log.warning("healthz: база не открывается: %s", exc)
-        return Health(status="degraded", db=False, disk_free_pct=free, worker_seen_sec_ago=None)
+        health = Health(status="degraded", db=False, disk_free_pct=free, worker_seen_sec_ago=None)
+        response.status_code = 503
+        return health
     try:
         db_ok = db_alive(conn)
         worker_age, worker_ok = worker_age_sec(conn) if db_ok else (None, False)
@@ -80,12 +82,14 @@ def healthz(request: Request) -> Health:
         conn.close()
     stale = worker_age is not None and worker_age > WORKER_STALE_AFTER_SEC
     degraded = (not db_ok) or (not worker_ok) or free < DISK_LOW_PCT or stale
-    return Health(
+    health = Health(
         status="degraded" if degraded else "ok",
         db=db_ok,
         disk_free_pct=free,
         worker_seen_sec_ago=worker_age,
     )
+    response.status_code = 200 if health.status == "ok" else 503
+    return health
 
 
 router.add_api_route("/healthz", healthz, methods=["HEAD"], include_in_schema=False)

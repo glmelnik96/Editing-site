@@ -1,8 +1,17 @@
+import os
+
 import pytest
 from starlette.testclient import TestClient
 
 from server.app.config import Settings
 from server.app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _clean_video_env(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("VIDEO_"):
+            monkeypatch.delenv(key)
 
 
 @pytest.fixture
@@ -15,6 +24,9 @@ def settings(tmp_path) -> Settings:
         yandex_client_secret="sec",
         admin_email="admin@ya.ru",
         login_rate_max=1000,
+        max_sessions_per_user=5,
+        session_absolute_days=30,
+        session_idle_days=7,
     )
 
 
@@ -50,7 +62,7 @@ def login_as(client, monkeypatch):
         assert r.status_code == 302, r.text
         state = client.cookies.get("oauth_state")
         r = client.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-        assert r.status_code == 302, r.text
+        assert r.status_code == 302 and r.headers["location"] == "/", r.text
         return client
 
     return _login

@@ -6,6 +6,7 @@ import sqlite3
 from datetime import timedelta
 
 from server.app.util import iso, new_id, now_iso, parse_iso, sha256_hex, utcnow
+from server.db.core import transaction
 
 TOKEN_PREFIX = "vt_"
 TOUCH_INTERVAL = timedelta(minutes=1)
@@ -39,18 +40,19 @@ def create_token(
     now = utcnow()
     if expires_in_days is not None and not (1 <= expires_in_days <= MAX_TOKEN_DAYS):
         raise ValueError(f"expires_in_days должен быть от 1 до {MAX_TOKEN_DAYS}")
-    active = conn.execute(
-        "SELECT count(*) FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL", (user_id,)
-    ).fetchone()[0]
-    if active >= MAX_ACTIVE_TOKENS:
-        raise TokenLimitError(f"не больше {MAX_ACTIVE_TOKENS} активных токенов; отзовите ненужные")
     expires_at = iso(now + timedelta(days=expires_in_days)) if expires_in_days is not None else None
-    conn.execute(
-        "INSERT INTO api_tokens "
-        "(id, user_id, name, token_hash, created_at, last_used_at, expires_at, revoked_at) "
-        "VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)",
-        (tid, user_id, name[:100], hash_token(secret), iso(now), expires_at),
-    )
+    with transaction(conn):
+        active = conn.execute(
+            "SELECT count(*) FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL", (user_id,)
+        ).fetchone()[0]
+        if active >= MAX_ACTIVE_TOKENS:
+            raise TokenLimitError(f"не больше {MAX_ACTIVE_TOKENS} активных токенов; отзовите ненужные")
+        conn.execute(
+            "INSERT INTO api_tokens "
+            "(id, user_id, name, token_hash, created_at, last_used_at, expires_at, revoked_at) "
+            "VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)",
+            (tid, user_id, name[:100], hash_token(secret), iso(now), expires_at),
+        )
     row = conn.execute("SELECT * FROM api_tokens WHERE id = ?", (tid,)).fetchone()
     return token_view(row), secret
 
@@ -87,6 +89,12 @@ def resolve_token(conn: sqlite3.Connection, secret: str | None) -> sqlite3.Row |
     now = utcnow()
     if row["expires_at"] and row["expires_at"] < iso(now):
         return None
-    if not row["last_used_at"] or now - parse_iso(row["last_used_at"]) > TOUCH_INTERVAL:
+    recent = False
+    if row["last_used_at"]:
+        try:
+            recent = now - parse_iso(row["last_used_at"]) <= TOUCH_INTERVAL
+        except (TypeError, ValueError):
+            recent = False
+    if not recent:
         conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (iso(now), row["token_id"]))
     return row

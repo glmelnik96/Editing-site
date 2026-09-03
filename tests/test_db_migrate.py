@@ -168,3 +168,21 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert conn.execute("SELECT count(*) FROM users WHERE yandex_id = '42'").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+def test_transaction_rolls_back_on_error(tmp_path):
+    from server.db.core import transaction
+
+    conn = connect(tmp_path / "t.db")
+    try:
+        migrate(conn)
+        with pytest.raises(RuntimeError), transaction(conn):
+            conn.execute("INSERT INTO heartbeats (name, at) VALUES ('w', 'x')")
+            raise RuntimeError("boom")
+        assert conn.execute("SELECT count(*) FROM heartbeats").fetchone()[0] == 0
+        assert conn.in_transaction is False
+        with transaction(conn):
+            conn.execute("INSERT INTO heartbeats (name, at) VALUES ('w', 'x')")
+        assert conn.execute("SELECT count(*) FROM heartbeats").fetchone()[0] == 1
+    finally:
+        conn.close()

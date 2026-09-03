@@ -11,12 +11,12 @@ import sqlite3
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
-from server.app.auth.deps import CurrentUser, require_admin
+from server.app.auth.deps import CurrentUser, require_admin, require_admin_cookie
 from server.app.auth.users import normalize_email
 from server.app.errors import ApiError
 from server.app.health import disk_free_pct_safe
 from server.app.util import now_iso
-from server.db.core import get_db
+from server.db.core import get_db, transaction
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -46,7 +46,7 @@ class Stats(BaseModel):
 
 @router.get("/whitelist", response_model=WhitelistList)
 def whitelist_list(
-    _: CurrentUser = Depends(require_admin),  # noqa: B008
+    _: CurrentUser = Depends(require_admin_cookie),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> WhitelistList:
     rows = conn.execute("SELECT email, added_by, added_at FROM whitelist ORDER BY added_at, email")
@@ -56,17 +56,18 @@ def whitelist_list(
 @router.post("/whitelist", status_code=201, response_model=WhitelistEntry)
 def whitelist_add(
     body: WhitelistAdd,
-    admin: CurrentUser = Depends(require_admin),  # noqa: B008
+    admin: CurrentUser = Depends(require_admin_cookie),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> WhitelistEntry:
     email = normalize_email(body.email)
     if not EMAIL_RE.match(email):
         raise ApiError(422, "invalid_email", "Это не похоже на адрес почты")
-    conn.execute(
-        "INSERT OR IGNORE INTO whitelist (email, added_by, added_at) VALUES (?, ?, ?)",
-        (email, admin.email, now_iso()),
-    )
-    conn.execute("UPDATE users SET disabled = 0 WHERE email = ?", (email,))
+    with transaction(conn):
+        conn.execute(
+            "INSERT OR IGNORE INTO whitelist (email, added_by, added_at) VALUES (?, ?, ?)",
+            (email, admin.email, now_iso()),
+        )
+        conn.execute("UPDATE users SET disabled = 0 WHERE email = ?", (email,))
     row = conn.execute("SELECT email, added_by, added_at FROM whitelist WHERE email = ?", (email,)).fetchone()
     return WhitelistEntry(**dict(row))
 
@@ -75,19 +76,20 @@ def whitelist_add(
 def whitelist_remove(
     request: Request,
     email: str,
-    _: CurrentUser = Depends(require_admin),  # noqa: B008
+    _: CurrentUser = Depends(require_admin_cookie),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     normalized = normalize_email(email)
     if normalized == normalize_email(request.app.state.settings.admin_email):
         raise ApiError(409, "cannot_remove_admin", "Администратор из конфигурации всегда в списке")
-    cur = conn.execute("DELETE FROM whitelist WHERE email = ?", (normalized,))
-    if cur.rowcount == 0:
-        raise ApiError(404, "not_found", "Адреса нет в списке")
-    conn.execute("UPDATE users SET disabled = 1 WHERE email = ?", (normalized,))
-    conn.execute(
-        "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email = ?)", (normalized,)
-    )
+    with transaction(conn):
+        cur = conn.execute("DELETE FROM whitelist WHERE email = ?", (normalized,))
+        if cur.rowcount == 0:
+            raise ApiError(404, "not_found", "Адреса нет в списке")
+        conn.execute("UPDATE users SET disabled = 1 WHERE email = ?", (normalized,))
+        conn.execute(
+            "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email = ?)", (normalized,)
+        )
     return Response(status_code=204)
 
 

@@ -34,14 +34,12 @@ def test_callback_sets_session_and_me_works(login_as):
 def test_callback_rejects_bad_state(client):
     client.get("/api/v1/auth/login", follow_redirects=False)
     r = client.get("/api/v1/auth/callback", params={"code": "x", "state": "wrong"}, follow_redirects=False)
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "bad_state"
+    assert r.status_code == 302 and r.headers["location"] == "/?error=bad_state"
 
 
 def test_callback_reports_provider_error(client):
     r = client.get("/api/v1/auth/callback", params={"error": "access_denied"}, follow_redirects=False)
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "oauth_error"
+    assert r.status_code == 302 and r.headers["location"] == "/?error=oauth_error"
 
 
 def test_callback_rejects_non_whitelisted(client, monkeypatch):
@@ -58,8 +56,7 @@ def test_callback_rejects_non_whitelisted(client, monkeypatch):
     client.get("/api/v1/auth/login", follow_redirects=False)
     state = client.cookies.get("oauth_state")
     r = client.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "not_allowed"
+    assert r.status_code == 302 and r.headers["location"] == "/?error=not_allowed"
     assert client.get("/api/v1/me").status_code == 401
 
 
@@ -77,8 +74,7 @@ def test_callback_rejects_disabled_user(login_as, settings):
     c.get("/api/v1/auth/login", follow_redirects=False)
     state = c.cookies.get("oauth_state")
     r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "account_disabled"
+    assert r.status_code == 302 and r.headers["location"] == "/?error=account_disabled"
 
 
 def test_me_without_session_is_401_with_challenge(client):
@@ -161,18 +157,16 @@ def test_cookie_attributes_and_state_cleared(client, monkeypatch):
 
 def test_callback_without_state_cookie_is_bad_state(client):
     r = client.get("/api/v1/auth/callback", params={"code": "x", "state": "abc"}, follow_redirects=False)
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "bad_state"
+    assert r.status_code == 302 and r.headers["location"] == "/?error=bad_state"
 
 
-def test_callback_upstream_failures_are_502(client, monkeypatch):
+def test_callback_upstream_failures_redirect(client, monkeypatch):
     for exc in (httpx.ConnectError("boom"), KeyError("access_token"), ValueError("not json")):
         _fake_yandex(monkeypatch, exchange=exc)
         client.get("/api/v1/auth/login", follow_redirects=False)
         state = client.cookies.get("oauth_state")
         r = client.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-        assert r.status_code == 502
-        assert r.json()["error"]["code"] == "oauth_upstream"
+        assert r.status_code == 302 and r.headers["location"] == "/?error=oauth_upstream"
 
 
 def test_failed_callback_spends_state_and_callback_is_rate_limited(tmp_path, monkeypatch):
@@ -182,10 +176,10 @@ def test_failed_callback_spends_state_and_callback_is_rate_limited(tmp_path, mon
         c.get("/api/v1/auth/login", follow_redirects=False)
         state = c.cookies.get("oauth_state")
         r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-        assert r.status_code == 403
+        assert r.headers["location"] == "/?error=not_allowed"
         assert c.cookies.get("oauth_state") is None
         r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
-        assert r.json()["error"]["code"] == "bad_state"
+        assert r.headers["location"] == "/?error=bad_state"
         r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
         assert r.status_code == 429
 
@@ -236,3 +230,26 @@ def test_same_yandex_account_can_log_in_under_two_whitelisted_emails(client, set
     conn = connect(settings.db_path)
     assert conn.execute("SELECT count(*) FROM users WHERE yandex_id = '42'").fetchone()[0] == 2
     conn.close()
+
+
+def test_logout_with_bearer_is_rejected(login_as):
+    c = login_as()
+    secret = c.post("/api/v1/tokens", json={"name": "t"}).json()["secret"]
+    r = c.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {secret}"})
+    assert r.status_code == 400
+    assert c.get("/api/v1/me", headers={"Authorization": f"Bearer {secret}"}).status_code == 200
+
+
+def test_rotating_admin_email_demotes_old_admin(login_as, settings, tmp_path):
+    from server.app.config import Settings
+    from server.app.main import create_app
+
+    c = login_as("admin@ya.ru")
+    cookie = c.cookies.get("vsid")
+    rotated = Settings(_env_file=None, data_dir=settings.data_dir, public_base_url="http://testserver",
+                       yandex_client_id="cid", yandex_client_secret="sec", admin_email="boss@ya.ru")
+    app2 = create_app(rotated, web_dist=tmp_path / "no-dist")
+    with TestClient(app2, headers={"Origin": "http://testserver"}) as c2:
+        c2.cookies.set("vsid", cookie)
+        assert c2.get("/api/v1/me").json()["role"] == "user"
+        assert c2.get("/api/v1/admin/stats").status_code == 403

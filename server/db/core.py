@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import Request
@@ -31,3 +32,16 @@ def get_db(request: Request) -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+@contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """BEGIN IMMEDIATE … COMMIT; при исключении ROLLBACK. Соединение в autocommit, поэтому явно."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")

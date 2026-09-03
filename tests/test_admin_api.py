@@ -87,3 +87,15 @@ def test_config_admin_cannot_be_removed_or_locked_out(login_as, settings):
     conn = connect(settings.db_path)
     assert conn.execute("SELECT disabled FROM users WHERE email = 'admin@ya.ru'").fetchone()[0] == 0
     conn.close()
+
+
+def test_agent_token_cannot_touch_whitelist_but_may_read_stats(login_as):
+    admin = login_as("admin@ya.ru")
+    secret = admin.post("/api/v1/tokens", json={"name": "agent"}).json()["secret"]
+    headers = {"Authorization": f"Bearer {secret}"}
+    r = admin.post("/api/v1/admin/whitelist", json={"email": "x@ya.ru"}, headers=headers)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "cookie_required"
+    assert admin.get("/api/v1/admin/whitelist", headers=headers).status_code == 403
+    assert admin.delete("/api/v1/admin/whitelist/x@ya.ru", headers=headers).status_code == 403
+    assert admin.get("/api/v1/admin/stats", headers=headers).status_code == 200

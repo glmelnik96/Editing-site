@@ -27,7 +27,9 @@ def test_healthz_degraded_when_worker_stale(client, settings):
         "INSERT INTO heartbeats (name, at) VALUES ('worker', ?)", (iso(utcnow() - timedelta(seconds=600)),)
     )
     conn.close()
-    body = client.get("/healthz").json()
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
     assert body["status"] == "degraded"
     assert body["worker_seen_sec_ago"] >= 600
 
@@ -46,7 +48,9 @@ def test_app_keeps_a_long_lived_db_connection(client, app):
 
 def test_healthz_degraded_when_disk_low(client, monkeypatch):
     monkeypatch.setattr(health, "disk_free_pct", lambda path: 5.0)
-    body = client.get("/healthz").json()
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
     assert body["status"] == "degraded"
     assert body["disk_free_pct"] == 5.0
 
@@ -56,7 +60,7 @@ def test_healthz_reports_db_false_when_tables_missing(client, settings):
     conn.execute("DROP TABLE schema_migrations")
     conn.close()
     r = client.get("/healthz")
-    assert r.status_code == 200
+    assert r.status_code == 503
     assert r.json()["db"] is False
     assert r.json()["status"] == "degraded"
 
@@ -65,7 +69,9 @@ def test_healthz_degraded_when_heartbeat_unreadable(client, settings):
     conn = connect(settings.db_path)
     conn.execute("INSERT INTO heartbeats (name, at) VALUES ('worker', 'garbage')")
     conn.close()
-    body = client.get("/healthz").json()
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
     assert body["status"] == "degraded"
     assert body["worker_seen_sec_ago"] is None
 
@@ -128,7 +134,7 @@ def test_healthz_degraded_when_database_cannot_open(client, monkeypatch):
 
     monkeypatch.setattr(health, "connect", failing_connect)
     r = client.get("/healthz")
-    assert r.status_code == 200
+    assert r.status_code == 503
     assert r.json()["db"] is False
     assert r.json()["status"] == "degraded"
 
