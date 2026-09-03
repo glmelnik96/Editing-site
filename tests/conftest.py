@@ -19,8 +19,8 @@ def settings(tmp_path) -> Settings:
 
 
 @pytest.fixture
-def app(settings):
-    return create_app(settings)
+def app(settings, tmp_path):
+    return create_app(settings, web_dist=tmp_path / "no-dist")
 
 
 @pytest.fixture

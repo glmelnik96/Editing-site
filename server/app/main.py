@@ -1,4 +1,4 @@
-"""Фабрика приложения. uvicorn server.app.main:app"""
+"""Фабрика приложения. uvicorn server.app.main:app (объект app создаётся при первом обращении, не при импорте)."""
 from __future__ import annotations
 
 import logging
@@ -20,12 +20,19 @@ WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 log = logging.getLogger("video")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def configure_logging(level: str) -> None:
+    """Корень на WARNING, чтобы чужие библиотеки (httpx и прочие) не шумели в journald; наш логгер на заданном уровне."""
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("video").setLevel(level)
+
+
+def create_app(settings: Settings | None = None, web_dist: Path | None = None) -> FastAPI:
     settings = settings or Settings()
+    web_dist = WEB_DIST if web_dist is None else web_dist
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        configure_logging(settings.log_level)
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         conn = connect(settings.db_path)
         try:
@@ -33,12 +40,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             conn.close()
             raise
-        # Долгоживущее соединение: пока оно открыто, файлы WAL не пересоздаются на каждый запрос
-        # (соединение на запрос в get_db остаётся; это соединение само ничего не делает).
+        # Долгоживущее соединение: пока оно открыто, файлы WAL не пересоздаются на каждый запрос.
+        # Из обработчиков запросов им не пользоваться: у них своё соединение через get_db.
         app.state.db_keeper = conn
         log.info(
             "starting: public_base_url=%s allowed_origin=%s data_dir=%s migrations_applied=%s",
-            settings.public_base_url, settings.allowed_origin, settings.data_dir, applied or "none",
+            settings.public_base_url,
+            settings.allowed_origin,
+            settings.data_dir,
+            ", ".join(str(v) for v in applied) or "none",
         )
         try:
             yield
@@ -58,9 +68,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     install_origin_check(app)
     app.include_router(health_router)
-    if WEB_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")
+    # Все роутеры подключаются выше этой строки: статика на "/" перехватывает всё остальное.
+    if web_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
     return app
 
 
-app = create_app()
+_apps: dict[str, FastAPI] = {}
+
+
+def __getattr__(name: str) -> FastAPI:
+    """`server.app.main:app` для uvicorn: настройки читаются при первом обращении, а не при импорте."""
+    if name == "app":
+        if "app" not in _apps:
+            _apps["app"] = create_app()
+        return _apps["app"]
+    raise AttributeError(name)

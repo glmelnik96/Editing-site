@@ -45,3 +45,7 @@ def test_settings_reject_bad_port_and_bad_log_level():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, log_level="loud")
     assert Settings(_env_file=None, log_level="debug").log_level == "DEBUG"
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, public_base_url="http://:8010")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, public_base_url="https://host:70000")

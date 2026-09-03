@@ -31,8 +31,8 @@ class Settings(BaseSettings):
         try:
             port = u.port
         except ValueError as exc:
-            raise ValueError("VIDEO_PUBLIC_BASE_URL: порт должен быть числом") from exc
-        if u.scheme not in ("http", "https") or not u.netloc or port == 0:
+            raise ValueError("VIDEO_PUBLIC_BASE_URL: порт должен быть числом от 1 до 65535") from exc
+        if u.scheme not in ("http", "https") or not u.hostname or port == 0:
             raise ValueError("VIDEO_PUBLIC_BASE_URL должен быть вида https://host[:port]")
         return value.rstrip("/")
 
