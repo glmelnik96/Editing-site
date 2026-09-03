@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ def sample_command(path: Path, seconds: int) -> list[str]:
         "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
         "-t", str(seconds),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-shortest", str(path),
+        "-c:a", "aac", str(path),
     ]
 
 
@@ -35,6 +36,7 @@ def bench_commands(sample: Path, out_dir: Path) -> dict[str, list[str]]:
     return {
         "proxy": common + [
             "-vf", PROXY_SCALE, "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-pix_fmt", "yuv420p",
             "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out_dir / "proxy.mp4"),
         ],
@@ -75,9 +77,14 @@ def render_report(host: str, cpu_count: int, media_seconds: float, results: dict
 def probe_duration(path: Path) -> float:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
-    return float(out)
+    try:
+        return float(out)
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe не смог прочитать длительность {path}: {out!r}") from exc
 
 
 def timed(cmd: list[str]) -> float:
@@ -87,6 +94,8 @@ def timed(cmd: list[str]) -> float:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -118,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
 
     host = platform.node() or "unknown"
     report = render_report(host, os.cpu_count() or 0, media_seconds, results)
-    path = args.out / f"{date.today().isoformat()}-{host}.md"  # noqa: DTZ011
+    safe_host = re.sub(r"[^\w.-]", "_", host)
+    path = args.out / f"{date.today().isoformat()}-{safe_host}.md"  # noqa: DTZ011
     path.write_text(report, encoding="utf-8")
     print()
     print(report)
