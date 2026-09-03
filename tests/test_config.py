@@ -30,3 +30,10 @@ def test_settings_reject_base_url_without_scheme():
 def test_settings_strip_trailing_slash_from_base_url():
     s = Settings(_env_file=None, public_base_url="https://video.example.ru/")
     assert s.public_base_url == "https://video.example.ru"
+
+
+def test_allowed_origin_drops_default_port_and_keeps_custom():
+    s443 = Settings(_env_file=None, public_base_url="https://video.example.ru:443")
+    assert s443.allowed_origin == "https://video.example.ru"
+    s8010 = Settings(_env_file=None, public_base_url="http://localhost:8010")
+    assert s8010.allowed_origin == "http://localhost:8010"

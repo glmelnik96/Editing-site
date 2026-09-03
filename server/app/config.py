@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     yandex_client_secret: str = ""
     admin_email: str = ""
     cookie_secure: bool = False
-    trust_proxy: bool = False
     session_absolute_days: int = 30
     session_idle_days: int = 7
     max_sessions_per_user: int = 5
@@ -44,4 +43,9 @@ class Settings(BaseSettings):
     @property
     def allowed_origin(self) -> str:
         u = urlsplit(self.public_base_url)
-        return f"{u.scheme}://{u.netloc}"
+        host = u.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        default_port = 443 if u.scheme == "https" else 80
+        netloc = host if u.port in (None, default_port) else f"{host}:{u.port}"
+        return f"{u.scheme}://{netloc}"
