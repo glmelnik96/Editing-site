@@ -1,0 +1,13 @@
+VIDEO_DOMAIN_PLACEHOLDER {
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:8010
+}
