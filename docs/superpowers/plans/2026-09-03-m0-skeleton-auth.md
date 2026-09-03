@@ -30,6 +30,7 @@
 - **Task 10** (`8115f56` + fix): в README раздел «Разработка интерфейса» (сборка + один сервер, либо Vite dev-сервер с `VIDEO_PUBLIC_BASE_URL=http://localhost:5173` из-за проверки Origin); обработка ошибок у выхода, отзыва токена и действий администратора через отдельные слоты `#tokens-error` и `#admin-error`, перерисовка только при успехе; `parseError` терпит `error: null` и отсутствие `code`; `data-revoke` экранируется. Известно: `npm audit` ругается на esbuild dev-сервера через vite 5 (только dev-зависимость), обновление до Vite 8 отложено.
 - **Task 11** (`62f939d`): в Caddyfile заголовки `X-Content-Type-Options nosniff`, `X-Frame-Options DENY`, `Referrer-Policy strict-origin-when-cross-origin`, `-Server`; `deploy.sh` читает поле `status` в теле `/healthz` (200 приходит и при degraded); из подсказки bootstrap убран `VIDEO_TRUST_PROXY`; добавлен `tests/test_deploy_files.py` против дрейфа конфигов (флаги uvicorn в юните, заголовки и лимит тела в Caddyfile, shebang и strict mode скриптов, отсутствие TRUST_PROXY). Fix: все git-команды в `deploy.sh` от пользователя `video` (от root git 2.43 отвечает «dubious ownership», а `set -e` внутри `$(...)` этого не видит); готовность ждётся опросом `/healthz` до 20 с с хвостом journalctl при провале; поддержка приватного репозитория через deploy key `/etc/editing-site/deploy_key` и `GIT_SSH_COMMAND` (known_hosts тоже в `/etc/editing-site`, чтобы не засорять каталог приложения); юнит с `ProtectSystem=strict`, `ProtectHome=true`, `ReadWritePaths=/srv/video`.
 - **Task 12** (`cc2c451`): скрипт по плану; `# noqa: DTZ011` на `date.today()`. Локальный замер на ПК разработчика (16 потоков, образец 10 с 4K): прокси 11×, draft 11×, final 8× реального времени. Ловушка Windows: консоль cp1251 не печатает `×`, отчёт при этом уже записан в UTF-8. Fix: `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` в начале `main()`, `probe_duration` даёт понятную ошибку на `N/A` от ffprobe, прокси пинит `-pix_fmt yuv420p`, из генерации образца убран лишний `-shortest`, имя хоста в имени файла отчёта санируется; тесты на `N/A`, код выхода 2 без ffmpeg и pixel format.
+- **Финальное ревью ветки** (`6d7f230`, `37161e2`): правки whitelist только из браузера (`require_admin_cookie`; токен агента админа мог завести чужой постоянный вход), роль вычисляется из `VIDEO_ADMIN_EMAIL` на каждом запросе (смена адреса сразу понижает старого админа), многошаговые правки whitelist и выпуск токена в явной транзакции (`transaction()` в `db/core.py`), `/healthz` отвечает 503 при degraded (внешний пинг по коду), `deploy.sh` переустанавливает Caddyfile (домен из `/etc/editing-site/domain`) и юнит при каждом деплое, ошибки OAuth редиректят на `/?error=<code>` и страница входа показывает текст, выход с Bearer отвечает 400, ruff `extend-select = ["E501", "B", "DTZ"]`, uvicorn `>=0.30.2`, HSTS и `no-cache` для index, `.npm/` в gitignore, README с шагами деплоя. Отложено в бэклог: дубль `TOUCH_INTERVAL`, `httpx2` для TestClient, права `/srv/video` под Caddy (M1), чистка просроченных сессий и отозванных токенов (janitor, M1).
 
 ---
 
@@ -2687,11 +2688,11 @@ Expected: вход проходит, роль `user`, блока «Разреш�
 - [ ] **Step 6: Замер производительности**
 
 ```bash
-cd /opt/editing-site && sudo -u video .venv/bin/python tools/bench_ffmpeg.py
-sudo -u video cat docs/benchmarks/*.md
+cd /opt/editing-site && sudo -u video .venv/bin/python tools/bench_ffmpeg.py --out /tmp/bench-report --work /srv/video/tmp/bench
+cat /tmp/bench-report/*.md
 ```
 
-Expected: таблица с тремя строками. Скопировать содержимое отчёта в локальный репозиторий в `docs/benchmarks/<дата>-<хост>.md`.
+Expected: таблица с тремя строками. Скопировать содержимое отчёта в локальный репозиторий в `docs/benchmarks/<дата>-<хост>.md`. Отчёт и образец пишутся вне репозитория на VM: файл внутри `/opt/editing-site/docs` сломал бы следующий `git merge --ff-only` в deploy.sh.
 
 - [ ] **Step 7: Зафиксировать пресеты**
 

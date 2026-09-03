@@ -53,7 +53,7 @@ install -m 644 "$APP_DIR/deploy/video-api.service" /etc/systemd/system/video-api
 systemctl daemon-reload
 systemctl restart video-api
 
-# /healthz отвечает 200 и при status=degraded, поэтому читаем тело; ждём готовности до 20 с.
+# /healthz отвечает 503 при status=degraded, а тело печатаем для журнала; ждём готовности до 20 попыток.
 for _ in $(seq 1 20); do
   if systemctl is-active --quiet video-api && health_ok; then
     echo "deploy ok: $(run_as_video git rev-parse --short HEAD)"
