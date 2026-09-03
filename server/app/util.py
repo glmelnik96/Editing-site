@@ -1,6 +1,7 @@
 """Время и идентификаторы. Время везде: ISO-8601 UTC с миллисекундами и суффиксом Z."""
 from __future__ import annotations
 
+import hashlib
 import secrets
 from datetime import UTC, datetime
 
@@ -25,3 +26,7 @@ def parse_iso(s: str) -> datetime:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(6)}"
+
+
+def sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from server.app.util import iso, new_id, now_iso, parse_iso, utcnow
+from server.app.util import iso, new_id, now_iso, parse_iso, sha256_hex, utcnow
 
 
 def test_iso_roundtrip_is_utc_with_milliseconds():
@@ -36,3 +36,7 @@ def test_iso_converts_other_timezones_to_utc():
 def test_iso_rejects_naive_datetime():
     with pytest.raises(ValueError):
         iso(datetime(2026, 9, 3, 10, 0, 0))  # noqa: DTZ001
+
+
+def test_sha256_hex_known_vector():
+    assert sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
