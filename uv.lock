@@ -84,7 +84,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.2,<1" },
 ]
 
 [package.metadata.requires-dev]

@@ -8,5 +8,6 @@ data/
 .env
 web/node_modules/
 web/dist/
+.npm/
 .DS_Store
 Thumbs.db

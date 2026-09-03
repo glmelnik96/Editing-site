@@ -1,5 +1,6 @@
 import './style.css'
 import { api, ApiError } from './api'
+import { loginErrorText } from './errors'
 import { escapeHtml } from './html'
 
 type Me = { id: string; email: string; name: string; role: 'admin' | 'user'; auth: 'cookie' | 'token' }
@@ -23,10 +24,12 @@ async function boot(): Promise<void> {
 }
 
 function renderLogin(): void {
+  const code = new URLSearchParams(location.search).get('error')
   root.innerHTML = `
     <main class="card">
       <h1>Editing site</h1>
       <p>Вход только для адресов из списка.</p>
+      ${code ? `<p class="error">${escapeHtml(loginErrorText(code))}</p>` : ''}
       <a class="button" href="/api/v1/auth/login">Войти через Яндекс</a>
     </main>`
 }
@@ -36,7 +39,7 @@ function renderError(e: unknown): void {
   root.innerHTML = `<main class="card"><h1>Ошибка</h1><p>${escapeHtml(msg)}</p></main>`
 }
 
-async function renderSettings(me: Me): Promise<void> {
+async function renderSettings(me: Me, secretNote = ''): Promise<void> {
   const { tokens } = await api<{ tokens: Token[] }>('/api/v1/tokens')
   const rows = tokens
     .map(
@@ -58,6 +61,12 @@ async function renderSettings(me: Me): Promise<void> {
     </main>
     <section id="admin"></section>`
 
+  if (secretNote) {
+    const box = document.getElementById('secret') as HTMLPreElement
+    box.hidden = false
+    box.textContent = secretNote
+  }
+
   document.getElementById('logout')!.addEventListener('click', async () => {
     try {
       await api('/api/v1/auth/logout', { method: 'POST' })
@@ -76,10 +85,15 @@ async function renderSettings(me: Me): Promise<void> {
         method: 'POST',
         body: JSON.stringify({ name }),
       })
-      await renderSettings(me)
+      const note = `Токен «${created.name}» показывается один раз:\n${created.secret}`
       const box = document.getElementById('secret') as HTMLPreElement
       box.hidden = false
-      box.textContent = `Токен «${created.name}» показывается один раз:\n${created.secret}`
+      box.textContent = note
+      try {
+        await renderSettings(me, note)
+      } catch (e) {
+        showError('tokens-error', e)
+      }
     } catch (e) {
       showError('tokens-error', e)
     }
@@ -93,11 +107,21 @@ async function renderSettings(me: Me): Promise<void> {
         showError('tokens-error', e)
         return
       }
-      await renderSettings(me)
+      try {
+        await renderSettings(me)
+      } catch (e) {
+        showError('tokens-error', e)
+      }
     }),
   )
 
-  if (me.role === 'admin') await renderAdmin()
+  if (me.role === 'admin') {
+    try {
+      await renderAdmin()
+    } catch (e) {
+      showError('tokens-error', e)
+    }
+  }
 }
 
 function showError(slotId: string, e: unknown): void {
@@ -131,7 +155,11 @@ async function renderAdmin(): Promise<void> {
       showError('admin-error', e)
       return
     }
-    await renderAdmin()
+    try {
+      await renderAdmin()
+    } catch (e) {
+      showError('admin-error', e)
+    }
   })
 
   el.querySelectorAll<HTMLButtonElement>('button[data-remove]').forEach(b =>
@@ -142,7 +170,11 @@ async function renderAdmin(): Promise<void> {
         showError('admin-error', e)
         return
       }
-      await renderAdmin()
+      try {
+        await renderAdmin()
+      } catch (e) {
+        showError('admin-error', e)
+      }
     }),
   )
 }

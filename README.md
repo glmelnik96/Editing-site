@@ -14,7 +14,8 @@ cd web && npm install && npm run dev   # интерфейс на http://localhos
 ## Тесты
 
 ```bash
-uv run pytest
+uv run python -m pytest
+uv run ruff check .
 cd web && npm test
 ```
 
@@ -27,4 +28,10 @@ cd web && npm test
 
 ## Деплой
 
-`deploy/bootstrap.sh` один раз на чистой Ubuntu 24.04, затем `deploy/deploy.sh` на каждый релиз. Подробности в спеке, раздел 12.
+1. DNS: A-запись поддомена на VM. Приложение Yandex OAuth с redirect URI `https://<домен>/api/v1/auth/callback` и правами `login:email login:info`.
+2. Приватный репозиторий: положить deploy key в `/etc/editing-site/deploy_key` (bootstrap выставит права), публичный HTTPS-URL ключа не требует.
+3. Один раз на чистой Ubuntu 24.04: `sudo bash bootstrap.sh <домен> <git-url>`, затем заполнить `/opt/editing-site/.env` (`VIDEO_DATA_DIR=/srv/video/data`, `VIDEO_PUBLIC_BASE_URL=https://<домен>`, `VIDEO_COOKIE_SECURE=true`, ключи Yandex, `VIDEO_ADMIN_EMAIL`).
+4. Каждый релиз: `sudo bash /opt/editing-site/deploy/deploy.sh` (fast-forward `main`, зависимости, сборка интерфейса, миграции, переустановка Caddyfile и юнита, рестарт, ожидание `status=ok` в `/healthz`).
+5. Замер скорости ffmpeg на машине: `sudo -u video .venv/bin/python tools/bench_ffmpeg.py --out /tmp/bench-report --work /srv/video/tmp/bench` из `/opt/editing-site`, отчёт скопировать в `docs/benchmarks/` локально.
+
+`/healthz` отвечает 503 при статусе degraded (диск меньше 10 %, база недоступна, пульс воркера старше 120 с), так что внешний пинг по коду ответа достаточен.

@@ -9,6 +9,7 @@ APP_DIR=/opt/editing-site
 HEALTH_URL=http://127.0.0.1:8010/healthz
 DEPLOY_KEY=/etc/editing-site/deploy_key
 KNOWN_HOSTS=/etc/editing-site/known_hosts
+DOMAIN_FILE=/etc/editing-site/domain
 cd "$APP_DIR"
 
 run_as_video() {
@@ -30,7 +31,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     print("healthz:", exc)
     sys.exit(1)
-print(body)
+print(json.dumps(body))
 sys.exit(0 if body.get("status") == "ok" else 1)
 EOF
 }
@@ -41,6 +42,15 @@ run_as_video uv sync --frozen --no-dev
 (cd web && run_as_video npm ci --no-audit --no-fund && run_as_video npm run build)
 run_as_video .venv/bin/python -m server.db.migrate
 
+# Конфиги Caddy и systemd живут в репозитории: переустанавливаем их при каждом деплое.
+if [ -f "$DOMAIN_FILE" ]; then
+  sed "s/VIDEO_DOMAIN_PLACEHOLDER/$(cat "$DOMAIN_FILE")/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile.new
+  caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile
+  mv /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
+  systemctl reload caddy
+fi
+install -m 644 "$APP_DIR/deploy/video-api.service" /etc/systemd/system/video-api.service
+systemctl daemon-reload
 systemctl restart video-api
 
 # /healthz отвечает 200 и при status=degraded, поэтому читаем тело; ждём готовности до 20 с.

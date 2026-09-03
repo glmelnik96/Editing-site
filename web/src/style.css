@@ -10,3 +10,4 @@ form { display: flex; gap: 8px; margin-top: 12px; }
 input { flex: 1; padding: 6px 8px; }
 button, .button { padding: 6px 12px; cursor: pointer; }
 pre { white-space: pre-wrap; word-break: break-all; padding: 12px; background: #8882; border-radius: 6px; }
+.error { color: #b3261e; }

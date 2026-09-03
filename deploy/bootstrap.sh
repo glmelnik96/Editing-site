@@ -72,6 +72,7 @@ EOF
 fi
 
 sed "s/VIDEO_DOMAIN_PLACEHOLDER/$DOMAIN/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
+echo "$DOMAIN" > /etc/editing-site/domain
 caddy validate --config /etc/caddy/Caddyfile
 install -m 644 "$APP_DIR/deploy/video-api.service" /etc/systemd/system/video-api.service
 systemctl daemon-reload

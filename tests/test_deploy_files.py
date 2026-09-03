@@ -23,6 +23,8 @@ def test_caddyfile_has_security_headers_and_small_default_body():
     assert "max_size 1MB" in caddy
     assert "reverse_proxy 127.0.0.1:8010" in caddy
     assert "VIDEO_DOMAIN_PLACEHOLDER" in caddy
+    assert "Strict-Transport-Security" in caddy
+    assert "Cache-Control no-cache" in caddy
 
 
 def test_scripts_have_bash_shebang_and_strict_mode_and_no_trust_proxy():
@@ -41,6 +43,8 @@ def test_deploy_polls_healthz_status_and_runs_git_as_video():
     assert "for _ in $(seq 1 20)" in text
     assert "run_as_video git rev-parse --short HEAD" in text
     assert "GIT_SSH_COMMAND" in text
+    assert "caddy validate" in text
+    assert "systemctl daemon-reload" in text
 
 
 def test_unit_is_hardened():
