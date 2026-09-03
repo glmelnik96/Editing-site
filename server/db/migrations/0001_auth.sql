@@ -1,14 +1,15 @@
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     name TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
-    disabled INTEGER NOT NULL DEFAULT 0,
+    disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
     created_at TEXT NOT NULL
 );
 
+-- added_by намеренно без внешнего ключа: след «кто добавил» переживает удаление пользователя.
 CREATE TABLE whitelist (
-    email TEXT PRIMARY KEY,
+    email TEXT PRIMARY KEY COLLATE NOCASE,
     added_by TEXT,
     added_at TEXT NOT NULL
 );
