@@ -12,6 +12,16 @@
 
 **Не входит в M0 (по спеке — следующие этапы):** загрузка и ассеты, воркер и janitor, `/files/*` с forward_auth, egress-allowlist (появится в M4, когда известен хост провайдера транскрипции), квота в `/me`.
 
+## Поправки по ходу выполнения
+
+Код-блоки задач ниже — исходная редакция. Ревью после каждой задачи внесло правки, они в репозитории; здесь список, чтобы читать план вместе с ним.
+
+- **Python.** Локально `uv` не смог поставить управляемый 3.12 (кириллица в пути + виртуализация AppData); `.python-version` не создаём, локально venv на 3.14, `requires-python >= 3.12` остаётся, VM на системном 3.12. Тесты запускать `uv run python -m pytest` (без второго `-q`: `addopts` уже содержит `-q`).
+- **Task 1** (`cfc75f6`): `.gitattributes` с `* text=auto eol=lf`, OS-мусор в `.gitignore`, `noqa` только на второй строке smoke-теста.
+- **Task 2** (`6bbfee8`): `iso()` отвергает наивные datetime; `Settings.public_base_url` валидируется (схема http/https + хост, хвостовой `/` срезается).
+- **Task 3** (`1b258e3`, `1d1dbad`): `journal_mode=WAL` включается один раз в `migrate()` через `enable_wal()` с повторами при чужой блокировке; `connect()` ставит только `foreign_keys` и `synchronous=NORMAL`; миграции: `discover()` сортирует по номеру и отвергает дубликаты, запись номера идёт первым statement'ом внутри `BEGIN IMMEDIATE` (одновременный старт API и воркера безопасен), откат при ошибке; `COLLATE NOCASE` на email, `CHECK` на `disabled`.
+- **Task 4** (`7051bca`): `trust_proxy` удалён из настроек, `client_ip(request)` берёт только адрес пира, разбор `X-Forwarded-For` делает uvicorn (`--proxy-headers --forwarded-allow-ips=127.0.0.1` в юните); проверка Origin пропускается только для `Authorization: Bearer`, без обоих заголовков запрос считается чужим, `same-site` не проходит; лимитер с блокировкой и пределом ключей; JSON-конверт и для необработанных 500; `ApiError` умеет заголовки; 422 не эхоит присланные значения; `allowed_origin` без порта по умолчанию. Следствия для задач ниже: в Task 5 тестовый клиент шлёт `Origin: http://testserver` по умолчанию; в Task 6 `sessions.py` импортирует `SESSION_COOKIE` из `security.py` (а не наоборот); в Task 7 вызов `client_ip(request)` без второго аргумента; в Task 11 из подсказки bootstrap убрать `VIDEO_TRUST_PROXY`.
+
 ---
 
 ## Карта файлов
