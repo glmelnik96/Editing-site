@@ -64,11 +64,14 @@ def test_callback_rejects_non_whitelisted(client, monkeypatch):
 
 
 def test_callback_rejects_disabled_user(login_as, settings):
-    from server.db.core import connect
-
-    c = login_as("admin@ya.ru")
+    # Не admin@ya.ru: вход config-админа теперь всегда снимает disabled (Task 9 fix),
+    # поэтому отключение проверяем на обычном пользователе из whitelist.
     conn = connect(settings.db_path)
-    conn.execute("UPDATE users SET disabled = 1 WHERE email = 'admin@ya.ru'")
+    conn.execute("INSERT INTO whitelist (email, added_by, added_at) VALUES ('user@ya.ru', NULL, 'x')")
+    conn.close()
+    c = login_as("user@ya.ru", "User")
+    conn = connect(settings.db_path)
+    conn.execute("UPDATE users SET disabled = 1 WHERE email = 'user@ya.ru'")
     conn.close()
     assert c.get("/api/v1/me").status_code == 401
     c.get("/api/v1/auth/login", follow_redirects=False)

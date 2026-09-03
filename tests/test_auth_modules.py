@@ -167,3 +167,12 @@ def test_upsert_user_keeps_yandex_id(db):
     assert u["yandex_id"] == "123"
     u2 = upsert_user(db, email="u@ya.ru", name="U", admin_email="")
     assert u2["yandex_id"] == "123"
+
+
+def test_upsert_user_reenables_only_the_config_admin(db):
+    admin = upsert_user(db, email="admin@ya.ru", name="A", admin_email="admin@ya.ru")
+    user = upsert_user(db, email="u@ya.ru", name="U", admin_email="admin@ya.ru")
+    db.execute("UPDATE users SET disabled = 1")
+    assert upsert_user(db, email="admin@ya.ru", name="A", admin_email="admin@ya.ru")["disabled"] == 0
+    assert upsert_user(db, email="u@ya.ru", name="U", admin_email="admin@ya.ru")["disabled"] == 1
+    assert admin["id"] != user["id"]

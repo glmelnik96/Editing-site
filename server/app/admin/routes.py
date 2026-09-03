@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from server.app.auth.deps import CurrentUser, require_admin
 from server.app.auth.users import normalize_email
 from server.app.errors import ApiError
-from server.app.health import disk_free_pct
+from server.app.health import disk_free_pct_safe
 from server.app.util import now_iso
 from server.db.core import get_db
 
@@ -73,11 +73,14 @@ def whitelist_add(
 
 @router.delete("/whitelist/{email}", status_code=204)
 def whitelist_remove(
+    request: Request,
     email: str,
     _: CurrentUser = Depends(require_admin),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     normalized = normalize_email(email)
+    if normalized == normalize_email(request.app.state.settings.admin_email):
+        raise ApiError(409, "cannot_remove_admin", "Администратор из конфигурации всегда в списке")
     cur = conn.execute("DELETE FROM whitelist WHERE email = ?", (normalized,))
     if cur.rowcount == 0:
         raise ApiError(404, "not_found", "Адреса нет в списке")
@@ -101,5 +104,5 @@ def stats(
         users=count("users"),
         sessions=count("sessions"),
         tokens=count("api_tokens", "WHERE revoked_at IS NULL"),
-        disk_free_pct=disk_free_pct(request.app.state.settings.data_dir),
+        disk_free_pct=disk_free_pct_safe(request.app.state.settings.data_dir),
     )

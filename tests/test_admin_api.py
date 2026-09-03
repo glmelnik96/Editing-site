@@ -71,3 +71,19 @@ def test_admin_stats(login_as):
 def test_admin_routes_need_login_and_admin_role(client):
     assert client.get("/api/v1/admin/stats").status_code == 401
     assert client.get("/api/v1/admin/whitelist").status_code == 401
+
+
+def test_config_admin_cannot_be_removed_or_locked_out(login_as, settings):
+    admin = login_as("admin@ya.ru")
+    assert admin.post("/api/v1/admin/whitelist", json={"email": "admin@ya.ru"}).status_code == 201
+    r = admin.delete("/api/v1/admin/whitelist/admin@ya.ru")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "cannot_remove_admin"
+    assert admin.get("/api/v1/me").status_code == 200
+    conn = connect(settings.db_path)
+    conn.execute("UPDATE users SET disabled = 1 WHERE email = 'admin@ya.ru'")
+    conn.close()
+    assert login_as("admin@ya.ru").get("/api/v1/me").status_code == 200
+    conn = connect(settings.db_path)
+    assert conn.execute("SELECT disabled FROM users WHERE email = 'admin@ya.ru'").fetchone()[0] == 0
+    conn.close()
