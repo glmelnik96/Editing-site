@@ -1,7 +1,6 @@
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    yandex_id TEXT,
     name TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
     disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),

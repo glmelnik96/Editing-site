@@ -206,3 +206,14 @@ def test_login_requires_client_secret_too(tmp_path):
 def test_head_healthz_and_options_on_unknown_api_path(client):
     assert client.head("/healthz").status_code == 200
     assert client.options("/api/v1/nope").status_code == 404
+
+
+def test_rate_limited_callback_keeps_state_cookie(tmp_path, monkeypatch):
+    app = _bare_app(tmp_path, yandex_client_id="cid", yandex_client_secret="sec", login_rate_max=1)
+    with TestClient(app, headers={"Origin": "http://testserver"}) as c:
+        _fake_yandex(monkeypatch)
+        c.get("/api/v1/auth/login", follow_redirects=False)
+        state = c.cookies.get("oauth_state")
+        r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
+        assert r.status_code == 429
+        assert c.cookies.get("oauth_state") == state

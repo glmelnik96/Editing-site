@@ -131,3 +131,9 @@ def test_healthz_degraded_when_database_cannot_open(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["db"] is False
     assert r.json()["status"] == "degraded"
+
+
+def test_openapi_has_unique_operation_ids(client):
+    paths = client.get("/api/v1/openapi.json").json()["paths"]
+    ids = [op["operationId"] for methods in paths.values() for op in methods.values() if "operationId" in op]
+    assert len(ids) == len(set(ids))

@@ -64,7 +64,7 @@ def worker_age_sec(conn: sqlite3.Connection) -> tuple[int | None, bool]:
         return None, False
 
 
-@router.api_route("/healthz", methods=["GET", "HEAD"], response_model=Health)
+@router.get("/healthz", response_model=Health)
 def healthz(request: Request) -> Health:
     settings = request.app.state.settings
     free = disk_free_pct_safe(settings.data_dir)
@@ -86,3 +86,6 @@ def healthz(request: Request) -> Health:
         disk_free_pct=free,
         worker_seen_sec_ago=worker_age,
     )
+
+
+router.add_api_route("/healthz", healthz, methods=["HEAD"], include_in_schema=False)

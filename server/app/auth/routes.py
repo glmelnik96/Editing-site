@@ -60,9 +60,7 @@ async def callback(
 ) -> Response:
     settings = request.app.state.settings
     if not request.app.state.login_limiter.allow(client_ip(request)):
-        return _callback_failure(
-            settings, 429, "rate_limited", "Слишком много попыток входа, подождите минуту"
-        )
+        raise ApiError(429, "rate_limited", "Слишком много попыток входа, подождите минуту")
     if error:
         return _callback_failure(settings, 400, "oauth_error", f"Яндекс вернул ошибку: {error[:64]}")
     if not code or not state or state != request.cookies.get(STATE_COOKIE):

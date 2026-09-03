@@ -36,7 +36,8 @@ def upsert_user(
         )
     else:
         uid = row["id"]
-        conn.execute("UPDATE users SET name = ?, role = ? WHERE id = ?", (name[:100], role, uid))
-        if yandex_id:
-            conn.execute("UPDATE users SET yandex_id = ? WHERE id = ?", (yandex_id, uid))
+        conn.execute(
+            "UPDATE users SET name = ?, role = ?, yandex_id = COALESCE(?, yandex_id) WHERE id = ?",
+            (name[:100], role, yandex_id, uid),
+        )
     return conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
