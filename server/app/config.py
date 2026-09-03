@@ -28,9 +28,21 @@ class Settings(BaseSettings):
     @classmethod
     def _check_public_base_url(cls, value: str) -> str:
         u = urlsplit(value)
-        if u.scheme not in ("http", "https") or not u.netloc:
+        try:
+            port = u.port
+        except ValueError as exc:
+            raise ValueError("VIDEO_PUBLIC_BASE_URL: порт должен быть числом") from exc
+        if u.scheme not in ("http", "https") or not u.netloc or port == 0:
             raise ValueError("VIDEO_PUBLIC_BASE_URL должен быть вида https://host[:port]")
         return value.rstrip("/")
+
+    @field_validator("log_level")
+    @classmethod
+    def _check_log_level(cls, value: str) -> str:
+        level = value.strip().upper()
+        if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ValueError("VIDEO_LOG_LEVEL: DEBUG, INFO, WARNING, ERROR или CRITICAL")
+        return level
 
     @property
     def db_path(self) -> Path:

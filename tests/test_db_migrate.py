@@ -5,7 +5,7 @@ import pytest
 
 from server.db import migrate as migrate_mod
 from server.db.core import connect
-from server.db.migrate import discover, migrate
+from server.db.migrate import discover, enable_wal, migrate
 
 TABLES = {"users", "whitelist", "sessions", "api_tokens", "heartbeats", "schema_migrations"}
 
@@ -106,3 +106,41 @@ def test_discover_orders_by_version_and_rejects_bad_names_and_duplicates(tmp_pat
     (mdir / "nope.sql").write_text("SELECT 1;", encoding="utf-8")
     with pytest.raises(ValueError, match="bad migration"):
         discover()
+
+
+def test_enable_wal_retries_then_raises_while_locked_and_succeeds_after_release(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate_mod, "WAL_ATTEMPTS", 2)
+    monkeypatch.setattr(migrate_mod, "WAL_RETRY_STEP_SEC", 0.01)
+    holder = connect(tmp_path / "t.db")
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("CREATE TABLE z (x INTEGER)")
+    other = connect(tmp_path / "t.db")
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            enable_wal(other)
+        holder.execute("COMMIT")
+        enable_wal(other)
+        assert other.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        other.close()
+        holder.close()
+
+
+def test_enable_wal_accepts_mode_switched_by_another_process():
+    class Row:
+        def fetchone(self):
+            return ("WAL",)
+
+    class Stub:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql):
+            self.calls.append(sql)
+            if sql == "PRAGMA journal_mode=WAL":
+                raise sqlite3.OperationalError("database is locked")
+            return Row()
+
+    stub = Stub()
+    enable_wal(stub)
+    assert stub.calls == ["PRAGMA journal_mode=WAL", "PRAGMA journal_mode"]

@@ -37,3 +37,11 @@ def test_allowed_origin_drops_default_port_and_keeps_custom():
     assert s443.allowed_origin == "https://video.example.ru"
     s8010 = Settings(_env_file=None, public_base_url="http://localhost:8010")
     assert s8010.allowed_origin == "http://localhost:8010"
+
+
+def test_settings_reject_bad_port_and_bad_log_level():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, public_base_url="https://host:abc")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, log_level="loud")
+    assert Settings(_env_file=None, log_level="debug").log_level == "DEBUG"
