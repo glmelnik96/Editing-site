@@ -2,6 +2,7 @@
 # Первичная настройка чистой Ubuntu 24.04 под Editing site.
 # Запуск от root: sudo bash bootstrap.sh <domain> <git-url>
 # До запуска: A-запись домена указывает на эту VM (Caddy получит сертификат).
+# Приватный репозиторий: заранее положить deploy key в /etc/editing-site/deploy_key (или использовать публичный HTTPS-URL).
 set -euo pipefail
 
 DOMAIN="${1:?usage: bootstrap.sh <domain> <git-url>}"
@@ -39,8 +40,23 @@ chown video:video "$APP_DIR"
 chown -R video:video "$DATA_DIR"
 chmod 750 "$DATA_DIR" "$DATA_DIR/data" "$DATA_DIR/tmp" "$DATA_DIR/tmp/uploads"
 
+# Ключ для приватного репозитория (необязательно): положить в /etc/editing-site/deploy_key до запуска,
+# известные хосты пишутся рядом, чтобы не засорять каталог приложения.
+mkdir -p /etc/editing-site
+chown video:video /etc/editing-site
+chmod 750 /etc/editing-site
+if [ -f /etc/editing-site/deploy_key ]; then
+  chown video:video /etc/editing-site/deploy_key
+  chmod 600 /etc/editing-site/deploy_key
+  export GIT_SSH_COMMAND="ssh -i /etc/editing-site/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/editing-site/known_hosts -o StrictHostKeyChecking=accept-new"
+fi
+
 if [ ! -d "$APP_DIR/.git" ]; then
-  sudo -u video git clone "$REPO" "$APP_DIR"
+  if [ -n "${GIT_SSH_COMMAND:-}" ]; then
+    sudo -u video env GIT_SSH_COMMAND="$GIT_SSH_COMMAND" git clone "$REPO" "$APP_DIR"
+  else
+    sudo -u video git clone "$REPO" "$APP_DIR"
+  fi
 fi
 
 if [ ! -f "$APP_DIR/.env" ]; then

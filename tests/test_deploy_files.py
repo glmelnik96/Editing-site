@@ -34,7 +34,16 @@ def test_scripts_have_bash_shebang_and_strict_mode_and_no_trust_proxy():
         assert "TRUST_PROXY" not in text
 
 
-def test_deploy_checks_healthz_status_field():
+def test_deploy_polls_healthz_status_and_runs_git_as_video():
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     assert "/healthz" in text
-    assert '"status"' in text
+    assert 'body.get("status") == "ok"' in text
+    assert "for _ in $(seq 1 20)" in text
+    assert "run_as_video git rev-parse --short HEAD" in text
+    assert "GIT_SSH_COMMAND" in text
+
+
+def test_unit_is_hardened():
+    unit = (DEPLOY / "video-api.service").read_text(encoding="utf-8")
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/srv/video" in unit
