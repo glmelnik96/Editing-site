@@ -26,7 +26,7 @@ def _migrations_dir(tmp_path, monkeypatch, files):
 def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     conn = connect(tmp_path / "t.db")
     try:
-        assert migrate(conn) == [1, 2]
+        assert migrate(conn) == [1, 2, 3]
         assert TABLES <= _tables(conn)
         assert migrate(conn) == []
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -154,20 +154,17 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert migrate(conn) == [1]
         assert "yandex_id" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [2]
+        assert migrate(conn) == [2, 3]
         assert "yandex_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u1', 'a@ya.ru', 'x', '42')"
         )
         conn.execute(
-            "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u2', 'b@ya.ru', 'x', NULL)"
+            "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u2', 'b@ya.ru', 'x', '42')"
         )
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u3', 'c@ya.ru', 'x', NULL)"
         )
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(
-                "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u4', 'd@ya.ru', 'x', '42')"
-            )
+        assert conn.execute("SELECT count(*) FROM users WHERE yandex_id = '42'").fetchone()[0] == 2
     finally:
         conn.close()

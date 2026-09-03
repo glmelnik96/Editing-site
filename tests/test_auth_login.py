@@ -217,3 +217,19 @@ def test_rate_limited_callback_keeps_state_cookie(tmp_path, monkeypatch):
         r = c.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
         assert r.status_code == 429
         assert c.cookies.get("oauth_state") == state
+
+
+def test_same_yandex_account_can_log_in_under_two_whitelisted_emails(client, settings, monkeypatch):
+    conn = connect(settings.db_path)
+    for email in ("a@ya.ru", "b@ya.ru"):
+        conn.execute("INSERT INTO whitelist (email, added_by, added_at) VALUES (?, NULL, 'x')", (email,))
+    conn.close()
+    for email in ("a@ya.ru", "b@ya.ru"):
+        _fake_yandex(monkeypatch, email=email)
+        client.get("/api/v1/auth/login", follow_redirects=False)
+        state = client.cookies.get("oauth_state")
+        r = client.get("/api/v1/auth/callback", params={"code": "x", "state": state}, follow_redirects=False)
+        assert r.status_code == 302, r.text
+    conn = connect(settings.db_path)
+    assert conn.execute("SELECT count(*) FROM users WHERE yandex_id = '42'").fetchone()[0] == 2
+    conn.close()
