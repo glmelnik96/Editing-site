@@ -10,6 +10,8 @@ def utcnow() -> datetime:
 
 
 def iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        raise ValueError("iso() требует datetime с часовым поясом")
     return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 

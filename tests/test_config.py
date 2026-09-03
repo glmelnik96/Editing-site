@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from server.app.config import Settings
 
 
@@ -17,3 +20,13 @@ def test_settings_kwargs_override_env(monkeypatch):
     monkeypatch.setenv("VIDEO_ADMIN_EMAIL", "env@ya.ru")
     s = Settings(_env_file=None, admin_email="kw@ya.ru")
     assert s.admin_email == "kw@ya.ru"
+
+
+def test_settings_reject_base_url_without_scheme():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, public_base_url="video.example.ru")
+
+
+def test_settings_strip_trailing_slash_from_base_url():
+    s = Settings(_env_file=None, public_base_url="https://video.example.ru/")
+    assert s.public_base_url == "https://video.example.ru"
