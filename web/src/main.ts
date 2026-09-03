@@ -41,7 +41,7 @@ async function renderSettings(me: Me): Promise<void> {
   const rows = tokens
     .map(
       t => `<tr><td>${escapeHtml(t.name)}</td><td>${fmt(t.created_at)}</td><td>${fmt(t.last_used_at)}</td>
-        <td>${fmt(t.expires_at)}</td><td><button data-revoke="${t.id}">Отозвать</button></td></tr>`,
+        <td>${fmt(t.expires_at)}</td><td><button data-revoke="${escapeHtml(t.id)}">Отозвать</button></td></tr>`,
     )
     .join('')
   root.innerHTML = `
@@ -54,12 +54,17 @@ async function renderSettings(me: Me): Promise<void> {
       </table>
       <form id="token-form"><input name="name" placeholder="Имя токена" required maxlength="100" /><button>Выпустить</button></form>
       <pre id="secret" hidden></pre>
+      <pre id="tokens-error" hidden></pre>
     </main>
     <section id="admin"></section>`
 
   document.getElementById('logout')!.addEventListener('click', async () => {
-    await api('/api/v1/auth/logout', { method: 'POST' })
-    await boot()
+    try {
+      await api('/api/v1/auth/logout', { method: 'POST' })
+      await boot()
+    } catch (e) {
+      showError('tokens-error', e)
+    }
   })
 
   const form = document.getElementById('token-form') as HTMLFormElement
@@ -76,13 +81,18 @@ async function renderSettings(me: Me): Promise<void> {
       box.hidden = false
       box.textContent = `Токен «${created.name}» показывается один раз:\n${created.secret}`
     } catch (e) {
-      renderInlineError(e)
+      showError('tokens-error', e)
     }
   })
 
   root.querySelectorAll<HTMLButtonElement>('button[data-revoke]').forEach(b =>
     b.addEventListener('click', async () => {
-      await api(`/api/v1/tokens/${b.dataset.revoke}`, { method: 'DELETE' })
+      try {
+        await api(`/api/v1/tokens/${b.dataset.revoke}`, { method: 'DELETE' })
+      } catch (e) {
+        showError('tokens-error', e)
+        return
+      }
       await renderSettings(me)
     }),
   )
@@ -90,8 +100,8 @@ async function renderSettings(me: Me): Promise<void> {
   if (me.role === 'admin') await renderAdmin()
 }
 
-function renderInlineError(e: unknown): void {
-  const box = document.getElementById('secret') as HTMLPreElement | null
+function showError(slotId: string, e: unknown): void {
+  const box = document.getElementById(slotId) as HTMLPreElement | null
   if (!box) return
   box.hidden = false
   box.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
@@ -108,6 +118,7 @@ async function renderAdmin(): Promise<void> {
       <h2>Разрешённые адреса</h2>
       <ul>${items || '<li>Пока никого</li>'}</ul>
       <form id="wl-form"><input name="email" type="email" placeholder="user@yandex.ru" required /><button>Добавить</button></form>
+      <pre id="admin-error" hidden></pre>
     </main>`
 
   const form = document.getElementById('wl-form') as HTMLFormElement
@@ -117,7 +128,8 @@ async function renderAdmin(): Promise<void> {
     try {
       await api('/api/v1/admin/whitelist', { method: 'POST', body: JSON.stringify({ email }) })
     } catch (e) {
-      renderInlineError(e)
+      showError('admin-error', e)
+      return
     }
     await renderAdmin()
   })
@@ -127,7 +139,8 @@ async function renderAdmin(): Promise<void> {
       try {
         await api(`/api/v1/admin/whitelist/${encodeURIComponent(b.dataset.remove ?? '')}`, { method: 'DELETE' })
       } catch (e) {
-        renderInlineError(e)
+        showError('admin-error', e)
+        return
       }
       await renderAdmin()
     }),

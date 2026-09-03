@@ -11,9 +11,9 @@ export class ApiError extends Error {
 }
 
 export function parseError(status: number, body: unknown): ApiError {
-  if (body && typeof body === 'object' && 'error' in body) {
-    const err = (body as { error: { code?: string; message?: string; details?: unknown } }).error
-    return new ApiError(status, err.code ?? 'error', err.message ?? `HTTP ${status}`, err.details ?? null)
+  if (body && typeof body === 'object' && 'error' in body && body.error && typeof body.error === 'object') {
+    const err = body.error as { code?: string; message?: string; details?: unknown }
+    return new ApiError(status, err.code ?? 'http_error', err.message ?? `HTTP ${status}`, err.details ?? null)
   }
   const text = typeof body === 'string' && body ? body.slice(0, 200) : `HTTP ${status}`
   return new ApiError(status, 'http_error', text)

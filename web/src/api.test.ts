@@ -16,3 +16,8 @@ test('parseError falls back for non-json bodies', () => {
   expect(e.message).toBe('<html>Bad gateway</html>')
   expect(parseError(500, null).message).toBe('HTTP 500')
 })
+
+test('parseError tolerates a null or codeless error object', () => {
+  expect(parseError(500, { error: null }).code).toBe('http_error')
+  expect(parseError(500, { error: { message: 'x' } }).code).toBe('http_error')
+})
