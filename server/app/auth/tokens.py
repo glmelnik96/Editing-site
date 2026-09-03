@@ -9,6 +9,7 @@ from server.app.util import iso, new_id, now_iso, parse_iso, sha256_hex, utcnow
 
 TOKEN_PREFIX = "vt_"
 TOUCH_INTERVAL = timedelta(minutes=1)
+MAX_TOKEN_DAYS = 3650
 
 
 def hash_token(secret: str) -> str:
@@ -31,7 +32,9 @@ def create_token(
     secret = TOKEN_PREFIX + secrets.token_urlsafe(32)
     tid = new_id("tok")
     now = utcnow()
-    expires_at = iso(now + timedelta(days=expires_in_days)) if expires_in_days else None
+    if expires_in_days is not None and not (1 <= expires_in_days <= MAX_TOKEN_DAYS):
+        raise ValueError(f"expires_in_days должен быть от 1 до {MAX_TOKEN_DAYS}")
+    expires_at = iso(now + timedelta(days=expires_in_days)) if expires_in_days is not None else None
     conn.execute(
         "INSERT INTO api_tokens "
         "(id, user_id, name, token_hash, created_at, last_used_at, expires_at, revoked_at) "

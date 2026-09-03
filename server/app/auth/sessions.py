@@ -55,7 +55,11 @@ def resolve_session(conn: sqlite3.Connection, sid: str | None, settings: Setting
     if row is None:
         return None
     now = utcnow()
-    idle_for = now - parse_iso(row["last_seen_at"])
+    try:
+        idle_for = now - parse_iso(row["last_seen_at"])
+    except (TypeError, ValueError):
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        return None
     expired = iso(now) > row["absolute_expires_at"] or idle_for > timedelta(days=settings.session_idle_days)
     if expired or row["disabled"]:
         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))

@@ -108,3 +108,55 @@ def test_token_expiry(db):
         (iso(utcnow() - timedelta(seconds=1)), view["id"]),
     )
     assert resolve_token(db, secret) is None
+
+
+def test_session_touch_updates_last_seen_only_after_interval(db, settings):
+    uid = upsert_user(db, email="u@ya.ru", name="U", admin_email="")["id"]
+    sid = create_session(db, user_id=uid, user_agent="", settings=settings)
+    key = sha256_hex(sid)
+    before = db.execute("SELECT last_seen_at FROM sessions WHERE id = ?", (key,)).fetchone()[0]
+    assert resolve_session(db, sid, settings) is not None
+    assert db.execute("SELECT last_seen_at FROM sessions WHERE id = ?", (key,)).fetchone()[0] == before
+    stale = iso(utcnow() - timedelta(minutes=5))
+    db.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (stale, key))
+    assert resolve_session(db, sid, settings) is not None
+    assert db.execute("SELECT last_seen_at FROM sessions WHERE id = ?", (key,)).fetchone()[0] > stale
+
+
+def test_corrupt_last_seen_invalidates_session(db, settings):
+    uid = upsert_user(db, email="u@ya.ru", name="U", admin_email="")["id"]
+    sid = create_session(db, user_id=uid, user_agent="", settings=settings)
+    db.execute("UPDATE sessions SET last_seen_at = 'garbage' WHERE id = ?", (sha256_hex(sid),))
+    assert resolve_session(db, sid, settings) is None
+    assert db.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_sessions_and_tokens_are_isolated_per_user(db, settings):
+    a = upsert_user(db, email="a@ya.ru", name="A", admin_email="")["id"]
+    b = upsert_user(db, email="b@ya.ru", name="B", admin_email="")["id"]
+    b_sid = create_session(db, user_id=b, user_agent="", settings=settings)
+    for _ in range(settings.max_sessions_per_user + 3):
+        create_session(db, user_id=a, user_agent="", settings=settings)
+    assert resolve_session(db, b_sid, settings)["email"] == "b@ya.ru"
+    b_view, b_secret = create_token(db, user_id=b, name="b-agent", expires_in_days=None)
+    assert revoke_token(db, user_id=a, token_id=b_view["id"]) is False
+    assert resolve_token(db, b_secret)["email"] == "b@ya.ru"
+    assert list_tokens(db, a) == []
+
+
+def test_token_last_used_is_recorded(db):
+    uid = upsert_user(db, email="u@ya.ru", name="U", admin_email="")["id"]
+    view, secret = create_token(db, user_id=uid, name="agent", expires_in_days=None)
+    assert view["last_used_at"] is None
+    resolve_token(db, secret)
+    assert list_tokens(db, uid)[0]["last_used_at"] is not None
+
+
+def test_token_expiry_bounds_and_empty_email_rejected(db):
+    uid = upsert_user(db, email="u@ya.ru", name="U", admin_email="")["id"]
+    with pytest.raises(ValueError):
+        create_token(db, user_id=uid, name="zero", expires_in_days=0)
+    with pytest.raises(ValueError):
+        create_token(db, user_id=uid, name="long", expires_in_days=100_000)
+    with pytest.raises(ValueError):
+        upsert_user(db, email="   ", name="X", admin_email=" ")

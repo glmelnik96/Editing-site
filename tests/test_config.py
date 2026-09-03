@@ -49,3 +49,10 @@ def test_settings_reject_bad_port_and_bad_log_level():
         Settings(_env_file=None, public_base_url="http://:8010")
     with pytest.raises(ValidationError):
         Settings(_env_file=None, public_base_url="https://host:70000")
+
+
+def test_settings_reject_zero_session_limit():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_sessions_per_user=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, login_rate_max=0)

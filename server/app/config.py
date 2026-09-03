@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,11 +17,11 @@ class Settings(BaseSettings):
     yandex_client_secret: str = ""
     admin_email: str = ""
     cookie_secure: bool = False
-    session_absolute_days: int = 30
-    session_idle_days: int = 7
-    max_sessions_per_user: int = 5
-    login_rate_max: int = 10
-    login_rate_window_sec: int = 60
+    session_absolute_days: int = Field(default=30, ge=1, le=3650)
+    session_idle_days: int = Field(default=7, ge=1, le=3650)
+    max_sessions_per_user: int = Field(default=5, ge=1, le=100)
+    login_rate_max: int = Field(default=10, ge=1)
+    login_rate_window_sec: int = Field(default=60, ge=1)
     log_level: str = "INFO"
 
     @field_validator("public_base_url")

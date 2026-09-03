@@ -21,6 +21,8 @@ def is_whitelisted(conn: sqlite3.Connection, email: str, admin_email: str) -> bo
 
 def upsert_user(conn: sqlite3.Connection, *, email: str, name: str, admin_email: str) -> sqlite3.Row:
     e = normalize_email(email)
+    if not e:
+        raise ValueError("email пуст")
     role = "admin" if admin_email and e == normalize_email(admin_email) else "user"
     row = conn.execute("SELECT id FROM users WHERE email = ?", (e,)).fetchone()
     if row is None:
