@@ -9,9 +9,30 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+WAL_ATTEMPTS = 10
+WAL_RETRY_STEP_SEC = 0.05
+
+
+def enable_wal(conn: sqlite3.Connection) -> None:
+    """Включить WAL на файле базы, переживая одновременный старт двух процессов.
+
+    Смена режима журнала требует короткой эксклюзивной блокировки, а busy-handler на неё не действует:
+    проигравший получает «database is locked» сразу, без ожидания. Поэтому несколько попыток с паузой,
+    а если режим тем временем включил другой процесс, этого достаточно.
+    """
+    for attempt in range(WAL_ATTEMPTS):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError:
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+                return
+            time.sleep(WAL_RETRY_STEP_SEC * (attempt + 1))
+    conn.execute("PRAGMA journal_mode=WAL")
 
 
 def applied_versions(conn: sqlite3.Connection) -> set[int]:
@@ -54,7 +75,7 @@ def _script(version: int, sql: str) -> str:
 
 
 def migrate(conn: sqlite3.Connection) -> list[int]:
-    conn.execute("PRAGMA journal_mode=WAL")
+    enable_wal(conn)
     applied: list[int] = []
     for version, path in pending(conn):
         try:
