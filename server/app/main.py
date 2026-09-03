@@ -78,7 +78,9 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(me_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
-        "/api/{rest:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
+        "/api/{rest:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
     )
     def _api_not_found(rest: str) -> None:
         raise ApiError(404, "not_found", "Нет такого маршрута")

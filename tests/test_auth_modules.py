@@ -160,3 +160,10 @@ def test_token_expiry_bounds_and_empty_email_rejected(db):
         create_token(db, user_id=uid, name="long", expires_in_days=100_000)
     with pytest.raises(ValueError):
         upsert_user(db, email="   ", name="X", admin_email=" ")
+
+
+def test_upsert_user_keeps_yandex_id(db):
+    u = upsert_user(db, email="u@ya.ru", name="U", admin_email="", yandex_id="123")
+    assert u["yandex_id"] == "123"
+    u2 = upsert_user(db, email="u@ya.ru", name="U", admin_email="")
+    assert u2["yandex_id"] == "123"
