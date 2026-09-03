@@ -42,8 +42,8 @@ def test_foreign_keys_are_enforced(tmp_path):
         migrate(conn)
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO sessions (id, user_id, created_at, last_seen_at, absolute_expires_at, user_agent) "
-                "VALUES ('s', 'no_such_user', 'x', 'x', 'x', '')"
+                "INSERT INTO sessions (id, user_id, created_at, last_seen_at, absolute_expires_at, "
+                "user_agent) VALUES ('s', 'no_such_user', 'x', 'x', 'x', '')"
             )
     finally:
         conn.close()

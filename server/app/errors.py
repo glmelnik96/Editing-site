@@ -31,14 +31,18 @@ def error_body(code: str, message: str, details: dict | None = None) -> dict:
 
 def _public_validation_errors(errors: list[dict]) -> list[dict]:
     """Только место, текст и тип ошибки: присланные значения обратно не эхоим."""
-    return [{"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in errors]
+    return [
+        {"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in errors
+    ]
 
 
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
         return JSONResponse(
-            status_code=exc.status, content=error_body(exc.code, exc.message, exc.details), headers=exc.headers
+            status_code=exc.status,
+            content=error_body(exc.code, exc.message, exc.details),
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

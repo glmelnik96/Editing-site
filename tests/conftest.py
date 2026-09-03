@@ -25,7 +25,8 @@ def app(settings, tmp_path):
 
 @pytest.fixture
 def client(app):
-    # Origin по умолчанию: проверка cross-site считает запрос без Origin чужим (Task 4), а браузер шлёт его всегда.
+    # Origin по умолчанию: проверка cross-site считает запрос без Origin чужим (Task 4),
+    # а браузер шлёт его всегда.
     with TestClient(app, headers={"Origin": "http://testserver"}) as c:
         yield c
 

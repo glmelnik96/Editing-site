@@ -35,7 +35,7 @@ def test_healthz_degraded_when_worker_stale(client, settings):
 def test_unknown_route_returns_json_error(client):
     r = client.get("/api/v1/nope")
     assert r.status_code == 404
-    assert r.json()["error"]["code"] == "http_error"
+    assert r.json()["error"]["code"] == "not_found"
 
 
 def test_app_keeps_a_long_lived_db_connection(client, app):
@@ -103,6 +103,7 @@ def test_static_mount_keeps_api_routes_first(settings, tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text("<h1>spa</h1>", encoding="utf-8")
+    (dist / "404.html").write_text("<h1>nf</h1>", encoding="utf-8")
     app = create_app(settings, web_dist=dist)
     with TestClient(app, headers={"Origin": "http://testserver"}) as c:
         assert c.get("/").text == "<h1>spa</h1>"
@@ -110,7 +111,8 @@ def test_static_mount_keeps_api_routes_first(settings, tmp_path):
         assert c.get("/api/v1/openapi.json").status_code == 200
         r = c.get("/api/v1/nope")
         assert r.status_code == 404
-        assert r.json()["error"]["code"] == "http_error"
+        assert r.json()["error"]["code"] == "not_found"
+        assert c.post("/api/v1/nope").status_code == 404
 
 
 def test_lazy_app_attribute_builds_once():
@@ -118,3 +120,14 @@ def test_lazy_app_attribute_builds_once():
     assert first is main_mod.app
     with pytest.raises(AttributeError):
         main_mod.nope  # noqa: B018
+
+
+def test_healthz_degraded_when_database_cannot_open(client, monkeypatch):
+    def failing_connect(path):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(health, "connect", failing_connect)
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json()["db"] is False
+    assert r.json()["status"] == "degraded"

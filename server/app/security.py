@@ -55,6 +55,8 @@ def install_origin_check(app: FastAPI) -> None:
         ):
             return JSONResponse(
                 status_code=403,
-                content=error_body("cross_site", "Запрос с чужого сайта отклонён", {"allowed_origin": allowed}),
+                content=error_body(
+                    "cross_site", "Запрос с чужого сайта отклонён", {"allowed_origin": allowed}
+                ),
             )
         return await call_next(request)

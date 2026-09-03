@@ -1,4 +1,6 @@
-"""Фабрика приложения. uvicorn server.app.main:app (объект app создаётся при первом обращении, не при импорте)."""
+"""Фабрика приложения. uvicorn server.app.main:app
+(объект app создаётся при первом обращении, не при импорте).
+"""
 from __future__ import annotations
 
 import logging
@@ -9,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from server.app.config import Settings
-from server.app.errors import install_error_handlers
+from server.app.errors import ApiError, install_error_handlers
 from server.app.health import router as health_router
 from server.app.ratelimit import FixedWindowLimiter
 from server.app.security import install_origin_check
@@ -21,7 +23,9 @@ log = logging.getLogger("video")
 
 
 def configure_logging(level: str) -> None:
-    """Корень на WARNING, чтобы чужие библиотеки (httpx и прочие) не шумели в journald; наш логгер на заданном уровне."""
+    """Корень на WARNING, чтобы чужие библиотеки (httpx и прочие) не шумели в journald;
+    наш логгер на заданном уровне.
+    """
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("video").setLevel(level)
 
@@ -68,6 +72,12 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     install_error_handlers(app)
     install_origin_check(app)
     app.include_router(health_router)
+    # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
+    @app.api_route(
+        "/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
+    )
+    def _api_not_found(rest: str) -> None:
+        raise ApiError(404, "not_found", "Нет такого маршрута")
     # Все роутеры подключаются выше этой строки: статика на "/" перехватывает всё остальное.
     if web_dist.is_dir():
         app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
