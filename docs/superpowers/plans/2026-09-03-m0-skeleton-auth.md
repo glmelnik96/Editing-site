@@ -53,7 +53,7 @@
 - [ ] **Step 1: Проверить uv**
 
 Run: `uv --version`
-Expected: `uv 0.4.x` или новее. Если команды нет: `pip install uv`, повторить.
+Expected: `uv 0.4.27` или новее (раньше нет поддержки `[dependency-groups]`). Если команды нет: `pip install uv`, повторить. На этой машине тесты запускать через `uv run python -m pytest -q`: exe-обёртка `uv run pytest` стартует около минуты.
 
 - [ ] **Step 2: Создать `pyproject.toml`**
 
