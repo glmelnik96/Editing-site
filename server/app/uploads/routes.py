@@ -126,6 +126,10 @@ async def put_chunk(
     total = total_chunks(row)
     if idx < 0 or idx >= total:
         raise ApiError(404, "no_such_chunk", "Нет части с таким номером", {"total": total})
+    # Часть уже принята целиком: повтор не пишем. Это и дешевле, и закрывает гонку с complete,
+    # который переносит файл в папку ассета: запоздалый дубль не пишет в уже перенесённый файл.
+    if idx in set(received_chunks(conn, row["id"])):
+        return Response(status_code=204)
     expected = chunk_length(row, idx)
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) != expected:
@@ -149,7 +153,11 @@ async def put_chunk(
         writer.close()
     if not writer.done():
         raise _mismatch(expected, writer.written)
-    mark_chunk(conn, row["id"], idx)
+    try:
+        mark_chunk(conn, row["id"], idx)
+    except sqlite3.IntegrityError as exc:
+        # Загрузку отменили, пока часть загружалась: файла уже нет, повторять эту часть незачем.
+        raise ApiError(404, "not_found", "Загрузка не найдена") from exc
     return Response(status_code=204)
 
 

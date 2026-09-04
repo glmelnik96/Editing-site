@@ -2,6 +2,7 @@ import os
 
 from server.app.ratelimit import FixedWindowLimiter
 from server.app.uploads import store
+from server.db.core import connect
 
 OCTET = {"Content-Type": "application/octet-stream"}
 
@@ -124,3 +125,36 @@ def test_agent_uploads_with_bearer_token(bearer_client):
 def test_requires_auth(client):
     assert client.post("/api/v1/uploads", json={"filename": "a.mp4", "size": 10}).status_code == 401
     assert client.get("/api/v1/uploads/upl_000000000000").status_code == 401
+
+
+def test_repeated_chunk_is_not_rewritten(client, login_as, settings, monkeypatch):
+    login_as()
+    uid = _create(client, 2048)["upload_id"]
+    assert _put(client, uid, 0, b"a" * 1024).status_code == 204
+
+    def boom(*args, **kwargs):
+        raise AssertionError("повторная часть не должна открывать файл")
+
+    monkeypatch.setattr("server.app.uploads.routes.ChunkWriter", boom)
+    assert _put(client, uid, 0, b"b" * 1024).status_code == 204
+    path = settings.uploads_tmp_path / uid
+    assert path.read_bytes()[:1024] == b"a" * 1024
+
+
+def test_chunk_after_upload_was_deleted_is_404(client, login_as, settings, monkeypatch):
+    login_as()
+    uid = _create(client, 2048)["upload_id"]
+    real_write = store.ChunkWriter.write
+
+    def write_then_delete(self, data):
+        # Запись уже прошла, а загрузку успели удалить до mark_chunk: гонка с DELETE.
+        real_write(self, data)
+        conn = connect(settings.db_path)
+        try:
+            conn.execute("DELETE FROM uploads WHERE id = ?", (uid,))
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(store.ChunkWriter, "write", write_then_delete)
+    r = _put(client, uid, 0, b"x" * 1024)
+    assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
