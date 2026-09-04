@@ -20,7 +20,9 @@ FALLBACK_THRESHOLD_DB = -35.0  # если уровень речи оценить
 RETRY_ABOVE_DB = -55.0  # если пауз не нашлось, а порог выше — повторяем на 10 дБ ниже
 RETRY_STEP_DB = 10.0
 
-_LEVEL_RE = re.compile(r"^lavfi\.astats\.Overall\.(?:Peak|RMS)_level=(-?[\d.]+|-inf|inf|nan)$", re.MULTILINE)
+_LEVEL_RE = re.compile(
+    r"^lavfi\.astats\.Overall\.(?:Peak|RMS)_level=(-?[\d.]+|-?inf|-?nan)$", re.MULTILINE
+)
 _START_RE = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _END_RE = re.compile(r"silence_end:\s*(-?[\d.]+)")
 

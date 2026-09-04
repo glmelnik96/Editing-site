@@ -17,7 +17,8 @@ def test_video_proxy_is_h264_with_short_gop():
     assert args[args.index("-b:a") + 1] == "96k"
     assert "+faststart" in args
     scale = args[args.index("-vf") + 1]
-    assert scale == "scale=w='if(gte(iw,ih),640,-2)':h='if(gte(iw,ih),-2,640)'"
+    # min() не даёт увеличивать кадр меньше 640 px
+    assert scale == "scale=w='if(gte(iw,ih),min(iw,640),-2)':h='if(gte(iw,ih),-2,min(ih,640))'"
     assert "-progress" in args and args[args.index("-progress") + 1] == "pipe:1"
 
 

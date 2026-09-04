@@ -80,3 +80,12 @@ def test_wav_args_are_16k_mono():
     assert "-ac" in args and "1" in args
     assert args[-1] == "/x/audio16k.wav"
     assert "-vn" in args
+
+
+def test_parse_levels_handles_negative_nan():
+    """Некоторые сборки ffmpeg печатают -nan: строка не должна выпадать из массива и сбивать индексы."""
+    text = "lavfi.astats.Overall.RMS_level=-nan\nlavfi.astats.Overall.RMS_level=-12.5\n"
+    levels = parse_levels(text)
+    assert len(levels) == 2
+    assert math.isnan(levels[0]) and levels[1] == -12.5
+    assert peaks_from_levels(levels)[0] == 0

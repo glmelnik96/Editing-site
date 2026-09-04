@@ -22,8 +22,15 @@ def proxy_name(kind: str) -> str:
 
 
 def scale_filter(long_side: int) -> str:
-    """Длинная сторона в long_side, короткая пропорционально и чётной (-2)."""
-    return f"scale=w='if(gte(iw,ih),{long_side},-2)':h='if(gte(iw,ih),-2,{long_side})'"
+    """Длинная сторона до long_side, короткая пропорционально и чётной (-2).
+
+    min() не даёт увеличивать кадр: прокси из ролика меньше long_side весил бы больше исходника
+    и кодировался бы дольше без выигрыша в качестве.
+    """
+    return (
+        f"scale=w='if(gte(iw,ih),min(iw,{long_side}),-2)'"
+        f":h='if(gte(iw,ih),-2,min(ih,{long_side}))'"
+    )
 
 
 def proxy_args(settings: Settings, src: str, dst: str, *, kind: str) -> list[str]:
