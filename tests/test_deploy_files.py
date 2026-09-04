@@ -72,3 +72,14 @@ def test_caddyfile_serves_files_after_forward_auth_with_body_limits():
 def test_caddy_user_joins_video_group():
     for name in ("bootstrap.sh", "deploy.sh"):
         assert "usermod -a -G video caddy" in (DEPLOY / name).read_text(encoding="utf-8"), name
+
+
+def test_janitor_units_and_install():
+    unit = (DEPLOY / "video-janitor.service").read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit and "python -m server.janitor" in unit and "User=video" in unit
+    assert "ProtectSystem=strict" in unit and "ReadWritePaths=/srv/video" in unit
+    timer = (DEPLOY / "video-janitor.timer").read_text(encoding="utf-8")
+    assert "OnCalendar=hourly" in timer and "Persistent=true" in timer
+    for name in ("bootstrap.sh", "deploy.sh"):
+        text = (DEPLOY / name).read_text(encoding="utf-8")
+        assert "video-janitor.timer" in text and "video-janitor.service" in text, name

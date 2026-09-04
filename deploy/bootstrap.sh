@@ -81,8 +81,10 @@ sed "s/VIDEO_DOMAIN_PLACEHOLDER/$DOMAIN/" "$APP_DIR/deploy/Caddyfile" > /etc/cad
 echo "$DOMAIN" > /etc/editing-site/domain
 caddy validate --config /etc/caddy/Caddyfile
 install -m 644 "$APP_DIR/deploy/video-api.service" /etc/systemd/system/video-api.service
+install -m 644 "$APP_DIR/deploy/video-janitor.service" /etc/systemd/system/video-janitor.service
+install -m 644 "$APP_DIR/deploy/video-janitor.timer" /etc/systemd/system/video-janitor.timer
 systemctl daemon-reload
-systemctl enable caddy video-api
+systemctl enable caddy video-api video-janitor.timer
 systemctl restart caddy
 
 ufw allow OpenSSH

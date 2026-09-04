@@ -1,0 +1,17 @@
+[Unit]
+Description=Editing site janitor (сроки жизни файлов, зависшие задания, бэкап базы)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=video
+Group=video
+WorkingDirectory=/opt/editing-site
+EnvironmentFile=/opt/editing-site/.env
+ExecStart=/opt/editing-site/.venv/bin/python -m server.janitor
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/video
