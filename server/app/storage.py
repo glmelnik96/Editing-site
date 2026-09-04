@@ -41,7 +41,7 @@ def kind_from_ext(ext: str) -> str | None:
 def _check_id(value: str) -> str:
     """Форма идентификатора (см. ID_RE); иначе путь мог бы выйти за пределы data_dir."""
     if not ID_RE.match(value):
-        raise ValueError(f"bad id: {value!r}")
+        raise ValueError(f"некорректный id: {value!r}")
     return value
 
 
