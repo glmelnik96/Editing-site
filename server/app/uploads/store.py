@@ -199,9 +199,13 @@ def finalize_file(
     size: int,
     kind: str,
     upload_id: str | None = None,
+    check_quota: bool = False,
 ) -> dict:
     """Переносит готовый файл в папку ассета, создаёт запись ассета и задание analyze (кроме субтитров).
-    При ошибке базы файл возвращается на место, чтобы завершение можно было повторить."""
+    При ошибке базы файл возвращается на место, чтобы завершение можно было повторить.
+    При check_quota=True квота перепроверяется внутри транзакции, потому что мелкая загрузка не
+    резервирует место заранее. Для завершения чанковой загрузки флаг не нужен: место уже учтено
+    строкой uploads, повторная проверка отвергла бы её как двойной расход."""
     asset_id = new_id("ast")
     ext = safe_ext(filename)
     target_dir = asset_dir(settings, user_id, asset_id)
@@ -228,6 +232,8 @@ def finalize_file(
     }
     try:
         with transaction(conn):
+            if check_quota:
+                check_capacity(conn, settings, user_id, size)
             conn.execute(
                 "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, "
                 "last_access_at) "

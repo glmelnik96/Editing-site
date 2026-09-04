@@ -194,6 +194,24 @@ def test_finalize_restores_file_when_db_insert_fails(conn, settings, tmp_path):
     assert list((settings.data_dir / "usr_0000000000ff" / "assets").glob("ast_*")) == []
 
 
+def test_finalize_rechecks_quota_and_restores_file(conn, settings, tmp_path):
+    conn.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, "
+        "last_access_at) VALUES ('ast_0000000000aa', ?, 'video', 'a.mp4', 'mp4', 9000, 'ready', ?, ?)",
+        (USER, now_iso(), now_iso()),
+    )
+    src = tmp_path / "b.mp4"
+    src.write_bytes(b"y" * 2000)
+    with pytest.raises(UploadError) as e:
+        finalize_file(
+            conn, settings, user_id=USER, src=src, filename="b.mp4", size=2000, kind="video",
+            check_quota=True,
+        )
+    assert e.value.code == "quota_exceeded"
+    assert src.read_bytes() == b"y" * 2000
+    assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 1
+
+
 def test_delete_upload_removes_record_and_file(conn, settings):
     up = create_upload(conn, settings, USER, filename="a.mp4", size=100, kind=None)
     delete_upload(conn, up)

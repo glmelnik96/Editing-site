@@ -49,6 +49,8 @@ def list_(
 
 
 @router.post("/upload", status_code=201, response_model=AssetView)
+# Тело разбирает Starlette до входа сюда, поэтому наш лимит отсекает файл уже после приёма:
+# настоящий предел стоит на Caddy (request_body max_size 68MB на этом маршруте).
 async def upload_small(
     request: Request,
     file: UploadFile,
@@ -84,7 +86,8 @@ async def upload_small(
             await run_in_threadpool(out.close)
         check_capacity(conn, settings, user.id, size)
         row = finalize_file(
-            conn, settings, user_id=user.id, src=tmp, filename=filename, size=size, kind=resolved
+            conn, settings, user_id=user.id, src=tmp, filename=filename, size=size, kind=resolved,
+            check_quota=True,
         )
     except UploadError as exc:
         tmp.unlink(missing_ok=True)
