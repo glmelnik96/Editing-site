@@ -38,8 +38,11 @@ def total_chunks(upload: dict | sqlite3.Row) -> int:
 
 
 def chunk_length(upload: dict | sqlite3.Row, idx: int) -> int:
-    """Все части ровно chunk_size, последняя короче."""
-    last = total_chunks(upload) - 1
+    """Все части ровно chunk_size, последняя короче. idx вне [0, total) — 404, а не IndexError."""
+    total = total_chunks(upload)
+    if idx < 0 or idx >= total:
+        raise UploadError(404, "no_such_chunk", "Нет части с таким номером", {"total": total})
+    last = total - 1
     return upload["chunk_size"] if idx < last else upload["size"] - last * upload["chunk_size"]
 
 
@@ -104,15 +107,12 @@ def reserve_file(path: Path, size: int) -> None:
 def create_upload(
     conn: sqlite3.Connection, settings: Settings, user_id: str, *, filename: str, size: int, kind: str | None
 ) -> dict:
+    """check_capacity, резерв файла и INSERT — в одной транзакции: BEGIN IMMEDIATE сериализует
+    параллельные запросы одного пользователя, второй увидит уже вставленную строку первого."""
     filename = clean_filename(filename)
     kind = resolve_kind(filename, kind)
-    check_capacity(conn, settings, user_id, size)
     upload_id = new_id("upl")
     path = upload_path(settings, upload_id)
-    try:
-        reserve_file(path, size)
-    except OSError as exc:
-        raise UploadError(507, "disk_low", "Не удалось зарезервировать место под файл") from exc
     now = utcnow()
     row = {
         "id": upload_id,
@@ -125,16 +125,24 @@ def create_upload(
         "created_at": iso(now),
         "expires_at": iso(now + timedelta(hours=settings.upload_ttl_hours)),
     }
-    try:
-        conn.execute(
-            "INSERT INTO uploads (id, user_id, filename, size, kind, chunk_size, path, created_at, "
-            "expires_at) "
-            "VALUES (:id, :user_id, :filename, :size, :kind, :chunk_size, :path, :created_at, :expires_at)",
-            row,
-        )
-    except sqlite3.Error:
-        path.unlink(missing_ok=True)
-        raise
+    with transaction(conn):
+        check_capacity(conn, settings, user_id, size)
+        try:
+            reserve_file(path, size)
+        except OSError as exc:
+            path.unlink(missing_ok=True)  # O_CREAT мог успеть создать пустой файл до сбоя аллокации
+            raise UploadError(507, "disk_low", "Не удалось зарезервировать место под файл") from exc
+        try:
+            conn.execute(
+                "INSERT INTO uploads (id, user_id, filename, size, kind, chunk_size, path, created_at, "
+                "expires_at) "
+                "VALUES (:id, :user_id, :filename, :size, :kind, :chunk_size, :path, :created_at, "
+                ":expires_at)",
+                row,
+            )
+        except sqlite3.Error:
+            path.unlink(missing_ok=True)
+            raise
     return row
 
 

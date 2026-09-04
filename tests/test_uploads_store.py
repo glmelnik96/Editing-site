@@ -59,6 +59,17 @@ def test_chunk_arithmetic():
     assert total_chunks({"size": 1024, "chunk_size": 1024}) == 1
 
 
+def test_chunk_length_last_chunk_when_size_is_multiple():
+    up = {"size": 2048, "chunk_size": 1024}
+    assert total_chunks(up) == 2
+    assert chunk_length(up, 1) == 1024
+    with pytest.raises(UploadError) as e:
+        chunk_length(up, 2)
+    assert e.value.code == "no_such_chunk" and e.value.details == {"total": 2}
+    with pytest.raises(UploadError):
+        chunk_length(up, -1)
+
+
 def test_create_reserves_file_and_counts_quota(conn, settings):
     up = create_upload(conn, settings, USER, filename="Clip.MOV", size=2500, kind=None)
     assert up["id"].startswith("upl_") and up["kind"] == "video" and up["chunk_size"] == 1024
@@ -97,6 +108,20 @@ def test_disk_low_blocks_new_uploads(conn, settings, monkeypatch):
     with pytest.raises(UploadError) as e:
         create_upload(conn, settings, USER, filename="a.mp4", size=100, kind=None)
     assert e.value.code == "disk_low"
+
+
+def test_reserve_failure_leaves_no_file_and_no_row(conn, settings, monkeypatch):
+    def boom(path, size):
+        path.write_bytes(b"")  # файл уже создан, как при настоящем ENOSPC после O_CREAT
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(store, "reserve_file", boom)
+    with pytest.raises(UploadError) as e:
+        create_upload(conn, settings, USER, filename="a.mp4", size=100, kind=None)
+    assert e.value.code == "disk_low"
+    assert list(settings.uploads_tmp_path.glob("upl_*")) == []
+    assert conn.execute("SELECT count(*) FROM uploads").fetchone()[0] == 0
+    assert not conn.in_transaction
 
 
 def test_chunk_writer_writes_at_offset_and_guards_length(tmp_path):
