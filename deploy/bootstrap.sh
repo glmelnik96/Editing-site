@@ -32,8 +32,10 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 # Сервисный пользователь без домашних файлов: git clone требует пустой каталог
+# В Ubuntu группа video уже существует (доступ к GPU): используем её, иначе создаём свою.
+getent group video >/dev/null || groupadd --system video
 if ! id -u video >/dev/null 2>&1; then
-  useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin video
+  useradd --system --gid video --home-dir "$APP_DIR" --shell /usr/sbin/nologin video
 fi
 mkdir -p "$APP_DIR" "$DATA_DIR/data" "$DATA_DIR/tmp/uploads"
 chown video:video "$APP_DIR"
