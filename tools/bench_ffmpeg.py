@@ -17,7 +17,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-PROXY_SCALE = "scale=w='if(gte(iw,ih),854,-2)':h='if(gte(iw,ih),-2,854)'"
+PROXY_SCALE = "scale=w='if(gte(iw,ih),640,-2)':h='if(gte(iw,ih),-2,640)'"
 
 
 def sample_command(path: Path, seconds: int) -> list[str]:
