@@ -15,3 +15,4 @@ pre { white-space: pre-wrap; word-break: break-all; padding: 12px; background: #
 .progress > i { display: block; height: 100%; background: #3a7d5c; border-radius: 3px; transition: width .2s; }
 .status-failed { color: #b3261e; }
 .muted { opacity: .7; }
+.player { display: block; width: 100%; max-width: 640px; margin: 12px 0; background: #000; border-radius: 6px; }

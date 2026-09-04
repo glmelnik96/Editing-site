@@ -16,7 +16,14 @@ describe('assets helpers', () => {
     expect(statusText('uploaded')).toBe('загружен, ждёт анализа')
     expect(statusText('proxy_ready')).toBe('готов')
     expect(statusText('weird')).toBe('weird')
-    expect(needsPolling([{ status: 'ready' }, { status: 'proxy_ready' }, { status: 'failed' }])).toBe(false)
+    expect(needsPolling([{ status: 'proxy_ready' }, { status: 'failed' }])).toBe(false)
     expect(needsPolling([{ status: 'ready' }, { status: 'analyzing' }])).toBe(true)
+  })
+
+  it('keeps polling while anything is still being processed', () => {
+    expect(needsPolling([{ status: 'uploaded' }])).toBe(true)
+    expect(needsPolling([{ status: 'analyzing' }])).toBe(true)
+    expect(needsPolling([{ status: 'ready' }])).toBe(true)
+    expect(needsPolling([{ status: 'proxy_ready' }, { status: 'failed' }])).toBe(false)
   })
 })

@@ -1,5 +1,6 @@
 import { api, ApiError } from './api'
 import { escapeHtml } from './html'
+import { playerMarkup, progressText } from './player'
 import { uploadFile } from './upload'
 
 export type Asset = {
@@ -9,8 +10,9 @@ export type Asset = {
   size: number
   status: string
   duration: number | null
+  progress?: number | null
   error: string | null
-  files: { proxy: string | null }
+  files: { proxy: string | null; thumbs: string | null; thumbs_meta: string | null }
 }
 
 const STATUS: Record<string, string> = {
@@ -20,7 +22,7 @@ const STATUS: Record<string, string> = {
   proxy_ready: 'готов',
   failed: 'ошибка',
 }
-const FINAL = new Set(['ready', 'proxy_ready', 'failed'])
+const FINAL = new Set(['proxy_ready', 'failed']) // 'ready' — промежуточный: звук и полоска готовы, прокси ещё собирается
 const POLL_MS = 3000
 
 export function fmtSize(bytes: number): string {
@@ -55,10 +57,15 @@ export function needsPolling(assets: { status: string }[]): boolean {
 function row(a: Asset): string {
   const cls = a.status === 'failed' ? ' class="status-failed"' : ''
   const err = a.error ? ` <span class="muted">${escapeHtml(a.error)}</span>` : ''
+  const prog = progressText(a.status, a.progress ?? null)
+  const progHtml = prog ? ` <span class="muted">${escapeHtml(prog)}</span>` : ''
+  const watch = a.files.proxy
+    ? `<button data-watch="${escapeHtml(a.id)}" data-proxy="${escapeHtml(a.files.proxy)}" data-kind="${escapeHtml(a.kind)}">Смотреть</button>`
+    : ''
   return `<tr>
     <td>${escapeHtml(a.original_name)}</td><td>${escapeHtml(a.kind)}</td><td>${fmtSize(a.size)}</td>
-    <td>${fmtDuration(a.duration)}</td><td${cls}>${escapeHtml(statusText(a.status))}${err}</td>
-    <td><button data-delete="${escapeHtml(a.id)}" data-name="${escapeHtml(a.original_name)}">Удалить</button></td></tr>`
+    <td>${fmtDuration(a.duration)}</td><td${cls}>${escapeHtml(statusText(a.status))}${progHtml}${err}</td>
+    <td>${watch}</td><td><button data-delete="${escapeHtml(a.id)}" data-name="${escapeHtml(a.original_name)}">Удалить</button></td></tr>`
 }
 
 /**
@@ -73,16 +80,19 @@ export function mountAssets(el: HTMLElement, onChanged?: () => void): { refresh:
       <input id="asset-files" type="file" multiple />
       <div id="asset-progress"></div>
       <table>
-        <thead><tr><th>Имя</th><th>Вид</th><th>Размер</th><th>Длина</th><th>Статус</th><th></th></tr></thead>
-        <tbody id="asset-rows"><tr><td colspan="6">Пока пусто</td></tr></tbody>
+        <thead><tr><th>Имя</th><th>Вид</th><th>Размер</th><th>Длина</th><th>Статус</th><th></th><th></th></tr></thead>
+        <tbody id="asset-rows"><tr><td colspan="7">Пока пусто</td></tr></tbody>
       </table>
+      <div id="player"></div>
       <pre id="assets-error" hidden></pre>
     </main>`
   const rows = el.querySelector('#asset-rows') as HTMLElement
   const progress = el.querySelector('#asset-progress') as HTMLElement
+  const player = el.querySelector('#player') as HTMLElement
   const errorBox = el.querySelector('#assets-error') as HTMLPreElement
   let timer: number | undefined
   let stopped = false // панель заменена перерисовкой — старый опрос сервера дальше не идёт
+  let openId: string | null = null // id ассета, чей плеер сейчас открыт под таблицей
 
   const showError = (e: unknown) => {
     errorBox.hidden = false
@@ -92,7 +102,19 @@ export function mountAssets(el: HTMLElement, onChanged?: () => void): { refresh:
   const refresh = async () => {
     if (stopped) return
     const { assets } = await api<{ assets: Asset[] }>('/api/v1/assets')
-    rows.innerHTML = assets.map(row).join('') || '<tr><td colspan="6">Пока пусто</td></tr>'
+    rows.innerHTML = assets.map(row).join('') || '<tr><td colspan="7">Пока пусто</td></tr>'
+    rows.querySelectorAll<HTMLButtonElement>('button[data-watch]').forEach(b =>
+      b.addEventListener('click', () => {
+        const id = b.dataset.watch ?? ''
+        if (openId === id) {
+          openId = null
+          player.innerHTML = ''
+          return
+        }
+        openId = id
+        player.innerHTML = playerMarkup({ proxy: b.dataset.proxy || null }, b.dataset.kind ?? '')
+      }),
+    )
     rows.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach(b =>
       b.addEventListener('click', async () => {
         if (!window.confirm(`Удалить «${b.dataset.name}» без возможности восстановления?`)) return
@@ -101,6 +123,10 @@ export function mountAssets(el: HTMLElement, onChanged?: () => void): { refresh:
         } catch (e) {
           showError(e)
           return
+        }
+        if (b.dataset.delete === openId) {
+          openId = null
+          player.innerHTML = ''
         }
         onChanged?.()
         try {
