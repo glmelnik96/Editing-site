@@ -2,12 +2,21 @@ import './style.css'
 import { api, ApiError } from './api'
 import { loginErrorText } from './errors'
 import { escapeHtml } from './html'
+import { fmtSize, mountAssets } from './assets'
 
-type Me = { id: string; email: string; name: string; role: 'admin' | 'user'; auth: 'cookie' | 'token' }
+type Me = {
+  id: string
+  email: string
+  name: string
+  role: 'admin' | 'user'
+  auth: 'cookie' | 'token'
+  quota: { used_bytes: number; limit_bytes: number }
+}
 type Token = { id: string; name: string; created_at: string; last_used_at: string | null; expires_at: string | null }
 type WhitelistEntry = { email: string; added_by: string | null; added_at: string }
 
 const root = document.getElementById('app') as HTMLElement
+let assetsPanel: { stop: () => void } | null = null // текущая панель ассетов — останавливаем перед перемонтированием
 
 function fmt(ts: string | null): string {
   return ts ? ts.replace('T', ' ').slice(0, 16) : '—'
@@ -48,7 +57,8 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
     )
     .join('')
   root.innerHTML = `
-    <header class="bar"><strong>Editing site</strong><span>${escapeHtml(me.email)}</span><button id="logout">Выйти</button></header>
+    <header class="bar"><strong>Editing site</strong><span>${escapeHtml(me.email)} · ${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</span><button id="logout">Выйти</button></header>
+    <section id="assets"></section>
     <main class="card">
       <h2>Токены для агента</h2>
       <table>
@@ -60,6 +70,9 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
       <pre id="tokens-error" hidden></pre>
     </main>
     <section id="admin"></section>`
+
+  assetsPanel?.stop()
+  assetsPanel = mountAssets(document.getElementById('assets') as HTMLElement)
 
   if (secretNote) {
     const box = document.getElementById('secret') as HTMLPreElement

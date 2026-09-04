@@ -11,3 +11,7 @@ input { flex: 1; padding: 6px 8px; }
 button, .button { padding: 6px 12px; cursor: pointer; }
 pre { white-space: pre-wrap; word-break: break-all; padding: 12px; background: #8882; border-radius: 6px; }
 .error { color: #b3261e; }
+.progress { height: 6px; margin: 4px 0 8px; background: #8883; border-radius: 3px; }
+.progress > i { display: block; height: 100%; background: #3a7d5c; border-radius: 3px; transition: width .2s; }
+.status-failed { color: #b3261e; }
+.muted { opacity: .7; }
