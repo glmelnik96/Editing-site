@@ -83,3 +83,9 @@ def test_janitor_units_and_install():
     for name in ("bootstrap.sh", "deploy.sh"):
         text = (DEPLOY / name).read_text(encoding="utf-8")
         assert "video-janitor.timer" in text and "video-janitor.service" in text, name
+
+
+def test_deploy_reexecs_itself_after_updating():
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert "self_before=$(sha256sum" in text
+    assert "DEPLOY_REEXEC=1 exec bash" in text

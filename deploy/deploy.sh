@@ -41,8 +41,19 @@ sys.exit(0 if body.get("status") == "ok" else 1)
 EOF
 }
 
+SELF="$APP_DIR/deploy/deploy.sh"
+self_before=$(sha256sum "$SELF" | cut -d' ' -f1)
+
 run_as_video git fetch origin
 run_as_video git merge --ff-only origin/main
+
+# Скрипт обновляет сам себя: bash дочитывает файл по ходу выполнения, поэтому шаги, добавленные новой
+# версией, в этом запуске просто не выполнятся. Перезапускаемся новой версией один раз.
+if [ "$self_before" != "$(sha256sum "$SELF" | cut -d' ' -f1)" ] && [ -z "${DEPLOY_REEXEC:-}" ]; then
+  echo "deploy.sh обновился, перезапускаю новую версию"
+  DEPLOY_REEXEC=1 exec bash "$SELF" "$@"
+fi
+
 run_as_video uv sync --frozen --no-dev
 (cd web && run_as_video npm ci --no-audit --no-fund && run_as_video npm run build)
 run_as_video .venv/bin/python -m server.db.migrate
