@@ -4,8 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Пустая переменная окружения для пути к бинарю значит «искать в PATH», а не запускать пустую строку.
+_TOOL_PATH_DEFAULTS = {"ffmpeg_path": "ffmpeg", "ffprobe_path": "ffprobe"}
 
 
 class Settings(BaseSettings):
@@ -78,6 +81,14 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("ffmpeg_path", "ffprobe_path", mode="before")
+    @classmethod
+    def _tool_path(cls, value: object, info: ValidationInfo) -> str:
+        # Пустой VIDEO_FFMPEG_PATH/VIDEO_FFPROBE_PATH — как будто не задан, ищем в PATH под своим именем.
+        if value is None or not str(value).strip():
+            return _TOOL_PATH_DEFAULTS[info.field_name]
+        return str(value).strip()
 
     @property
     def db_path(self) -> Path:

@@ -1,9 +1,10 @@
+import json
 import sys
 
 import pytest
 
 from server.app.config import Settings
-from server.media.probe import MediaInfo, parse_probe, probe_args
+from server.media.probe import MediaInfo, parse_probe, probe_args, probe_file
 from server.media.run import MediaError, run_tool, tail_lines
 
 VIDEO_JSON = {
@@ -84,7 +85,7 @@ def test_tail_lines_keeps_the_end():
     assert tail_lines("одна строка", 5) == "одна строка"
 
 
-def test_run_tool_reports_exit_code(tmp_path):
+def test_run_tool_reports_exit_code():
     # -X utf8: без этого флага дочерний интерпретатор на Windows при перенаправленном stderr
     # берёт кодировку консоли (не UTF-8), и кириллица приходит битой независимо от run_tool.
     with pytest.raises(MediaError) as e:
@@ -102,3 +103,23 @@ def test_run_tool_timeout():
     with pytest.raises(MediaError) as e:
         run_tool([sys.executable, "-X", "utf8", "-c", "import time; time.sleep(5)"], timeout=0.3)
     assert e.value.reason == "timeout"
+
+
+def test_empty_tool_path_falls_back_to_path_lookup(monkeypatch):
+    monkeypatch.setenv("VIDEO_FFMPEG_PATH", "")
+    monkeypatch.setenv("VIDEO_FFPROBE_PATH", "   ")
+    s = Settings(_env_file=None)
+    assert s.ffmpeg_path == "ffmpeg" and s.ffprobe_path == "ffprobe"
+
+
+def test_probe_file_parses_tool_output(monkeypatch):
+    monkeypatch.setattr("server.media.probe.run_tool", lambda *a, **k: json.dumps(VIDEO_JSON))
+    info = probe_file(Settings(_env_file=None), "/x/source.mp4")
+    assert info.duration == 12.0 and info.kind == "video"
+
+
+def test_probe_file_rejects_non_json(monkeypatch):
+    monkeypatch.setattr("server.media.probe.run_tool", lambda *a, **k: "не json")
+    with pytest.raises(MediaError) as e:
+        probe_file(Settings(_env_file=None), "/x/source.mp4")
+    assert e.value.reason == "bad_probe"

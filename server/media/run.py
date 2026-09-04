@@ -29,7 +29,7 @@ def run_tool(args: list[str], *, timeout: float, capture_stderr: bool = False) -
 
     capture_stderr=True возвращает stderr вместо stdout: silencedetect пишет находки именно туда.
     """
-    log.debug("run: %s", " ".join(args[:6]))
+    log.debug("run: %s ... %s", args[0], args[-1])
     try:
         proc = subprocess.run(
             args,
@@ -42,6 +42,8 @@ def run_tool(args: list[str], *, timeout: float, capture_stderr: bool = False) -
         )
     except FileNotFoundError as exc:
         raise MediaError("tool_missing", f"Не найден {args[0]}") from exc
+    except PermissionError as exc:
+        raise MediaError("tool_missing", f"Нет прав на запуск {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
         raise MediaError("timeout", f"{args[0]} не уложился в {timeout:.0f} с") from exc
     if proc.returncode != 0:
