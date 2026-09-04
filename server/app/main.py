@@ -17,6 +17,7 @@ from server.app.auth.routes import router as auth_router
 from server.app.auth.token_routes import router as tokens_router
 from server.app.config import Settings
 from server.app.errors import ApiError, install_error_handlers
+from server.app.files import router as files_router
 from server.app.health import router as health_router
 from server.app.ratelimit import FixedWindowLimiter
 from server.app.security import install_origin_check
@@ -92,6 +93,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(admin_router)
     app.include_router(uploads_router)
     app.include_router(assets_router)
+    app.include_router(files_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
         "/api/{rest:path}",

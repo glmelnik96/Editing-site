@@ -13,8 +13,48 @@ VIDEO_DOMAIN_PLACEHOLDER {
 	}
 	header /index.html Cache-Control no-cache
 	header / Cache-Control no-cache
-	request_body {
-		max_size 1MB
+
+	# Служебные маршруты снаружи не видны: forward_auth ходит в 127.0.0.1:8010 напрямую, минуя этот блок.
+	handle /internal/* {
+		respond 404
 	}
-	reverse_proxy 127.0.0.1:8010
+
+	# Файлы ассетов: право доступа проверяет API (/internal/authz), отдаёт с диска
+	# сам Caddy (Range, большие файлы).
+	# route фиксирует порядок: сначала forward_auth с исходным путём, потом срез префикса и отдача с диска.
+	# Caddy читает /srv/video/data как член группы video (bootstrap.sh, deploy.sh).
+	handle /files/* {
+		route {
+			forward_auth 127.0.0.1:8010 {
+				uri /internal/authz
+			}
+			uri strip_prefix /files
+			root * /srv/video/data
+			header Cache-Control "private, max-age=3600"
+			file_server
+		}
+	}
+
+	# Части загрузки: тело чуть больше части (32 МиБ = 33 554 432 байт).
+	handle /api/v1/uploads/*/chunks/* {
+		request_body {
+			max_size 34MB
+		}
+		reverse_proxy 127.0.0.1:8010
+	}
+
+	# Одноразовая загрузка мелких файлов: 64 МиБ плюс обвязка multipart.
+	handle /api/v1/assets/upload {
+		request_body {
+			max_size 68MB
+		}
+		reverse_proxy 127.0.0.1:8010
+	}
+
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8010
+	}
 }

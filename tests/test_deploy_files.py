@@ -57,3 +57,18 @@ def test_caddyfile_imports_neighbour_site_blocks():
     caddy = (DEPLOY / "Caddyfile").read_text(encoding="utf-8")
     body = caddy.split("VIDEO_DOMAIN_PLACEHOLDER {")[0]
     assert "import /etc/caddy/conf.d/*.caddy" in body
+
+
+def test_caddyfile_serves_files_after_forward_auth_with_body_limits():
+    caddy = (DEPLOY / "Caddyfile").read_text(encoding="utf-8")
+    assert "handle /internal/*" in caddy and "respond 404" in caddy
+    assert "forward_auth 127.0.0.1:8010" in caddy and "uri /internal/authz" in caddy
+    assert caddy.index("forward_auth") < caddy.index("uri strip_prefix /files") < caddy.index("file_server")
+    assert "root * /srv/video/data" in caddy
+    assert "handle /api/v1/uploads/*/chunks/*" in caddy and "max_size 34MB" in caddy
+    assert "handle /api/v1/assets/upload" in caddy and "max_size 68MB" in caddy
+
+
+def test_caddy_user_joins_video_group():
+    for name in ("bootstrap.sh", "deploy.sh"):
+        assert "usermod -a -G video caddy" in (DEPLOY / name).read_text(encoding="utf-8"), name

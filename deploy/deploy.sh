@@ -47,6 +47,12 @@ run_as_video uv sync --frozen --no-dev
 (cd web && run_as_video npm ci --no-audit --no-fund && run_as_video npm run build)
 run_as_video .venv/bin/python -m server.db.migrate
 
+# Существующие установки: Caddy должен состоять в группе video (bootstrap делает то же на чистой VM).
+if ! id -nG caddy | tr ' ' '\n' | grep -qx video; then
+  usermod -a -G video caddy
+  systemctl restart caddy
+fi
+
 # Конфиги Caddy и systemd живут в репозитории: переустанавливаем их при каждом деплое.
 if [ -f "$DOMAIN_FILE" ]; then
   sed "s/VIDEO_DOMAIN_PLACEHOLDER/$(cat "$DOMAIN_FILE")/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile.new

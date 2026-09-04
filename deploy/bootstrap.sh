@@ -42,6 +42,10 @@ chown video:video "$APP_DIR"
 chown -R video:video "$DATA_DIR"
 chmod 750 "$DATA_DIR" "$DATA_DIR/data" "$DATA_DIR/tmp" "$DATA_DIR/tmp/uploads"
 
+# Caddy отдаёт файлы ассетов с диска сам (file_server после forward_auth):
+# читает /srv/video/data через группу video.
+usermod -a -G video caddy
+
 # Ключ для приватного репозитория (необязательно): положить в /etc/editing-site/deploy_key до запуска,
 # известные хосты пишутся рядом, чтобы не засорять каталог приложения.
 mkdir -p /etc/editing-site
