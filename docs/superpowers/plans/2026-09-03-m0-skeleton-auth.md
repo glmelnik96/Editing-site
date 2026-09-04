@@ -2636,14 +2636,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Опубликовать репозиторий**
 
-На GitHub создать приватный репозиторий `glmelnik96/editing-site`, затем локально:
+Репозиторий `glmelnik96/Editing-site` создан 2026-09-04; `main` (fast-forward до M0) и ветка `m0-skeleton-auth` запушены: `git remote add origin git@github.com:glmelnik96/Editing-site.git`, `git push -u origin main m0-skeleton-auth`.
 
-```bash
-git remote add origin git@github.com:glmelnik96/editing-site.git
-git push -u origin main
-```
-
-Expected: ветка `main` на GitHub.
+Expected: ветка `main` на GitHub с кодом M0.
 
 - [ ] **Step 2: DNS и Yandex OAuth**
 
@@ -2654,11 +2649,11 @@ A-запись поддомена (например `video.cloudrudesign.ru`) н
 ```bash
 ssh <user>@<vm-ip>
 sudo apt-get install -y git
-git clone https://github.com/glmelnik96/editing-site.git /tmp/editing-site
-sudo bash /tmp/editing-site/deploy/bootstrap.sh <домен> https://github.com/glmelnik96/editing-site.git
+git clone https://github.com/glmelnik96/Editing-site.git /tmp/editing-site
+sudo bash /tmp/editing-site/deploy/bootstrap.sh <домен> https://github.com/glmelnik96/Editing-site.git
 ```
 
-Expected: последняя строка `bootstrap done…`, `systemctl is-active caddy` печатает `active`, `sudo caddy validate --config /etc/caddy/Caddyfile` печатает `Valid configuration`. Для приватного репозитория заранее добавить deploy key на GitHub и использовать SSH-адрес.
+Expected: последняя строка `bootstrap done…`, `systemctl is-active caddy` печатает `active`, `sudo caddy validate --config /etc/caddy/Caddyfile` печатает `Valid configuration`. Если репозиторий приватный: сгенерировать на VM ключ `ssh-keygen -t ed25519 -N "" -f /etc/editing-site/deploy_key` (каталог создать заранее), публичную часть добавить в GitHub → Settings → Deploy keys, и передавать bootstrap SSH-адрес `git@github.com:glmelnik96/Editing-site.git`.
 
 - [ ] **Step 4: Заполнить `.env` и задеплоить**
 
