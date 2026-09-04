@@ -51,3 +51,9 @@ def test_unit_is_hardened():
     unit = (DEPLOY / "video-api.service").read_text(encoding="utf-8")
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/srv/video" in unit
+
+
+def test_caddyfile_imports_neighbour_site_blocks():
+    caddy = (DEPLOY / "Caddyfile").read_text(encoding="utf-8")
+    body = caddy.split("VIDEO_DOMAIN_PLACEHOLDER {")[0]
+    assert "import /etc/caddy/conf.d/*.caddy" in body

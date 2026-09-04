@@ -35,3 +35,12 @@ cd web && npm test
 5. Замер скорости ffmpeg на машине: `sudo -u video .venv/bin/python tools/bench_ffmpeg.py --out /tmp/bench-report --work /srv/video/tmp/bench` из `/opt/editing-site`, отчёт скопировать в `docs/benchmarks/` локально.
 
 `/healthz` отвечает 503 при статусе degraded (диск меньше 10 %, база недоступна, пульс воркера старше 120 с), так что внешний пинг по коду ответа достаточен.
+
+## Соседи на той же VM
+
+VM общая с сервисом VideoBoard (`/opt/videoboard`, пользователь `board`, порт 8020). Договорённости:
+
+- `/etc/caddy/Caddyfile` наш и переписывается `deploy.sh` целиком; чужие site-блоки живут в `/etc/caddy/conf.d/*.caddy` и подключаются строкой `import` в начале нашего Caddyfile. Сосед валидирует общий конфиг перед каждым `systemctl reload caddy`.
+- Yandex OAuth-приложение общее: у него два redirect URI, а `client_id`/`client_secret` лежат в обоих `.env`. Ротация секрета кладёт оба сервиса, перед сменой предупредить чат VideoBoard.
+- Диск общий: у нас файлы живут сутки и квота 20 ГБ на человека, у соседа потолок 30 ГБ и TTL 30 дней; порог отказа в загрузке у обоих 10 % свободного места.
+- Модули `server/app/auth/*`, `server/db/*`, `config`, `errors`, `ratelimit`, `security` скопированы к соседу как основа; найденные в них баги сообщать в чат VideoBoard.

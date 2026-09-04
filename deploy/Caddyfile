@@ -1,3 +1,7 @@
+# Соседние сервисы на этой же VM (VideoBoard и другие) держат свои site-блоки в /etc/caddy/conf.d/*.caddy.
+# Этот файл целиком переписывается нашим deploy.sh, импорт сохраняет чужие блоки. Пустой каталог не ошибка.
+import /etc/caddy/conf.d/*.caddy
+
 VIDEO_DOMAIN_PLACEHOLDER {
 	encode zstd gzip
 	header {
