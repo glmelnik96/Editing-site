@@ -125,6 +125,9 @@ def create_upload(
         "created_at": iso(now),
         "expires_at": iso(now + timedelta(hours=settings.upload_ttl_hours)),
     }
+    # Резерв файла держит блокировку базы: на ext4 posix_fallocate помечает экстенты за миллисекунды,
+    # поэтому платим этим за сериализацию проверки квоты. На файловой системе без fallocate (сеть, fuse)
+    # glibc обнуляет файл целиком, и соседние записи получат «database is locked» по таймауту в 5 секунд.
     with transaction(conn):
         check_capacity(conn, settings, user_id, size)
         try:
