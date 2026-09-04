@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     login_rate_window_sec: int = Field(default=60, ge=1)
     log_level: str = "INFO"
 
+    # Хранение. tmp_dir — тот же раздел, что data_dir: завершение загрузки делает os.replace.
+    tmp_dir: Path | None = None
+    chunk_size: int = Field(default=32 * 1024 * 1024, ge=1024, le=256 * 1024 * 1024)
+    max_upload_bytes: int = Field(default=5 * 1024**3, ge=1)
+    small_upload_max_bytes: int = Field(default=64 * 1024 * 1024, ge=1)
+    user_quota_bytes: int = Field(default=20 * 1024**3, ge=1)
+    disk_low_pct: float = Field(default=10.0, ge=0.0, le=90.0)
+    uploads_per_hour: int = Field(default=20, ge=1)
+    upload_ttl_hours: int = Field(default=24, ge=1)
+    asset_ttl_hours: int = Field(default=24, ge=1)
+
     @field_validator("public_base_url")
     @classmethod
     def _check_public_base_url(cls, value: str) -> str:
@@ -61,3 +72,11 @@ class Settings(BaseSettings):
         default_port = 443 if u.scheme == "https" else 80
         netloc = host if u.port in (None, default_port) else f"{host}:{u.port}"
         return f"{u.scheme}://{netloc}"
+
+    @property
+    def tmp_path(self) -> Path:
+        return self.tmp_dir if self.tmp_dir is not None else self.data_dir / "tmp"
+
+    @property
+    def uploads_tmp_path(self) -> Path:
+        return self.tmp_path / "uploads"

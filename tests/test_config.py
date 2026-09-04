@@ -56,3 +56,26 @@ def test_settings_reject_zero_session_limit():
         Settings(_env_file=None, max_sessions_per_user=0)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, login_rate_max=0)
+
+
+def test_storage_defaults_and_tmp_path(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert s.chunk_size == 32 * 1024 * 1024
+    assert s.user_quota_bytes == 20 * 1024**3
+    assert s.max_upload_bytes == 5 * 1024**3
+    assert s.small_upload_max_bytes == 64 * 1024 * 1024
+    assert s.disk_low_pct == 10.0
+    assert s.uploads_per_hour == 20
+    assert s.upload_ttl_hours == 24 and s.asset_ttl_hours == 24
+    assert s.tmp_path == tmp_path / "d" / "tmp"
+    assert s.uploads_tmp_path == tmp_path / "d" / "tmp" / "uploads"
+
+
+def test_tmp_dir_override(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d", tmp_dir=tmp_path / "t")
+    assert s.uploads_tmp_path == tmp_path / "t" / "uploads"
+
+
+def test_chunk_size_bounds():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chunk_size=512)

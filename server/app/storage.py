@@ -1,0 +1,59 @@
+"""Раскладка файлов на диске и публичные ссылки. Пути выводятся только из идентификаторов,
+имена исходных файлов в путях не участвуют (раздел 6.2 спеки).
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from server.app.config import Settings
+
+KINDS = ("video", "audio", "subtitle")
+VIDEO_EXTS = {"mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "mxf", "ts", "wmv", "flv", "3gp"}
+AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff", "aif", "wma"}
+SUBTITLE_EXTS = {"srt", "vtt"}
+# Файлы ассета, которые отдаются наружу. source.* сюда не входит намеренно (раздел 11 спеки).
+PUBLIC_FILES = ("proxy.mp4", "proxy.m4a", "thumbs.jpg", "thumbs.json", "peaks.json", "analysis.json")
+
+ID_RE = re.compile(r"^[a-z]{3}_[0-9a-f]{12}$")
+_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
+_FILE_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/([^/]+)$")
+
+
+def safe_ext(filename: str) -> str:
+    """Расширение в нижнем регистре из букв и цифр (до 8 знаков), иначе bin."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext if _EXT_RE.match(ext) else "bin"
+
+
+def kind_from_ext(ext: str) -> str | None:
+    if ext in VIDEO_EXTS:
+        return "video"
+    if ext in AUDIO_EXTS:
+        return "audio"
+    if ext in SUBTITLE_EXTS:
+        return "subtitle"
+    return None
+
+
+def asset_dir(settings: Settings, user_id: str, asset_id: str) -> Path:
+    return settings.data_dir / user_id / "assets" / asset_id
+
+
+def upload_path(settings: Settings, upload_id: str) -> Path:
+    return settings.uploads_tmp_path / upload_id
+
+
+def file_url(user_id: str, asset_id: str, name: str) -> str:
+    return f"/files/{user_id}/assets/{asset_id}/{name}"
+
+
+def parse_file_url(path: str) -> tuple[str, str, str] | None:
+    """(user_id, asset_id, name) из пути /files/...; идентификаторы проверяются по форме."""
+    m = _FILE_URL_RE.match(path)
+    if not m:
+        return None
+    user_id, asset_id, name = m.groups()
+    if not (ID_RE.match(user_id) and ID_RE.match(asset_id)):
+        return None
+    return user_id, asset_id, name
