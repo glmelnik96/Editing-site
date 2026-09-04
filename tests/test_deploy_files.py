@@ -98,6 +98,8 @@ def test_worker_unit_is_limited_and_installed():
     assert "CPUQuota=" in unit and "MemoryMax=" in unit
     assert "ProtectSystem=strict" in unit and "ReadWritePaths=/srv/video" in unit
     assert "Restart=always" in unit and "TimeoutStopSec=" in unit
+    # KillMode=mixed: SIGTERM должен дойти и до дочернего ffmpeg, а не только до python
+    assert "KillMode=mixed" in unit
     for name in ("bootstrap.sh", "deploy.sh"):
         text = (DEPLOY / name).read_text(encoding="utf-8")
         assert "video-worker.service" in text, name

@@ -123,9 +123,17 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
     conn.execute(
         "UPDATE assets SET status = 'ready', last_access_at = ? WHERE id = ?", (now_iso(), asset_id)
     )
-    enqueue_job(
-        conn, user_id=job["user_id"], type_="proxy", target_id=asset_id, priority=PROXY_PRIORITY
-    )
+    # analyze может выполниться повторно (janitor вернул задание в очередь) — тогда для того же
+    # ассета уже есть незавершённое задание proxy, и второе ставить не нужно
+    pending = conn.execute(
+        "SELECT count(*) FROM jobs WHERE target_id = ? AND type = 'proxy' "
+        "AND status IN ('queued', 'running')",
+        (asset_id,),
+    ).fetchone()[0]
+    if not pending:
+        enqueue_job(
+            conn, user_id=job["user_id"], type_="proxy", target_id=asset_id, priority=PROXY_PRIORITY
+        )
     log.info("analyze: %s готов (%s, %.1f с)", asset_id, info.kind, info.duration)
 
 

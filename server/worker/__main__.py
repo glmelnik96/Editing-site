@@ -18,10 +18,13 @@ from server.db.core import connect
 from server.media.run import MediaError
 from server.worker.handlers import HANDLERS
 from server.worker.queue import (
+    STOPPING,
     claim_job,
     fail_job,
     finish_job,
     heartbeat,
+    requeue_job,
+    requeue_orphans,
     write_worker_heartbeat,
 )
 
@@ -30,7 +33,6 @@ log = logging.getLogger("video.worker")
 LANE = "cpu"
 HEARTBEAT_SEC = 10.0
 IDLE_LOG_EVERY = 300  # раз в сколько пустых кругов писать, что воркер жив
-_stopping = threading.Event()
 
 
 class Heartbeat(threading.Thread):
@@ -80,7 +82,10 @@ def run_once(conn: sqlite3.Connection, settings: Settings) -> bool:
             raise MediaError("unknown_job", f"нет обработчика для задания {job['type']}")
         handler(conn, settings, job)
     except MediaError as exc:
-        if exc.reason == "canceled":
+        if STOPPING.is_set():
+            requeue_job(conn, job["id"])
+            log.info("задание %s возвращено в очередь: воркер останавливается", job["id"])
+        elif exc.reason == "canceled":
             log.info("задание %s отменено", job["id"])
         else:
             log.warning("задание %s не выполнено: %s", job["id"], exc.message)
@@ -104,7 +109,7 @@ def _pid() -> int:
 
 def _handle_stop(signum: int, _frame: FrameType | None) -> None:
     log.info("получен сигнал %s, останавливаемся после текущего задания", signum)
-    _stopping.set()
+    STOPPING.set()
 
 
 def main() -> None:
@@ -116,8 +121,11 @@ def main() -> None:
     idle = 0
     try:
         write_worker_heartbeat(conn)
+        returned = requeue_orphans(conn)
+        if returned:
+            log.info("заданий возвращено в очередь после перезапуска: %d", returned)
         log.info("воркер запущен, полоса %s", LANE)
-        while not _stopping.is_set():
+        while not STOPPING.is_set():
             try:
                 worked = run_once(conn, settings)
             except sqlite3.Error as exc:

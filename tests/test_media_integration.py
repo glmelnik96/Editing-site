@@ -18,14 +18,6 @@ pytestmark = pytest.mark.skipif(not HAVE_FFMPEG, reason="нужен ffmpeg в PA
 
 USER = "usr_00000000000a"
 
-# Известный баг: handle_proxy кодирует во временный файл proxy.<ext>.part, а настоящий ffmpeg
-# не может определить формат контейнера по расширению ".part" (нужен явный -f в proxy_args()).
-# С реальным ffmpeg proxy-задание всегда падает. strict=True: тест сам покраснеет, когда баг
-# починят, — тогда и уберём отметку.
-PROXY_PART_BUG = pytest.mark.xfail(
-    reason="handle_proxy пишет в *.part, ffmpeg не угадывает формат по такому расширению", strict=True
-)
-
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
@@ -66,7 +58,6 @@ def drain(conn, settings, limit=4):
             return
 
 
-@PROXY_PART_BUG
 def test_video_goes_all_the_way_to_proxy(conn, settings):
     folder = add_asset(conn, settings, make_video, asset_id="ast_000000000001", kind="video", ext="mp4")
     drain(conn, settings)
@@ -107,7 +98,6 @@ def test_video_goes_all_the_way_to_proxy(conn, settings):
     assert [(r["type"], r["status"]) for r in done] == [("analyze", "done"), ("proxy", "done")]
 
 
-@PROXY_PART_BUG
 def test_silent_video_still_becomes_ready(conn, settings):
     folder = add_asset(
         conn, settings, make_silent_video, asset_id="ast_000000000002", kind="video", ext="mp4"
@@ -120,7 +110,6 @@ def test_silent_video_still_becomes_ready(conn, settings):
     assert (folder / "proxy.mp4").exists()
 
 
-@PROXY_PART_BUG
 def test_audio_only_asset(conn, settings):
     folder = add_asset(conn, settings, make_audio, asset_id="ast_000000000003", kind="audio", ext="m4a")
     drain(conn, settings)

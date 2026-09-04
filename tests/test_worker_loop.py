@@ -31,6 +31,13 @@ def conn(settings):
     c.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_stopping():
+    """STOPPING — модульный Event: не сбросить его после теста — сломать соседние тесты файла."""
+    yield
+    worker_main.STOPPING.clear()
+
+
 def test_run_once_takes_a_job_and_marks_it_done(conn, settings, monkeypatch):
     job_id = enqueue_job(conn, user_id=USER, type_="analyze", target_id="ast_1", priority=10)
     seen = []
@@ -100,3 +107,26 @@ def test_heartbeat_thread_updates_the_row(conn, settings):
     row = conn.execute("SELECT heartbeat_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
     assert row["heartbeat_at"] is not None
     assert conn.execute("SELECT at FROM heartbeats WHERE name = 'worker'").fetchone() is not None
+
+
+def test_orphaned_running_jobs_return_to_the_queue(conn, settings):
+    job_id = enqueue_job(conn, user_id=USER, type_="analyze", target_id="ast_1")
+    conn.execute("UPDATE jobs SET status = 'running', worker_pid = 999 WHERE id = ?", (job_id,))
+    assert worker_main.requeue_orphans(conn) == 1
+    row = conn.execute("SELECT status, worker_pid FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    assert row["status"] == "queued" and row["worker_pid"] is None
+
+
+def test_stop_during_a_job_requeues_it(conn, settings, monkeypatch):
+    job_id = enqueue_job(conn, user_id=USER, type_="proxy", target_id="ast_1")
+
+    def stop_midway(c, s, job):
+        worker_main.STOPPING.set()
+        raise MediaError("canceled", "Отменено")
+
+    monkeypatch.setitem(worker_main.HANDLERS, "proxy", stop_midway)
+    try:
+        worker_main.run_once(conn, settings)
+    finally:
+        worker_main.STOPPING.clear()
+    assert conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()[0] == "queued"

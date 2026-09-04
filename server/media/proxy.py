@@ -12,13 +12,19 @@ CRF = "28"
 AUDIO_BITRATE = "96k"
 PRESET = "veryfast"
 
+# вид ассета → (имя файла прокси, формат контейнера для ffmpeg -f).
+# Формат нужен явно: кодирование идёт во временный файл с суффиксом .part (см. handle_proxy),
+# а по такому расширению ffmpeg не может выбрать контейнер сам («Unable to choose an output format»).
+PROXY_BY_KIND = {
+    "video": ("proxy.mp4", "mp4"),
+    "audio": ("proxy.m4a", "ipod"),
+}
+
 
 def proxy_name(kind: str) -> str:
-    if kind == "video":
-        return "proxy.mp4"
-    if kind == "audio":
-        return "proxy.m4a"
-    raise ValueError(f"нет прокси для вида {kind}")
+    if kind not in PROXY_BY_KIND:
+        raise ValueError(f"нет прокси для вида {kind}")
+    return PROXY_BY_KIND[kind][0]
 
 
 def scale_filter(long_side: int) -> str:
@@ -48,7 +54,8 @@ def proxy_args(settings: Settings, src: str, dst: str, *, kind: str) -> list[str
         ]
     else:
         args += ["-vn"]
-    args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-movflags", "+faststart", dst]
+    args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-movflags", "+faststart"]
+    args += ["-f", PROXY_BY_KIND[kind][1], dst]
     return args
 
 

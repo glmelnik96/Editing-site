@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 from server.app.util import now_iso
 
 ERROR_MAX_CHARS = 2000
+
+STOPPING = threading.Event()  # взводится по сигналу остановки: обработчики видят это как отмену
 
 # Среди заданий одного приоритета первым идёт пользователь, чьё последнее задание закончилось раньше:
 # один человек с длинной очередью не занимает воркер целиком (раздел 9.1 спеки).
@@ -46,6 +49,8 @@ def heartbeat(conn: sqlite3.Connection, job_id: str) -> None:
 
 def is_canceled(conn: sqlite3.Connection, job_id: str) -> bool:
     """True и когда задание отменили, и когда его строки уже нет: работать дальше незачем."""
+    if STOPPING.is_set():
+        return True  # так отмена доходит до ffmpeg через should_stop в run_streaming
     row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return row is None or row["status"] != "running"
 
@@ -67,6 +72,24 @@ def fail_job(conn: sqlite3.Connection, job_id: str, error: str) -> None:
         "UPDATE jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ? AND status = 'running'",
         (now_iso(), error[:ERROR_MAX_CHARS], job_id),
     )
+
+
+def requeue_job(conn: sqlite3.Connection, job_id: str) -> None:
+    """Вернуть задание в очередь: воркер уходит, работу подхватит следующий."""
+    conn.execute(
+        "UPDATE jobs SET status = 'queued', started_at = NULL, heartbeat_at = NULL, "
+        "worker_pid = NULL, progress = 0 WHERE id = ? AND status = 'running'",
+        (job_id,),
+    )
+
+
+def requeue_orphans(conn: sqlite3.Connection) -> int:
+    """Задания в running при старте процесса осиротели: воркер один, значит их некому вести."""
+    cur = conn.execute(
+        "UPDATE jobs SET status = 'queued', started_at = NULL, heartbeat_at = NULL, "
+        "worker_pid = NULL, progress = 0 WHERE status = 'running'"
+    )
+    return cur.rowcount
 
 
 def write_worker_heartbeat(conn: sqlite3.Connection) -> None:

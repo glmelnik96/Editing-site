@@ -17,6 +17,8 @@ CPUQuota=150%
 MemoryMax=2G
 # Долгий рендер дописывает файл по SIGTERM: даём время выйти самому.
 TimeoutStopSec=30
+# Сигнал остановки должен дойти и до процесса ffmpeg, а не только до Python.
+KillMode=mixed
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

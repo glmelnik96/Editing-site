@@ -16,6 +16,9 @@ def test_video_proxy_is_h264_with_short_gop():
     assert "-sc_threshold" in args and args[args.index("-sc_threshold") + 1] == "0"
     assert args[args.index("-b:a") + 1] == "96k"
     assert "+faststart" in args
+    # кодирование идёт во временный файл proxy.mp4.part — по расширению .part ffmpeg не
+    # угадывает контейнер сам, поэтому формат передаётся явно
+    assert args[args.index("-f") + 1] == "mp4"
     scale = args[args.index("-vf") + 1]
     # min() не даёт увеличивать кадр меньше 640 px
     assert scale == "scale=w='if(gte(iw,ih),min(iw,640),-2)':h='if(gte(iw,ih),-2,min(ih,640))'"
@@ -26,6 +29,8 @@ def test_audio_proxy_has_no_video():
     args = proxy_args(s(), "/x/source.mp3", "/x/proxy.m4a", kind="audio")
     assert "-vn" in args and "libx264" not in args
     assert args[args.index("-b:a") + 1] == "96k"
+    # тот же .part-файл для m4a: контейнер ipod (m4a) тоже нужно называть явно
+    assert args[args.index("-f") + 1] == "ipod"
 
 
 def test_long_side_is_configurable():

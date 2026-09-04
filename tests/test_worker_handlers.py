@@ -143,6 +143,21 @@ def test_analyze_marks_the_asset_failed_on_a_broken_file(conn, settings, monkeyp
     assert conn.execute("SELECT count(*) FROM jobs WHERE status = 'queued'").fetchone()[0] == 0
 
 
+def test_repeated_analyze_does_not_duplicate_the_proxy_job(conn, settings, monkeypatch):
+    """analyze может выполниться повторно (janitor вернул задание в очередь) — proxy должен остаться один."""
+    asset_id = make_asset(conn, settings)
+    monkeypatch.setattr(handlers, "probe_file", lambda *a, **k: VIDEO)
+    monkeypatch.setattr(handlers, "extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "analyze_audio", lambda *a, **k: fake_analysis())
+    meta = {"count": 6, "cols": 10, "rows": 1, "interval": 2.0, "width": 160, "height": 90}
+    monkeypatch.setattr(handlers, "build_thumbs", lambda *a, **k: meta)
+    handlers.handle_analyze(conn, settings, take(conn))
+    handlers.handle_analyze(conn, settings, take(conn))  # второй прогон того же analyze
+    assert conn.execute(
+        "SELECT count(*) FROM jobs WHERE type = 'proxy' AND target_id = ?", (asset_id,)
+    ).fetchone()[0] == 1
+
+
 def test_analyze_of_a_missing_asset_is_not_an_error(conn, settings):
     """Ассет удалили, пока задание ждало очереди: работать не над чем, но и падать незачем."""
     job = take(conn, target_id="ast_00000000dead")
