@@ -63,6 +63,18 @@ def _set_asset_failed(conn: sqlite3.Connection, asset_id: str, message: str) -> 
     )
 
 
+def _stop_if_canceled(conn: sqlite3.Connection, job: sqlite3.Row) -> None:
+    """Между шагами анализа: задание отменили или воркер останавливают — дальше не работаем.
+
+    Внутри одного вызова ffmpeg прерваться нельзя (шаги анализа идут через run_tool без проверки),
+    но между шагами это отсекает лишние минуты работы после удаления ассета или рестарта сервиса.
+    """
+    from server.worker.queue import is_canceled
+
+    if is_canceled(conn, job["id"]):
+        raise MediaError("canceled", "Отменено")
+
+
 def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:
     from server.worker.queue import set_progress  # локально: очередь не должна зависеть от обработчиков
 
@@ -87,6 +99,7 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
         ),
     )
     set_progress(conn, job["id"], PROGRESS_AFTER_PROBE)
+    _stop_if_canceled(conn, job)
 
     peaks = {"rate": settings.peaks_per_sec, "peaks": []}
     analysis = {
@@ -107,6 +120,7 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
     _write_json(folder / "peaks.json", peaks)
     _write_json(folder / "analysis.json", analysis)
     set_progress(conn, job["id"], PROGRESS_AFTER_AUDIO)
+    _stop_if_canceled(conn, job)
 
     if info.kind == "video":
         try:

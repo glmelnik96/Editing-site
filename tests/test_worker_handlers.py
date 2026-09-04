@@ -220,3 +220,17 @@ def test_proxy_skips_an_asset_that_is_not_ready(conn, settings, monkeypatch):
     make_asset(conn, settings, status="uploaded")
     monkeypatch.setattr(handlers, "run_streaming", lambda *a, **k: pytest.fail("кодировать нечего"))
     handlers.handle_proxy(conn, settings, take(conn, type_="proxy", priority=5))
+
+
+def test_analyze_stops_between_steps_when_canceled(conn, settings, monkeypatch):
+    """Ассет удалили во время анализа: следующий шаг не начинаем."""
+    asset_id = make_asset(conn, settings)
+    monkeypatch.setattr(handlers, "probe_file", lambda *a, **k: VIDEO)
+    monkeypatch.setattr(handlers, "extract_wav", lambda *a, **k: pytest.fail("шаг после отмены не идёт"))
+    job = take(conn)
+    conn.execute("UPDATE jobs SET status = 'canceled' WHERE id = ?", (job["id"],))
+    with pytest.raises(MediaError) as e:
+        handlers.handle_analyze(conn, settings, job)
+    assert e.value.reason == "canceled"
+    assert conn.execute("SELECT count(*) FROM jobs WHERE type = 'proxy'").fetchone()[0] == 0
+    assert not (asset_dir(settings, USER, asset_id) / "peaks.json").exists()
