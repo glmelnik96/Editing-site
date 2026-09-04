@@ -1,4 +1,4 @@
-from pathlib import Path
+import pytest
 
 from server.app.config import Settings
 from server.app.storage import (
@@ -18,6 +18,9 @@ def test_safe_ext_lowercases_and_rejects_garbage():
     assert safe_ext("weird.tar.gz") == "gz"
     assert safe_ext("bad.ext with space") == "bin"
     assert safe_ext("x." + "a" * 9) == "bin"
+    assert safe_ext(".mp4") == "mp4"
+    assert safe_ext("a.") == "bin"
+    assert safe_ext("клип.мп4") == "bin"
 
 
 def test_kind_from_ext():
@@ -25,6 +28,7 @@ def test_kind_from_ext():
     assert kind_from_ext("mp3") == "audio"
     assert kind_from_ext("srt") == "subtitle"
     assert kind_from_ext("bin") is None
+    assert kind_from_ext("MP4") == "video"
 
 
 def test_paths_come_from_ids_only(tmp_path):
@@ -33,7 +37,11 @@ def test_paths_come_from_ids_only(tmp_path):
         tmp_path / "d" / "usr_0123456789ab" / "assets" / "ast_0123456789ab"
     )
     assert upload_path(s, "upl_0123456789ab") == tmp_path / "d" / "tmp" / "uploads" / "upl_0123456789ab"
-    assert isinstance(asset_dir(s, "u", "a"), Path)
+    for bad in ("u", "../../etc", "usr_0123456789ab/x", "USR_0123456789AB"):
+        with pytest.raises(ValueError):
+            asset_dir(s, bad, "ast_0123456789ab")
+    with pytest.raises(ValueError):
+        upload_path(s, "../x")
 
 
 def test_file_url_roundtrip():
@@ -47,6 +55,8 @@ def test_parse_file_url_rejects_bad_shapes():
     assert parse_file_url("/files/usr_x/assets/ast_0123456789ab/proxy.mp4") is None
     assert parse_file_url("/api/v1/me") is None
     assert parse_file_url("/files/usr_0123456789ab/assets/ast_0123456789ab/") is None
+    assert parse_file_url("/files/usr_0123456789ab/assets/ast_0123456789ab/..") is None
+    assert parse_file_url("/files/usr_0123456789ab/assets/ast_0123456789ab/.") is None
 
 
 def test_public_files_exclude_source():

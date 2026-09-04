@@ -27,6 +27,8 @@ def safe_ext(filename: str) -> str:
 
 
 def kind_from_ext(ext: str) -> str | None:
+    """Тип по расширению без точки (регистр не важен): video, audio, subtitle или None."""
+    ext = ext.lower()
     if ext in VIDEO_EXTS:
         return "video"
     if ext in AUDIO_EXTS:
@@ -36,12 +38,19 @@ def kind_from_ext(ext: str) -> str | None:
     return None
 
 
+def _check_id(value: str) -> str:
+    """Форма идентификатора (см. ID_RE); иначе путь мог бы выйти за пределы data_dir."""
+    if not ID_RE.match(value):
+        raise ValueError(f"bad id: {value!r}")
+    return value
+
+
 def asset_dir(settings: Settings, user_id: str, asset_id: str) -> Path:
-    return settings.data_dir / user_id / "assets" / asset_id
+    return settings.data_dir / _check_id(user_id) / "assets" / _check_id(asset_id)
 
 
 def upload_path(settings: Settings, upload_id: str) -> Path:
-    return settings.uploads_tmp_path / upload_id
+    return settings.uploads_tmp_path / _check_id(upload_id)
 
 
 def file_url(user_id: str, asset_id: str, name: str) -> str:
@@ -55,5 +64,7 @@ def parse_file_url(path: str) -> tuple[str, str, str] | None:
         return None
     user_id, asset_id, name = m.groups()
     if not (ID_RE.match(user_id) and ID_RE.match(asset_id)):
+        return None
+    if name in (".", ".."):
         return None
     return user_id, asset_id, name

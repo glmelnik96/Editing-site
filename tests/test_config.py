@@ -79,3 +79,9 @@ def test_tmp_dir_override(tmp_path):
 def test_chunk_size_bounds():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, chunk_size=512)
+
+
+def test_empty_tmp_dir_env_means_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_TMP_DIR", "")
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert s.tmp_dir is None and s.tmp_path == tmp_path / "d" / "tmp"

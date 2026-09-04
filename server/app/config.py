@@ -55,6 +55,14 @@ class Settings(BaseSettings):
             raise ValueError("VIDEO_LOG_LEVEL: DEBUG, INFO, WARNING, ERROR или CRITICAL")
         return level
 
+    @field_validator("tmp_dir", mode="before")
+    @classmethod
+    def _normalize_tmp_dir(cls, value: object) -> object:
+        # Пустой VIDEO_TMP_DIR из окружения — как будто не задан, используем data_dir/tmp.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "video.db"
