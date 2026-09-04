@@ -19,6 +19,16 @@ uv run ruff check .
 cd web && npm test
 ```
 
+## Загрузка и файлы (M1a)
+
+- `POST /api/v1/uploads` → `PUT /api/v1/uploads/{id}/chunks/{n}` (сырые байты, 32 МиБ) → `GET /api/v1/uploads/{id}` (докачка) → `POST /api/v1/uploads/{id}/complete` → `asset_id`. Справочный клиент: `python tools/upload_file.py https://video.cloudrudesign.ru $TOKEN clip.mp4`.
+- Мелкие файлы (SRT, музыка до 64 МиБ): `POST /api/v1/assets/upload` (multipart `file`, необязательно `kind`).
+- `GET /api/v1/assets`, `GET /api/v1/assets/{id}` (ссылки на `proxy`, `thumbs`, `peaks`, `analysis` появляются по статусу), `DELETE /api/v1/assets/{id}`. Квота и использование в `GET /api/v1/me`.
+- Файлы: `/files/{user_id}/assets/{asset_id}/<имя>`; на VM отдаёт Caddy после `forward_auth` в `/internal/authz`, локально само приложение. `source.*` наружу не отдаётся.
+- Пределы: 5 ГБ на файл, 20 ГБ на человека, 20 новых загрузок в час, отказ при свободном диске меньше 10 %.
+- Janitor (`python -m server.janitor`, таймер раз в час): загрузки старше 24 ч, ассеты без обращений старше 24 ч, сироты на диске старше часа, зависшие задания, просроченные сессии, суточный бэкап базы в `data/backups/` (7 копий).
+- Локальный запуск: `VIDEO_TMP_DIR` по умолчанию `data/tmp`; на VM `/srv/video/tmp` (тот же раздел, что `/srv/video/data`).
+
 ## Разработка интерфейса
 
 Два способа увидеть интерфейс локально:
