@@ -63,6 +63,20 @@ def test_missing_foreign_and_unknown_are_404(client, login_as, settings):
     assert client.get(_url(me["id"], asset_id, "peaks.json")).status_code == 404
 
 
+def test_own_prefix_with_foreign_asset_is_404(client, login_as, settings):
+    """Главная гарантия: подстановка чужого ассета под своим user_id упирается в фильтр по владельцу."""
+    login_as()
+    owner = client.get("/api/v1/me").json()
+    victim_asset = _ready_video_asset(client, settings, owner["id"])
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    thief = client.get("/api/v1/me").json()
+    assert thief["id"] != owner["id"]
+    url = _url(thief["id"], victim_asset, "peaks.json")
+    assert client.get(url).status_code == 404
+    assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404
+
+
 def test_files_require_auth(client):
     r = client.get(_url("usr_000000000000", "ast_000000000000", "peaks.json"))
     assert r.status_code == 401
