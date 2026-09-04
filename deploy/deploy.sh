@@ -72,11 +72,13 @@ if [ -f "$DOMAIN_FILE" ]; then
   systemctl reload caddy
 fi
 install -m 644 "$APP_DIR/deploy/video-api.service" /etc/systemd/system/video-api.service
+install -m 644 "$APP_DIR/deploy/video-worker.service" /etc/systemd/system/video-worker.service
 install -m 644 "$APP_DIR/deploy/video-janitor.service" /etc/systemd/system/video-janitor.service
 install -m 644 "$APP_DIR/deploy/video-janitor.timer" /etc/systemd/system/video-janitor.timer
 systemctl daemon-reload
 systemctl enable --now video-janitor.timer
-systemctl restart video-api
+systemctl enable video-worker >/dev/null
+systemctl restart video-api video-worker
 
 # /healthz отвечает 503 при status=degraded, а тело печатаем для журнала; ждём готовности до 20 попыток.
 for _ in $(seq 1 20); do

@@ -89,3 +89,16 @@ def test_deploy_reexecs_itself_after_updating():
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     assert "self_before=$(sha256sum" in text
     assert "DEPLOY_REEXEC=1 exec bash" in text
+
+
+def test_worker_unit_is_limited_and_installed():
+    unit = (DEPLOY / "video-worker.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/editing-site/.venv/bin/python -m server.worker" in unit
+    assert "User=video" in unit and "Nice=10" in unit
+    assert "CPUQuota=" in unit and "MemoryMax=" in unit
+    assert "ProtectSystem=strict" in unit and "ReadWritePaths=/srv/video" in unit
+    assert "Restart=always" in unit and "TimeoutStopSec=" in unit
+    for name in ("bootstrap.sh", "deploy.sh"):
+        text = (DEPLOY / name).read_text(encoding="utf-8")
+        assert "video-worker.service" in text, name
+    assert "systemctl restart video-api video-worker" in (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
