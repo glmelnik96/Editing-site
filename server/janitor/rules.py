@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import logging
+import os
 import shutil
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -20,25 +22,53 @@ JOB_MAX_ATTEMPTS = 2
 BACKUP_KEEP = 7
 WORKER_LOST = "воркер пропал без вести (нет пульса дольше 2 минут)"
 
+log = logging.getLogger("video.janitor")
+
+
+def _rmtree(path: Path) -> None:
+    """Удаляет каталог, не падая на первой ошибке. Janitor существует ради свободного места,
+    поэтому если каталог всё же остался — это видно в логе, а не теряется молча."""
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        log.warning("не удалось удалить каталог %s", path)
+
 
 def delete_expired_uploads(conn: sqlite3.Connection, now: datetime) -> int:
-    rows = conn.execute("SELECT id, path FROM uploads WHERE expires_at < ?", (iso(now),)).fetchall()
+    """DELETE условный по expires_at: если загрузку успели завершить (finalize_file убрал
+    строку) между SELECT и этим DELETE, rowcount будет 0 и файл трогать не нужно."""
+    cutoff = iso(now)
+    rows = conn.execute("SELECT id, path FROM uploads WHERE expires_at < ?", (cutoff,)).fetchall()
+    deleted = 0
     for row in rows:
         with transaction(conn):
-            conn.execute("DELETE FROM uploads WHERE id = ?", (row["id"],))
+            cur = conn.execute(
+                "DELETE FROM uploads WHERE id = ? AND expires_at < ?", (row["id"], cutoff)
+            )
+            if cur.rowcount == 0:
+                continue  # успели завершить или уже удалили, пока мы шли по пачке
         Path(row["path"]).unlink(missing_ok=True)
-    return len(rows)
+        deleted += 1
+    return deleted
 
 
 def delete_expired_assets(conn: sqlite3.Connection, settings: Settings, now: datetime) -> int:
+    """DELETE условный по last_access_at: пользователь мог открыть ассет (см. touch_last_access),
+    пока мы шли по пачке, и продлить срок. rowcount == 0 значит запись уже не подходит под
+    условие, и файлы трогать не нужно."""
     cutoff = iso(now - timedelta(hours=settings.asset_ttl_hours))
     rows = conn.execute("SELECT id, user_id FROM assets WHERE last_access_at < ?", (cutoff,)).fetchall()
+    deleted = 0
     for row in rows:
         with transaction(conn):
-            conn.execute("DELETE FROM assets WHERE id = ?", (row["id"],))
+            cur = conn.execute(
+                "DELETE FROM assets WHERE id = ? AND last_access_at < ?", (row["id"], cutoff)
+            )
+            if cur.rowcount == 0:
+                continue  # ассет открыли, пока мы шли по пачке: срок продлён
             cancel_jobs_for_target(conn, row["id"])
-        shutil.rmtree(asset_dir(settings, row["user_id"], row["id"]), ignore_errors=True)
-    return len(rows)
+        _rmtree(asset_dir(settings, row["user_id"], row["id"]))
+        deleted += 1
+    return deleted
 
 
 def _older_than(path: Path, now: datetime, seconds: int) -> bool:
@@ -56,7 +86,7 @@ def delete_orphans(conn: sqlite3.Connection, settings: Settings, now: datetime) 
     for assets_root in settings.data_dir.glob("usr_*/assets"):
         for d in assets_root.iterdir():
             if d.is_dir() and d.name not in known_assets and _older_than(d, now, ORPHAN_MIN_AGE_SEC):
-                shutil.rmtree(d, ignore_errors=True)
+                _rmtree(d)
                 count += 1
     known_uploads = {r[0] for r in conn.execute("SELECT id FROM uploads")}
     if settings.uploads_tmp_path.is_dir():
@@ -69,7 +99,10 @@ def delete_orphans(conn: sqlite3.Connection, settings: Settings, now: datetime) 
 
 def requeue_stale_jobs(conn: sqlite3.Connection, now: datetime) -> tuple[int, int]:
     """Задание в running без пульса дольше 2 минут: один раз назад в очередь, затем failed.
-    Упавший analyze переводит ассет в failed, чтобы он не висел в analyzing вечно."""
+    Упавший analyze переводит ассет в failed, чтобы он не висел в analyzing вечно.
+
+    Оба UPDATE повторяют условие по времени из SELECT: воркер мог прислать пульс, пока мы шли
+    по выборке, тогда rowcount == 0, задание не трогаем и ассет в failed не переводим."""
     cutoff = iso(now - timedelta(seconds=JOB_STALE_AFTER_SEC))
     rows = conn.execute(
         "SELECT id, type, target_id, attempts FROM jobs "
@@ -80,24 +113,28 @@ def requeue_stale_jobs(conn: sqlite3.Connection, now: datetime) -> tuple[int, in
     with transaction(conn):
         for row in rows:
             if row["attempts"] < JOB_MAX_ATTEMPTS:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE jobs SET status = 'queued', worker_pid = NULL, heartbeat_at = NULL, "
-                    "started_at = NULL, progress = 0 WHERE id = ?",
-                    (row["id"],),
+                    "started_at = NULL, progress = 0 "
+                    "WHERE id = ? AND coalesce(heartbeat_at, started_at, created_at) < ?",
+                    (row["id"], cutoff),
                 )
-                requeued += 1
+                requeued += cur.rowcount
             else:
-                conn.execute(
-                    "UPDATE jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
-                    (iso(now), WORKER_LOST, row["id"]),
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'failed', finished_at = ?, error = ? "
+                    "WHERE id = ? AND coalesce(heartbeat_at, started_at, created_at) < ?",
+                    (iso(now), WORKER_LOST, row["id"], cutoff),
                 )
+                if cur.rowcount == 0:
+                    continue  # воркер прислал пульс между выборкой и апдейтом
+                failed += 1
                 if row["type"] == "analyze":
                     conn.execute(
                         "UPDATE assets SET status = 'failed', error = ? "
                         "WHERE id = ? AND status IN ('uploaded', 'analyzing')",
                         (WORKER_LOST, row["target_id"]),
                     )
-                failed += 1
     return requeued, failed
 
 
@@ -111,19 +148,24 @@ def delete_expired_sessions(conn: sqlite3.Connection, settings: Settings, now: d
 
 def backup_if_due(settings: Settings, now: datetime, keep: int = BACKUP_KEEP) -> Path | None:
     """Копия базы раз в сутки в data/backups/video-YYYYMMDD.db через sqlite backup API; хранится keep штук.
+    Пишем во временный файл .part и переименовываем после успеха: оборванная копия не должна
+    сойти за сегодняшний бэкап. .part не попадает под ротацию (та ищет video-*.db).
     Копия вне VM (scp на ПК) остаётся ручной операцией."""
     backups = settings.data_dir / "backups"
     backups.mkdir(parents=True, exist_ok=True)
     target = backups / f"video-{now:%Y%m%d}.db"
     if target.exists():
         return None
+    tmp = target.with_suffix(".part")
+    tmp.unlink(missing_ok=True)
     src = connect(settings.db_path)
-    dst = sqlite3.connect(str(target))
+    dst = sqlite3.connect(str(tmp))
     try:
         src.backup(dst)
     finally:
         dst.close()
         src.close()
+    os.replace(tmp, target)
     for old in sorted(backups.glob("video-*.db"))[:-keep]:
         old.unlink(missing_ok=True)
     return target

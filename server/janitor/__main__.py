@@ -17,16 +17,29 @@ log = logging.getLogger("video.janitor")
 
 
 def run(settings: Settings, now: datetime | None = None) -> dict[str, int]:
+    """Бэкап выполняется всегда, даже если правила очистки упали: ежедневная копия базы не должна
+    теряться из-за гонки или временной ошибки одного правила."""
     now = now or utcnow()
+    stats = {
+        "uploads_expired": 0,
+        "assets_expired": 0,
+        "orphans": 0,
+        "sessions_expired": 0,
+        "jobs_requeued": 0,
+        "jobs_failed": 0,
+        "error": 0,
+    }
     conn = connect(settings.db_path)
     try:
-        stats = {
-            "uploads_expired": rules.delete_expired_uploads(conn, now),
-            "assets_expired": rules.delete_expired_assets(conn, settings, now),
-            "orphans": rules.delete_orphans(conn, settings, now),
-            "sessions_expired": rules.delete_expired_sessions(conn, settings, now),
-        }
-        stats["jobs_requeued"], stats["jobs_failed"] = rules.requeue_stale_jobs(conn, now)
+        try:
+            stats["uploads_expired"] = rules.delete_expired_uploads(conn, now)
+            stats["assets_expired"] = rules.delete_expired_assets(conn, settings, now)
+            stats["orphans"] = rules.delete_orphans(conn, settings, now)
+            stats["sessions_expired"] = rules.delete_expired_sessions(conn, settings, now)
+            stats["jobs_requeued"], stats["jobs_failed"] = rules.requeue_stale_jobs(conn, now)
+        except Exception:
+            log.exception("janitor: правила очистки упали")
+            stats["error"] = 1
     finally:
         conn.close()
     stats["backup"] = 1 if rules.backup_if_due(settings, now) else 0

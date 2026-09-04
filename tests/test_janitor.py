@@ -72,6 +72,32 @@ def test_expired_assets_are_deleted_and_jobs_canceled(conn, settings, tmp_path):
     assert statuses == {old: "canceled", fresh: "queued"}
 
 
+def test_asset_touched_during_pass_survives(conn, settings, tmp_path):
+    """DELETE в delete_expired_assets переспрашивает last_access_at: ассет, который открыли
+    (last_access_at продлился), пока janitor шёл по пачке, не должен удаляться.
+
+    sqlite3.Connection в этом окружении (Python 3.14) - неизменяемый тип: monkeypatch.setattr
+    на execute/backup (что на экземпляре, что на классе) падает с TypeError "cannot set ...
+    attribute of immutable type". Подкласс Connection через параметр factory= - штатный
+    механизм, им и подменяем момент выполнения DELETE, чтобы воспроизвести гонку."""
+    old = _asset(conn, settings, tmp_path, "old.mp4", last_access=NOW - timedelta(hours=25))
+
+    class TouchingConnection(sqlite3.Connection):
+        def execute(self, sql, params=()):
+            if sql.startswith("DELETE FROM assets"):
+                super().execute("UPDATE assets SET last_access_at = ? WHERE id = ?", (iso(NOW), old))
+            return super().execute(sql, params)
+
+    touching = sqlite3.connect(str(settings.db_path), isolation_level=None, factory=TouchingConnection)
+    touching.row_factory = sqlite3.Row
+    try:
+        assert rules.delete_expired_assets(touching, settings, NOW) == 0
+    finally:
+        touching.close()
+    assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 1
+    assert asset_dir(settings, USER, old).exists()
+
+
 def test_orphan_dirs_and_files_older_than_an_hour(conn, settings, tmp_path):
     kept = _asset(conn, settings, tmp_path)
     orphan_old = settings.data_dir / USER / "assets" / "ast_00000000dead"
@@ -162,6 +188,28 @@ def test_backup_once_a_day_keeps_seven(conn, settings):
     assert made.exists() and not (backups / "video-20260801.db").exists()
 
 
+def test_backup_leaves_no_partial_file_when_copy_fails(conn, settings, monkeypatch):
+    """Копия пишется во временный .part и переименовывается после успеха: при сбое sqlite backup
+    API не должно остаться video-*.db, который сошёл бы за сегодняшний бэкап.
+
+    sqlite3.Connection.backup нельзя подменить monkeypatch'ем (неизменяемый тип, см. комментарий
+    в test_asset_touched_during_pass_survives) - подменяем rules.connect на фабрику подкласса,
+    чей backup() всегда падает."""
+
+    class BoomConnection(sqlite3.Connection):
+        def backup(self, *args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    def fake_connect(path):
+        return sqlite3.connect(str(path), isolation_level=None, factory=BoomConnection)
+
+    monkeypatch.setattr(rules, "connect", fake_connect)
+    with pytest.raises(sqlite3.OperationalError):
+        rules.backup_if_due(settings, NOW)
+    backups = settings.data_dir / "backups"
+    assert list(backups.glob("video-*.db")) == []
+
+
 def test_run_returns_stats(conn, settings):
     conn.close()
     stats = run(settings, NOW)
@@ -172,5 +220,17 @@ def test_run_returns_stats(conn, settings):
         "sessions_expired": 0,
         "jobs_requeued": 0,
         "jobs_failed": 0,
+        "error": 0,
         "backup": 1,
     }
+
+
+def test_run_backs_up_even_when_a_rule_fails(conn, settings, monkeypatch):
+    conn.close()
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(rules, "delete_expired_uploads", boom)
+    stats = run(settings, NOW)
+    assert stats["error"] == 1 and stats["backup"] == 1
