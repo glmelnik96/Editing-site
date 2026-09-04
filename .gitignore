@@ -11,3 +11,4 @@ web/dist/
 .npm/
 .DS_Store
 Thumbs.db
+secrets/
