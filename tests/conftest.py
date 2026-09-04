@@ -27,6 +27,12 @@ def settings(tmp_path) -> Settings:
         max_sessions_per_user=5,
         session_absolute_days=30,
         session_idle_days=7,
+        tmp_dir=tmp_path / "tmp",
+        chunk_size=1024,
+        user_quota_bytes=10 * 1024 * 1024,
+        max_upload_bytes=8 * 1024 * 1024,
+        small_upload_max_bytes=1024 * 1024,
+        uploads_per_hour=1000,
     )
 
 
@@ -66,3 +72,14 @@ def login_as(client, monkeypatch):
         return client
 
     return _login
+
+
+@pytest.fixture
+def bearer_client(app, client, login_as):
+    """Второй клиент без cookie и без Origin: агент с Bearer-токеном того же пользователя."""
+    login_as()
+    r = client.post("/api/v1/tokens", json={"name": "agent"})
+    assert r.status_code == 201, r.text
+    secret = r.json()["secret"]
+    with TestClient(app, headers={"Authorization": f"Bearer {secret}"}) as c:
+        yield c

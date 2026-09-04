@@ -19,6 +19,7 @@ from server.app.errors import ApiError, install_error_handlers
 from server.app.health import router as health_router
 from server.app.ratelimit import FixedWindowLimiter
 from server.app.security import install_origin_check
+from server.app.uploads.routes import router as uploads_router
 from server.db.core import connect
 from server.db.migrate import migrate
 
@@ -42,6 +43,13 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     async def lifespan(app: FastAPI):
         configure_logging(settings.log_level)
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        settings.uploads_tmp_path.mkdir(parents=True, exist_ok=True)
+        if settings.uploads_tmp_path.stat().st_dev != settings.data_dir.stat().st_dev:
+            log.warning(
+                "tmp_dir %s и data_dir %s на разных разделах: завершение загрузки будет падать",
+                settings.tmp_path,
+                settings.data_dir,
+            )
         conn = connect(settings.db_path)
         try:
             applied = migrate(conn)
@@ -73,6 +81,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     )
     app.state.settings = settings
     app.state.login_limiter = FixedWindowLimiter(settings.login_rate_max, settings.login_rate_window_sec)
+    app.state.upload_limiter = FixedWindowLimiter(settings.uploads_per_hour, 3600)
     install_error_handlers(app)
     install_origin_check(app)
     app.include_router(health_router)
@@ -80,6 +89,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(me_router)
     app.include_router(tokens_router)
     app.include_router(admin_router)
+    app.include_router(uploads_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
         "/api/{rest:path}",
