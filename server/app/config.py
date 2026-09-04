@@ -35,6 +35,22 @@ class Settings(BaseSettings):
     upload_ttl_hours: int = Field(default=24, ge=1)
     asset_ttl_hours: int = Field(default=24, ge=1)
 
+    # Обработка медиа. Пути к бинарям берутся из PATH, если не заданы явно.
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+    worker_poll_sec: float = Field(default=2.0, ge=0.1, le=60.0)
+    analyze_timeout_sec: int = Field(default=1800, ge=10)
+    proxy_timeout_sec: int = Field(default=14400, ge=10)
+    peaks_per_sec: int = Field(default=50, ge=1, le=200)
+    thumb_width: int = Field(default=160, ge=32, le=640)
+    thumb_interval_sec: float = Field(default=2.0, gt=0)
+    thumb_max_frames: int = Field(default=600, ge=1, le=5000)
+    thumb_cols: int = Field(default=10, ge=1, le=50)
+    proxy_long_side: int = Field(default=640, ge=160, le=1920)
+    silence_min_sec: float = Field(default=0.5, gt=0)
+    silence_dense_min_sec: float = Field(default=0.15, gt=0)
+    speech_offset_db: float = Field(default=16.0, ge=1.0, le=60.0)
+
     @field_validator("public_base_url")
     @classmethod
     def _check_public_base_url(cls, value: str) -> str:
