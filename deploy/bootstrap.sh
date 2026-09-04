@@ -11,8 +11,8 @@ APP_DIR=/opt/editing-site
 DATA_DIR=/srv/video
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends \
+apt-get -o DPkg::Lock::Timeout=600 update
+apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
   git ffmpeg sqlite3 ufw pipx nodejs npm fonts-dejavu-core fonts-noto-core \
   debian-keyring debian-archive-keyring apt-transport-https curl gnupg ca-certificates
 
@@ -22,8 +22,8 @@ if ! command -v caddy >/dev/null 2>&1; then
     | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
     > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update
-  apt-get install -y caddy
+  apt-get -o DPkg::Lock::Timeout=600 update
+  apt-get -o DPkg::Lock::Timeout=600 install -y caddy
 fi
 
 # uv через pipx в /usr/local/bin, без curl | sh
