@@ -179,7 +179,11 @@ def test_paths_come_from_ids_only(tmp_path):
         tmp_path / "d" / "usr_0123456789ab" / "assets" / "ast_0123456789ab"
     )
     assert upload_path(s, "upl_0123456789ab") == tmp_path / "d" / "tmp" / "uploads" / "upl_0123456789ab"
-    assert isinstance(asset_dir(s, "u", "a"), Path)
+    for bad in ("u", "../../etc", "usr_0123456789ab/x", "USR_0123456789AB"):
+        with pytest.raises(ValueError):
+            asset_dir(s, bad, "ast_0123456789ab")
+    with pytest.raises(ValueError):
+        upload_path(s, "../x")
 
 
 def test_file_url_roundtrip():
@@ -655,9 +659,9 @@ def test_finalize_restores_file_when_db_insert_fails(conn, settings, tmp_path):
     src = tmp_path / "f.mp4"
     src.write_bytes(b"abc")
     with pytest.raises(sqlite3.IntegrityError):
-        finalize_file(conn, settings, user_id="usr_nobody000000", src=src, filename="f.mp4", size=3, kind="video")
+        finalize_file(conn, settings, user_id="usr_0000000000ff", src=src, filename="f.mp4", size=3, kind="video")
     assert src.read_bytes() == b"abc"
-    assert list((settings.data_dir / "usr_nobody000000" / "assets").glob("ast_*")) == []
+    assert list((settings.data_dir / "usr_0000000000ff" / "assets").glob("ast_*")) == []
 
 
 def test_delete_upload_removes_record_and_file(conn, settings):
@@ -3087,7 +3091,7 @@ Expected: `deploy ok: <sha>`, таймер в списке, `caddy` в груп�
 
 ## Поправки по ходу выполнения
 
-(заполняется по ходу: что ревью и живая проверка изменили относительно текста выше)
+- **Task 1** (`95765bf` + fix-коммит): ревью качества: `asset_dir`/`upload_path` проверяют идентификаторы по `ID_RE` и бросают `ValueError` (путь не может выйти за каталог данных; тест `isinstance(...)` заменён на `pytest.raises`), `parse_file_url` отвергает имя `.`/`..`, пустая `VIDEO_TMP_DIR=` означает значение по умолчанию (валидатор `mode="before"`), `kind_from_ext` приводит к нижнему регистру. Следствие для Task 3: несуществующий пользователь в тесте отката `finalize_file` должен иметь шестнадцатеричный id (`usr_0000000000ff`), иначе сработает `ValueError`, а не `IntegrityError`. Комментарий к полям хранения в `config.py` сокращён ради лимита 110 знаков.
 
 ## Что остаётся на M1b
 
