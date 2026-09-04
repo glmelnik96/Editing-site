@@ -22,6 +22,16 @@ function fmt(ts: string | null): string {
   return ts ? ts.replace('T', ' ').slice(0, 16) : '—'
 }
 
+/** Перечитать квоту и обновить только текст #quota в шапке; сбой запроса не критичен — гасим молча. */
+function updateQuota(): void {
+  void api<Me>('/api/v1/me')
+    .then(me => {
+      const q = document.getElementById('quota')
+      if (q) q.textContent = `${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}`
+    })
+    .catch(() => {})
+}
+
 async function boot(): Promise<void> {
   try {
     const me = await api<Me>('/api/v1/me')
@@ -57,7 +67,7 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
     )
     .join('')
   root.innerHTML = `
-    <header class="bar"><strong>Editing site</strong><span>${escapeHtml(me.email)} · ${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</span><button id="logout">Выйти</button></header>
+    <header class="bar"><strong>Editing site</strong><span>${escapeHtml(me.email)} · <span id="quota">${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</span></span><button id="logout">Выйти</button></header>
     <section id="assets"></section>
     <main class="card">
       <h2>Токены для агента</h2>
@@ -72,7 +82,7 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
     <section id="admin"></section>`
 
   assetsPanel?.stop()
-  assetsPanel = mountAssets(document.getElementById('assets') as HTMLElement)
+  assetsPanel = mountAssets(document.getElementById('assets') as HTMLElement, updateQuota)
 
   if (secretNote) {
     const box = document.getElementById('secret') as HTMLPreElement

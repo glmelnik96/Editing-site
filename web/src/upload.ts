@@ -43,6 +43,18 @@ export function isRetryable(e: unknown): boolean {
   return true
 }
 
+/** Повторяет fn с задержкой backoffMs, пока ошибка ретраится и попытки не исчерпаны. */
+async function withRetry<T>(fn: () => Promise<T>, retries: number, sleep: (ms: number) => Promise<void>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      if (attempt >= retries || !isRetryable(e)) throw e
+      await sleep(backoffMs(attempt))
+    }
+  }
+}
+
 function defaultStorage(): Storage | undefined {
   try {
     return localStorage
@@ -94,21 +106,20 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
       for (let idx = queue.shift(); idx !== undefined; idx = queue.shift()) {
         if (failed) return
         const body = file.slice(idx * up.chunkSize, Math.min(file.size, (idx + 1) * up.chunkSize))
-        for (let attempt = 0; ; attempt++) {
-          try {
-            await request(`/api/v1/uploads/${up.id}/chunks/${idx}`, {
-              method: 'PUT',
-              body,
-              headers: { 'Content-Type': 'application/octet-stream' },
-            })
-            break
-          } catch (e) {
-            if (attempt >= retries || !isRetryable(e)) {
-              failed = true
-              throw e
-            }
-            await sleep(backoffMs(attempt))
-          }
+        try {
+          await withRetry(
+            () =>
+              request(`/api/v1/uploads/${up.id}/chunks/${idx}`, {
+                method: 'PUT',
+                body,
+                headers: { 'Content-Type': 'application/octet-stream' },
+              }),
+            retries,
+            sleep,
+          )
+        } catch (e) {
+          failed = true
+          throw e
         }
         done++
         report()
@@ -117,7 +128,12 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
     const workers = Math.min(opts.parallel ?? PARALLEL, Math.max(1, queue.length))
     await Promise.all(Array.from({ length: workers }, worker))
 
-    const result = await request<UploadResult>(`/api/v1/uploads/${up.id}/complete`, { method: 'POST' })
+    // тот же ретрай и на завершение: временный сбой после долгой заливки не должен требовать всё заново
+    const result = await withRetry(
+      () => request<UploadResult>(`/api/v1/uploads/${up.id}/complete`, { method: 'POST' }),
+      retries,
+      sleep,
+    )
     storage?.removeItem(fingerprint(file))
     return result
   }

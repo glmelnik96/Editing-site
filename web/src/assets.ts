@@ -58,11 +58,14 @@ function row(a: Asset): string {
   return `<tr>
     <td>${escapeHtml(a.original_name)}</td><td>${escapeHtml(a.kind)}</td><td>${fmtSize(a.size)}</td>
     <td>${fmtDuration(a.duration)}</td><td${cls}>${escapeHtml(statusText(a.status))}${err}</td>
-    <td><button data-delete="${escapeHtml(a.id)}">Удалить</button></td></tr>`
+    <td><button data-delete="${escapeHtml(a.id)}" data-name="${escapeHtml(a.original_name)}">Удалить</button></td></tr>`
 }
 
-/** Панель ассетов: загрузка файлов, список со статусами (опрос раз в 3 с, пока идёт обработка), удаление. */
-export function mountAssets(el: HTMLElement): { refresh: () => Promise<void>; stop: () => void } {
+/**
+ * Панель ассетов: загрузка файлов, список со статусами (опрос раз в 3 с, пока идёт обработка), удаление с подтверждением.
+ * onChanged (если передан) вызывается после успешной загрузки и после успешного удаления — обновить квоту в шапке.
+ */
+export function mountAssets(el: HTMLElement, onChanged?: () => void): { refresh: () => Promise<void>; stop: () => void } {
   el.innerHTML = `
     <main class="card">
       <h2>Файлы</h2>
@@ -92,8 +95,15 @@ export function mountAssets(el: HTMLElement): { refresh: () => Promise<void>; st
     rows.innerHTML = assets.map(row).join('') || '<tr><td colspan="6">Пока пусто</td></tr>'
     rows.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach(b =>
       b.addEventListener('click', async () => {
+        if (!window.confirm(`Удалить «${b.dataset.name}» без возможности восстановления?`)) return
         try {
           await api(`/api/v1/assets/${b.dataset.delete}`, { method: 'DELETE' })
+        } catch (e) {
+          showError(e)
+          return
+        }
+        onChanged?.()
+        try {
           await refresh()
         } catch (e) {
           showError(e)
@@ -127,6 +137,7 @@ export function mountAssets(el: HTMLElement): { refresh: () => Promise<void>; st
         continue
       }
       line.remove()
+      onChanged?.()
       try {
         await refresh()
       } catch (e) {

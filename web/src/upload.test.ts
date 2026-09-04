@@ -131,6 +131,23 @@ describe('uploadFile', () => {
     expect(storage.map.size).toBe(0)
   })
 
+  it('retries a failing complete call', async () => {
+    let attempts = 0
+    const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+      if (path === '/api/v1/uploads' && init.method === 'POST') {
+        return { upload_id: 'u', chunk_size: 4, total_chunks: 3, expires_at: 'x' } as T
+      }
+      if (path.endsWith('/complete')) {
+        if (attempts++ < 2) throw new ApiError(503, 'busy', 'busy')
+        return { asset_id: 'ast_5', status: 'uploaded' } as T
+      }
+      return undefined as T
+    }
+    const res = await uploadFile(fakeFile(10), { request, storage: memStorage(), sleep: noSleep })
+    expect(res.asset_id).toBe('ast_5')
+    expect(attempts).toBe(3)
+  })
+
   it('gives up on a 4xx and keeps the resume key', async () => {
     const storage = memStorage()
     const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
