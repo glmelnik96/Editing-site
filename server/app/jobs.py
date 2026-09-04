@@ -32,7 +32,10 @@ def enqueue_job(
 
 def cancel_jobs_for_target(conn: sqlite3.Connection, target_id: str) -> int:
     """Отменяет незавершённые задания цели (ассета, проекта). Выполняющееся задание воркер прервёт сам,
-    увидев статус canceled при следующем пульсе (M1b)."""
+    увидев статус canceled при следующем пульсе (M1b).
+
+    target_id должен быть уже проверен на владение вызывающим: функция намеренно не фильтрует
+    по пользователю, её вызывает и janitor, у которого владельца нет."""
     cur = conn.execute(
         "UPDATE jobs SET status = 'canceled', finished_at = ? "
         "WHERE target_id = ? AND status IN ('queued', 'running')",

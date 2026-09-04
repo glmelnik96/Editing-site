@@ -7,7 +7,18 @@ from server.db import migrate as migrate_mod
 from server.db.core import connect
 from server.db.migrate import discover, enable_wal, migrate
 
-TABLES = {"users", "whitelist", "sessions", "api_tokens", "heartbeats", "schema_migrations"}
+TABLES = {
+    "users",
+    "whitelist",
+    "sessions",
+    "api_tokens",
+    "heartbeats",
+    "schema_migrations",
+    "uploads",
+    "upload_chunks",
+    "assets",
+    "jobs",
+}
 
 
 def _tables(conn):

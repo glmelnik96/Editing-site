@@ -52,7 +52,7 @@ CREATE TABLE jobs (
     priority INTEGER NOT NULL DEFAULT 0,
     target_id TEXT NOT NULL,
     params TEXT NOT NULL DEFAULT '{}',
-    progress REAL NOT NULL DEFAULT 0,
+    progress REAL NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 1),
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -61,5 +61,5 @@ CREATE TABLE jobs (
     heartbeat_at TEXT,
     worker_pid INTEGER
 );
-CREATE INDEX jobs_queue_idx ON jobs(status, lane, priority, created_at);
+CREATE INDEX jobs_queue_idx ON jobs(status, lane, priority DESC, created_at);
 CREATE INDEX jobs_target_idx ON jobs(target_id);
