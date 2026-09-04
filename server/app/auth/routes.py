@@ -7,6 +7,7 @@ import sqlite3
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.auth.oauth import build_authorize_url, exchange_code, fetch_userinfo
@@ -14,6 +15,7 @@ from server.app.auth.sessions import create_session, delete_session
 from server.app.auth.users import is_whitelisted, upsert_user
 from server.app.errors import ApiError
 from server.app.security import SESSION_COOKIE, client_ip, is_bearer
+from server.app.uploads.store import used_bytes
 from server.db.core import get_db
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -123,7 +125,22 @@ def logout(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> JSON
     return resp
 
 
-@me_router.get("/me", response_model=CurrentUser)
-def me(response: Response, user: CurrentUser = Depends(current_user)) -> CurrentUser:  # noqa: B008
+class Quota(BaseModel):
+    used_bytes: int
+    limit_bytes: int
+
+
+class MeView(CurrentUser):
+    quota: Quota
+
+
+@me_router.get("/me", response_model=MeView)
+def me(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> MeView:
     response.headers["Cache-Control"] = "no-store"
-    return user
+    limit = request.app.state.settings.user_quota_bytes
+    return MeView(**user.model_dump(), quota=Quota(used_bytes=used_bytes(conn, user.id), limit_bytes=limit))

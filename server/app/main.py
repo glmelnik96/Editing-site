@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from server.app.admin.routes import router as admin_router
+from server.app.assets.routes import router as assets_router
 from server.app.auth.routes import me_router
 from server.app.auth.routes import router as auth_router
 from server.app.auth.token_routes import router as tokens_router
@@ -90,6 +91,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(tokens_router)
     app.include_router(admin_router)
     app.include_router(uploads_router)
+    app.include_router(assets_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
         "/api/{rest:path}",
