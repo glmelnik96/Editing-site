@@ -43,28 +43,30 @@ class Heartbeat(threading.Thread):
         self.settings = settings
         self.job_id = job_id
         self.interval = interval
-        self._stop = threading.Event()
-        self._first = threading.Event()
+        # Имя _stop занято самим threading.Thread: подмена его атрибутом Event ломает join(),
+        # который зовёт self._stop() как метод. На Python 3.12 это роняло воркер после каждого задания.
+        self._done = threading.Event()
+        self._beat_seen = threading.Event()
 
     def run(self) -> None:
         conn = connect(self.settings.db_path)
         try:
-            while not self._stop.is_set():
+            while not self._done.is_set():
                 try:
                     heartbeat(conn, self.job_id)
                     write_worker_heartbeat(conn)
-                    self._first.set()
+                    self._beat_seen.set()
                 except sqlite3.Error as exc:  # база занята — не повод ронять работу
                     log.warning("пульс не записался: %s", exc)
-                self._stop.wait(self.interval)
+                self._done.wait(self.interval)
         finally:
             conn.close()
 
     def wait_for_first(self, timeout: float) -> bool:
-        return self._first.wait(timeout)
+        return self._beat_seen.wait(timeout)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._done.set()
         self.join(timeout=5)
 
 

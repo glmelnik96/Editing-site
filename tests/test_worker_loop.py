@@ -130,3 +130,13 @@ def test_stop_during_a_job_requeues_it(conn, settings, monkeypatch):
     finally:
         worker_main.STOPPING.clear()
     assert conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()[0] == "queued"
+
+
+def test_heartbeat_stops_without_breaking_thread_join(conn, settings):
+    """Поле _stop перекрыло бы Thread._stop, и join() падал бы TypeError после каждого задания."""
+    job_id = enqueue_job(conn, user_id=USER, type_="analyze", target_id="ast_1")
+    beat = worker_main.Heartbeat(settings, job_id=job_id, interval=0.01)
+    beat.start()
+    assert beat.wait_for_first(timeout=5) is True
+    beat.stop()
+    assert beat.is_alive() is False
