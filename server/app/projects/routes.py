@@ -133,6 +133,9 @@ def save(
         raise invalid(exc) from exc
     except ProjectConflict as exc:
         raise conflict(exc) from exc
+    except KeyError as exc:
+        # Проект удалили между проверкой владения и записью: для клиента это «не найден».
+        raise ApiError(404, "not_found", "Проект не найден") from exc
     return ProjectView(**project)
 
 
@@ -155,4 +158,8 @@ def finish(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> ProjectView:
     _owned(conn, user, project_id)
-    return ProjectView(**finish_project(conn, request.app.state.settings, user.id, project_id))
+    try:
+        project = finish_project(conn, request.app.state.settings, user.id, project_id)
+    except KeyError as exc:
+        raise ApiError(404, "not_found", "Проект не найден") from exc
+    return ProjectView(**project)

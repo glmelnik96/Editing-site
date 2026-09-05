@@ -118,10 +118,12 @@ def delete(
     """Сначала запись, потом файлы: упавший процесс не оставит запись без файлов, папку подберёт janitor.
     Ассет, занятый в незавершённом проекте, не удаляется."""
     _owned(conn, user, asset_id)
-    used_by = projects_using_asset(conn, user.id, asset_id)
-    if used_by:
-        raise ApiError(409, "asset_in_use", "Файл стоит в проекте", {"projects": used_by})
     with transaction(conn):
+        # Проверка занятости внутри транзакции: BEGIN IMMEDIATE сериализует нас с сохранением проекта,
+        # иначе между проверкой и удалением кто-то успел бы сослаться на этот ассет.
+        used_by = projects_using_asset(conn, user.id, asset_id)
+        if used_by:
+            raise ApiError(409, "asset_in_use", "Файл стоит в проекте", {"projects": used_by})
         cur = conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
         if cur.rowcount == 0:
             raise ApiError(404, "not_found", "Ассет не найден")

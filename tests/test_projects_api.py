@@ -147,3 +147,17 @@ def test_agent_can_drive_projects_with_a_token(bearer_client, settings):
 def test_projects_require_auth(client):
     assert client.get("/api/v1/projects").status_code == 401
     assert client.post("/api/v1/projects", json={"name": "x"}).status_code == 401
+
+
+def test_project_deleted_between_check_and_save_is_404(client, login_as, settings, monkeypatch):
+    """Проект исчез в момент сохранения: клиенту «не найден», а не внутренняя ошибка."""
+    login_as()
+    p = client.post("/api/v1/projects", json={"name": "Мой"}).json()
+    from server.app.projects import routes as project_routes
+
+    def vanish(*args, **kwargs):
+        raise KeyError(p["id"])
+
+    monkeypatch.setattr(project_routes, "save_project", vanish)
+    r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "Мой", "version": 1, "doc": None})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"

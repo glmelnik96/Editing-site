@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 
@@ -15,6 +16,8 @@ from server.app.projects.snap import snap_clips
 from server.app.storage import asset_dir
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
+
+log = logging.getLogger("video.projects")
 
 MAX_NAME = 200
 EMPTY_DOC = {
@@ -166,8 +169,12 @@ def save_project(
             (name, json.dumps(doc, ensure_ascii=False), now, project_id, user_id, version),
         )
         if cur.rowcount == 0:
-            # Кто-то сохранил проект между нашей проверкой и записью.
-            raise ProjectConflict(get_project(conn, user_id, project_id) or current)
+            # Кто-то тронул проект между нашей проверкой и записью: либо сохранил (тогда версия
+            # другая), либо завершил (тогда причина не в версии, и клиенту надо сказать именно это).
+            fresh = get_project(conn, user_id, project_id) or current
+            if fresh["status"] != "draft":
+                raise ProjectInvalid([{"field": "status", "message": "завершённый проект не редактируется"}])
+            raise ProjectConflict(fresh)
         _touch_assets(conn, doc)
     return {
         "id": project_id, "name": name, "version": version + 1, "status": "draft",
@@ -212,9 +219,15 @@ def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, p
             )
         project = {**project, "status": "finished", "finished_at": now, "updated_at": now}
     for asset_id in sorted(assets_of(project["doc"])):
-        if projects_using_asset(conn, user_id, asset_id):
-            continue
         with transaction(conn):
+            # Проверяем занятость и удаляем в одной транзакции: иначе ассет успеет попасть
+            # в чужой проект между проверкой и удалением.
+            if projects_using_asset(conn, user_id, asset_id):
+                continue
             conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
-        shutil.rmtree(asset_dir(settings, user_id, asset_id), ignore_errors=True)
+        folder = asset_dir(settings, user_id, asset_id)
+        shutil.rmtree(folder, ignore_errors=True)
+        if folder.exists():
+            # Записи уже нет, а каталог остался: место займёт janitor, но знать об этом надо.
+            log.warning("не удалось удалить каталог ассета %s", folder)
     return project
