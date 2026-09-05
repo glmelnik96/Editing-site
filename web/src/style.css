@@ -49,4 +49,6 @@ select { padding: 6px 8px; width: 100%; }
 .versions li { display: flex; gap: 8px; align-items: center; justify-content: space-between;
   padding: 4px 0; border-bottom: 1px solid #8882; font-size: 13px; }
 /* Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
-#ed-versions { grid-row: 2; grid-column: 1; }
+/* Левая колонка: исходник и точки сохранения друг под другом, обе видны без прокрутки. */
+.side { display: flex; flex-direction: column; gap: 12px; align-self: start; }
+.side .card { margin: 0; }

@@ -33,8 +33,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <span class="muted">пробел — играть, стрелки — шаг, Shift — точнее</span>
     </header>
     <div class="editor">
-      <section id="ed-source"></section>
-      <section id="ed-versions"></section>
+      <section class="side">
+        <div id="ed-source"></div>
+        <div id="ed-versions"></div>
+      </section>
       <section>
         <div class="stage" id="ed-stage"></div>
         <div class="row">
