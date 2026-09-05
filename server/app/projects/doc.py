@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from server.app.config import Settings
@@ -18,6 +19,7 @@ SUB_MODES = ("burn", "soft")
 SUB_STYLES = ("default",)
 CLIP_READY_STATUSES = ("ready", "proxy_ready")
 TIME_DIGITS = 3
+MAX_CLIP_ID = 64  # идентификатор клипа хранится в документе: без предела клиент раздует его сотней клипов
 
 
 @dataclass(frozen=True)
@@ -45,10 +47,16 @@ class _Errors:
 
 
 def _number(value: object) -> float | None:
-    """Числом считаем int и float, но не bool и не строку: «1» в поле времени — ошибка клиента."""
+    """Числом считаем int и float, но не bool и не строку: «1» в поле времени — ошибка клиента.
+
+    NaN и бесконечность отвергаем: сравнения с ними всегда ложны, поэтому такое значение прошло бы
+    все проверки границ и осело бы в хранимом документе токеном, который не разберёт ни один
+    строгий разборщик JSON, включая браузерный.
+    """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _round(value: float) -> float:
@@ -124,8 +132,8 @@ def _validate_clip(
     clip_id = raw.get("id")
     if clip_id is None:
         clip_id = f"c{index + 1}"
-    elif not isinstance(clip_id, str) or not clip_id.strip():
-        errors.add(f"{where}.id", "id клипа должен быть непустой строкой")
+    elif not isinstance(clip_id, str) or not clip_id.strip() or len(clip_id) > MAX_CLIP_ID:
+        errors.add(f"{where}.id", f"id клипа: непустая строка не длиннее {MAX_CLIP_ID} знаков")
         return None
     if clip_id in seen_ids:
         errors.add(f"{where}.id", "id клипа повторяется")

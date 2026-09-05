@@ -153,3 +153,17 @@ def test_unknown_keys_are_dropped_not_echoed():
     out = validate_doc(doc(clips=[clip(evil="<script>")], extra=1), assets=ASSETS, settings=S)
     assert "extra" not in out and "evil" not in out["clips"][0]
     assert set(out) == {"output", "clips", "music", "subtitles"}
+
+
+def test_not_a_number_times_are_rejected():
+    """NaN и бесконечность прошли бы все сравнения границ и испортили бы хранимый JSON."""
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        assert errors_of(doc(clips=[clip(**{"in": bad})])) == ["clips[0].in"]
+        assert errors_of(doc(clips=[clip(out=bad)])) == ["clips[0].out"]
+    assert errors_of(doc(music={"asset_id": "ast_000000000003", "volume": float("nan")})) == ["music.volume"]
+
+
+def test_clip_id_length_is_capped():
+    assert errors_of(doc(clips=[clip(id="и" * 65)])) == ["clips[0].id"]
+    out = validate_doc(doc(clips=[clip(id="и" * 64)]), assets=ASSETS, settings=S)
+    assert out["clips"][0]["id"] == "и" * 64
