@@ -1,0 +1,291 @@
+/**
+ * Экран редактора: панель исходника, шкала, плеер склейки, автосохранение.
+ *
+ * Состояние — один документ проекта плюс версия. Любая правка идёт через applyClips: он кладёт
+ * новый список, перерисовывает и просит сохранить. Ответ сервера заменяет документ целиком:
+ * там уже подтянутые резы, флаги подтверждения и новая версия.
+ */
+import { api, ApiError } from './api'
+import type { Asset } from './assets'
+import { escapeHtml } from './html'
+import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
+import { createSaver, loadProject, type FieldError, type Project } from './project'
+import { assetData, type AssetData } from './strip'
+import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { mountSource } from './source'
+import { mountTimeline, type AssetInfo } from './timeline/view'
+
+const STATE_TEXT = { idle: 'сохранено', pending: 'правки не сохранены', saving: 'сохраняю…' }
+
+export function mountEditor(el: HTMLElement, projectId: string) {
+  el.innerHTML = `
+    <header class="bar">
+      <a class="button" href="#/">← к файлам</a>
+      <strong id="ed-name">Проект</strong>
+      <span class="save-state" id="ed-state">загрузка…</span>
+      <span id="ed-notice" class="muted"></span>
+    </header>
+    <div class="editor">
+      <section id="ed-source"></section>
+      <section>
+        <div class="stage" id="ed-stage"></div>
+        <div class="row">
+          <button id="ed-play" type="button">▶</button>
+          <button id="ed-split" type="button">Разрезать</button>
+          <button id="ed-delete" type="button">Удалить клип</button>
+          <button id="ed-zoom-in" type="button">+</button>
+          <button id="ed-zoom-out" type="button">−</button>
+          <select id="ed-aspect">
+            <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
+          </select>
+          <span class="muted" id="ed-total"></span>
+        </div>
+        <div id="ed-timeline"></div>
+      </section>
+    </div>
+    <pre id="ed-error" hidden></pre>`
+
+  const nameBox = el.querySelector('#ed-name') as HTMLElement
+  const stateBox = el.querySelector('#ed-state') as HTMLElement
+  const noticeBox = el.querySelector('#ed-notice') as HTMLElement
+  const stage = el.querySelector('#ed-stage') as HTMLElement
+  const totalBox = el.querySelector('#ed-total') as HTMLElement
+  const errorBox = el.querySelector('#ed-error') as HTMLPreElement
+  const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
+
+  let project: Project | null = null
+  let assets = new Map<string, AssetInfo>()
+  let assetList: Asset[] = []
+  const dataCache = new Map<string, Promise<AssetData>>()
+  const data = new Map<string, AssetData>()
+  let playing = false
+  let playIndex = 0
+  let timelineTime = 0
+  let stopped = false
+
+  const showError = (e: unknown) => {
+    errorBox.hidden = false
+    errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
+  }
+
+  const notice = (text: string) => {
+    noticeBox.textContent = text
+    if (text) window.setTimeout(() => (noticeBox.textContent = ''), 6000)
+  }
+
+  const saver = createSaver({
+    onSaved: saved => {
+      if (stopped) return
+      project = saved
+      render()
+    },
+    onConflict: fresh => {
+      project = fresh
+      render()
+      notice('Проект изменился в другом месте, показана свежая версия')
+    },
+    onInvalid: (errors: FieldError[]) => {
+      notice(`Не сохранено: ${errors.map(e => `${e.field} — ${e.message}`).join('; ')}`)
+    },
+    onError: showError,
+    onStateChange: state => (stateBox.textContent = STATE_TEXT[state]),
+  })
+
+  // Плеер склейки: активный элемент играет, скрытый держит следующий клип на его точке входа.
+  const videoA = document.createElement('video')
+  const videoB = document.createElement('video')
+  const music = document.createElement('audio')
+  let active = videoA
+  ;[videoA, videoB].forEach(v => {
+    v.preload = 'auto'
+    v.playsInline = true
+    stage.appendChild(v)
+  })
+  videoB.style.display = 'none'
+  music.preload = 'auto'
+
+  const proxyOf = (assetId: string): string | null => assetList.find(a => a.id === assetId)?.files.proxy ?? null
+
+  function swap(): void {
+    const hidden = active === videoA ? videoB : videoA
+    active.pause()
+    active.style.display = 'none'
+    hidden.style.display = ''
+    active = hidden
+  }
+
+  function prepareNext(index: number): void {
+    const clips = project?.doc.clips ?? []
+    const next = clips[index + 1]
+    const hidden = active === videoA ? videoB : videoA
+    if (!next) return
+    const src = proxyOf(next.asset_id)
+    if (!src) return
+    if (!hidden.src.endsWith(src)) hidden.src = src
+    hidden.currentTime = next.in
+  }
+
+  function seek(time: number): void {
+    const clips = project?.doc.clips ?? []
+    const plan = seekPlan(clips, time)
+    if (!plan) return
+    const src = proxyOf(plan.assetId)
+    if (!src) return
+    playIndex = plan.index
+    timelineTime = plan.timelineTime
+    if (!active.src.endsWith(src)) active.src = src
+    active.currentTime = plan.time
+    timeline.setPlayhead(timelineTime)
+    prepareNext(plan.index)
+  }
+
+  // Слушатель общий для обоих элементов video: после свопа активным становится другой элемент,
+  // а обработчик, повешенный один раз на конкретный узел, со свопом не переезжает. Проверка
+  // currentTarget === active отсекает случайный тик от скрытого элемента (например, после
+  // программной перестановки currentTime в prepareNext).
+  function onTimeUpdate(event: Event): void {
+    if (event.currentTarget !== active) return
+    if (!project) return
+    const plan = stepPlan(project.doc.clips, { index: playIndex, sourceTime: active.currentTime })
+    timelineTime = plan.timelineTime
+    timeline.setPlayhead(timelineTime)
+    if (plan.kind === 'advance') {
+      swap()
+      playIndex = plan.index
+      active.currentTime = plan.time
+      if (playing) void active.play().catch(() => {})
+      prepareNext(plan.index)
+    } else if (plan.kind === 'end') {
+      playing = false
+      active.pause()
+      music.pause()
+    }
+    if (project.doc.music) {
+      music.volume = musicVolume(project.doc.music, timelineTime, totalDuration(project.doc.clips))
+    }
+  }
+  videoA.addEventListener('timeupdate', onTimeUpdate)
+  videoB.addEventListener('timeupdate', onTimeUpdate)
+
+  const timeline = mountTimeline(el.querySelector('#ed-timeline') as HTMLElement, {
+    onChange: applyClips,
+    onSeek: seek,
+    onSelect: () => {},
+  })
+
+  const source = mountSource(el.querySelector('#ed-source') as HTMLElement, {
+    onAdd: (asset, range) => {
+      const clips = project?.doc.clips ?? []
+      const clip: Clip = {
+        id: newClipId(clips),
+        asset_id: asset.id,
+        in: ms(range.from),
+        out: ms(range.to),
+        snap_to_pauses: false,
+        in_verified: false,
+        out_verified: false,
+      }
+      applyClips(insertClip(clips, clip))
+    },
+  })
+
+  function applyClips(clips: Clip[]): void {
+    if (!project) return
+    project = { ...project, doc: { ...project.doc, clips } }
+    render()
+    saver.schedule(project)
+  }
+
+  async function ensureData(clips: Clip[]): Promise<void> {
+    const ids = new Set(clips.map(c => c.asset_id))
+    await Promise.all(
+      Array.from(ids).map(async id => {
+        if (data.has(id)) return
+        const asset = assetList.find(a => a.id === id)
+        if (!asset) return
+        const files = asset.files as { peaks?: string | null; thumbs_meta?: string | null }
+        const loaded = await assetData(id, { peaks: files.peaks ?? null, thumbs_meta: files.thumbs_meta ?? null }, dataCache)
+        data.set(id, loaded)
+      }),
+    )
+    if (!stopped) timeline.render({ data })
+  }
+
+  function render(): void {
+    if (!project) return
+    nameBox.textContent = project.name
+    aspectPick.value = project.doc.output.aspect
+    stage.style.aspectRatio = String(aspectRatio(project.doc.output.aspect))
+    stage.classList.toggle('crop', project.doc.output.fit === 'crop')
+    totalBox.textContent = `${totalDuration(project.doc.clips).toFixed(1)} с`
+    timeline.render({ clips: project.doc.clips, assets, data })
+    timeline.setPlayhead(timelineTime)
+    void ensureData(project.doc.clips)
+  }
+
+  el.querySelector('#ed-play')!.addEventListener('click', () => {
+    if (!project || !project.doc.clips.length) return
+    playing = !playing
+    if (playing) {
+      if (!active.src) seek(timelineTime)
+      void active.play().catch(showError)
+      if (project.doc.music) void music.play().catch(() => {})
+    } else {
+      active.pause()
+      music.pause()
+    }
+  })
+
+  el.querySelector('#ed-split')!.addEventListener('click', () => {
+    if (!project) return
+    const next = splitAt(project.doc.clips, timelineTime)
+    if (next === project.doc.clips) notice('Здесь резать нечего: курсор на краю клипа')
+    else applyClips(next)
+  })
+
+  el.querySelector('#ed-delete')!.addEventListener('click', () => {
+    const id = timeline.selected()
+    if (!project || !id) return notice('Сначала выберите клип на шкале')
+    applyClips(removeClip(project.doc.clips, id))
+  })
+
+  el.querySelector('#ed-zoom-in')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() * 1.5))
+  el.querySelector('#ed-zoom-out')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() / 1.5))
+
+  aspectPick.addEventListener('change', () => {
+    if (!project) return
+    const aspect = aspectPick.value as '16:9' | '9:16' | '1:1'
+    project = { ...project, doc: { ...project.doc, output: { ...project.doc.output, aspect } } }
+    render()
+    saver.schedule(project)
+  })
+
+  async function boot(): Promise<void> {
+    const [loaded, list] = await Promise.all([
+      loadProject(projectId),
+      api<{ assets: Asset[] }>('/api/v1/assets'),
+    ])
+    if (stopped) return
+    project = loaded
+    assetList = list.assets
+    assets = new Map(list.assets.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
+    source.setAssets(list.assets)
+    if (project.doc.music) {
+      const musicAsset = list.assets.find(a => a.id === project?.doc.music?.asset_id)
+      if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
+    }
+    stateBox.textContent = STATE_TEXT.idle
+    render()
+  }
+
+  void boot().catch(showError)
+
+  return {
+    stop(): void {
+      stopped = true
+      saver.cancel()
+      active.pause()
+      music.pause()
+    },
+  }
+}

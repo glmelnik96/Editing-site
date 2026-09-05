@@ -12,7 +12,14 @@ export type Asset = {
   duration: number | null
   progress?: number | null
   error: string | null
-  files: { proxy: string | null; thumbs: string | null; thumbs_meta: string | null }
+  files: {
+    proxy: string | null
+    thumbs: string | null
+    thumbs_meta: string | null
+    peaks: string | null
+    analysis: string | null
+    vtt: string | null
+  }
 }
 
 const STATUS: Record<string, string> = {

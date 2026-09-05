@@ -1,8 +1,10 @@
 import './style.css'
 import { api, ApiError } from './api'
+import { mountEditor } from './editor'
 import { loginErrorText } from './errors'
 import { escapeHtml } from './html'
 import { fmtSize, mountAssets } from './assets'
+import { mountProjects } from './projects'
 
 type Me = {
   id: string
@@ -17,6 +19,7 @@ type WhitelistEntry = { email: string; added_by: string | null; added_at: string
 
 const root = document.getElementById('app') as HTMLElement
 let assetsPanel: { stop: () => void } | null = null // текущая панель ассетов — останавливаем перед перемонтированием
+let editor: { stop: () => void } | null = null // текущий редактор — останавливаем автосохранение и плеер при уходе
 
 function fmt(ts: string | null): string {
   return ts ? ts.replace('T', ' ').slice(0, 16) : '—'
@@ -69,6 +72,7 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
   root.innerHTML = `
     <header class="bar"><strong>Editing site</strong><span>${escapeHtml(me.email)} · <span id="quota">${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</span></span><button id="logout">Выйти</button></header>
     <section id="assets"></section>
+    <section id="projects"></section>
     <main class="card">
       <h2>Токены для агента</h2>
       <table>
@@ -83,6 +87,7 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
 
   assetsPanel?.stop()
   assetsPanel = mountAssets(document.getElementById('assets') as HTMLElement, updateQuota)
+  mountProjects(document.getElementById('projects') as HTMLElement)
 
   if (secretNote) {
     const box = document.getElementById('secret') as HTMLPreElement
@@ -202,4 +207,25 @@ async function renderAdmin(): Promise<void> {
   )
 }
 
-void boot()
+function route(): void {
+  editor?.stop()
+  editor = null
+  assetsPanel?.stop()
+  assetsPanel = null
+  const match = /^#\/p\/([\w-]+)$/.exec(location.hash)
+  if (match) {
+    void api<Me>('/api/v1/me')
+      .then(() => {
+        editor = mountEditor(root, match[1])
+      })
+      .catch(e => {
+        if (e instanceof ApiError && e.status === 401) renderLogin()
+        else renderError(e)
+      })
+    return
+  }
+  void boot()
+}
+
+window.addEventListener('hashchange', route)
+route()
