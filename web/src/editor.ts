@@ -407,6 +407,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       project = restored
       timelineTime = 0
       render()
+      // Документ подменили целиком: играющий клип мог исчезнуть, встаём заново на начало.
+      if (playing) seek(0)
       notice('Вернулись к сохранённой точке')
     })
     render()

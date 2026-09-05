@@ -6,7 +6,7 @@
  */
 import { escapeHtml } from '../html'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
-import { clipAt, clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, totalDuration, trimClip, type Clip } from './model'
+import { clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, totalDuration, trimClip, type Clip } from './model'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -142,9 +142,9 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     }
     const dx = clientX - drag.startX
     if (drag.kind === 'move') {
-      const target = clipAt(current.clips, timeAt(clientX))
-      const to = target ? target.index : current.clips.length - 1
-      if (to !== drag.index) handlers.onChange(moveClip(drag.clips, drag.index, to))
+      // Та же функция, что рисовала призрак: показ и результат не могут разойтись.
+      const preview = dropTarget(current.clips, drag.index, timeAt(clientX))
+      if (preview && preview.to !== drag.index) handlers.onChange(moveClip(drag.clips, drag.index, preview.to))
       else render()
     } else {
       const clip = drag.clips[drag.index]
