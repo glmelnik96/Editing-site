@@ -52,3 +52,20 @@ select { padding: 6px 8px; width: 100%; }
 /* Левая колонка: исходник и точки сохранения друг под другом, обе видны без прокрутки. */
 .side { display: flex; flex-direction: column; gap: 12px; align-self: start; }
 .side .card { margin: 0; }
+
+/* Полоса исходника: весь файл, залитый кусок между границами, ручки и риска текущего кадра. */
+.src-strip { position: relative; height: 26px; margin: 8px 0; border-radius: 4px;
+  background: #8882; cursor: pointer; touch-action: none; }
+.src-strip.empty { opacity: .4; cursor: default; }
+.src-sel { position: absolute; top: 0; bottom: 0; background: #3a7d5c88; border-left: 2px solid #7fd1ab;
+  border-right: 2px solid #7fd1ab; }
+.src-handle { position: absolute; top: -2px; bottom: -2px; width: 10px; margin-left: -5px;
+  background: #7fd1ab; border-radius: 3px; cursor: ew-resize; }
+.src-cursor { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #ff6b6b; pointer-events: none; }
+.tc { width: 92px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.tc.bad { outline: 2px solid #b3261e; }
+
+/* Призрак показывает, куда встанет клип, если отпустить указатель. */
+.drop-ghost { position: absolute; top: 2px; height: 72px; z-index: 2; pointer-events: none;
+  border: 2px dashed #7fd1ab; border-radius: 5px; background: #7fd1ab22; }
+.block.dragging { opacity: .55; }
