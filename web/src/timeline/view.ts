@@ -26,6 +26,7 @@ export type RenderInput = {
 const TRACK_HEIGHT = 72
 const WAVE_HEIGHT = 22
 const HANDLE_PX = 8
+const CLICK_SLOP_PX = 4 // сдвиг меньше этого — это клик, а не перенос
 
 function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
@@ -48,17 +49,27 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   el.innerHTML = `
     <div class="timeline">
       <div class="ruler" id="tl-ruler"></div>
+      <div class="scrub" id="tl-scrub" title="Перемотка"></div>
       <div class="track" id="tl-track"><div class="playhead" id="tl-playhead"></div></div>
       <div class="tl-hint muted" id="tl-hint"></div>
     </div>`
+  const view = el.querySelector('.timeline') as HTMLElement
   const ruler = el.querySelector('#tl-ruler') as HTMLElement
+  const scrub = el.querySelector('#tl-scrub') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const hint = el.querySelector('#tl-hint') as HTMLElement
 
   let current: RenderInput = { clips: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
   let selected: string | null = null
-  let drag: { id: string; index: number; kind: 'move' | 'in' | 'out'; startX: number; clips: Clip[] } | null = null
+  let drag: {
+    id: string
+    index: number
+    kind: 'move' | 'in' | 'out'
+    startX: number
+    clips: Clip[]
+    moved: boolean
+  } | null = null
 
   // rect уже сдвинут прокруткой .timeline (её предка); scrollLeft — на случай, если сам track когда-то станет скроллиться
   const timeAt = (clientX: number): number => {
@@ -118,6 +129,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
 
   function finishDrag(clientX: number): void {
     if (!drag) return
+    if (!drag.moved) {
+      // Клик без переноса: ставим курсор туда, куда ткнули (блок уже выделён в pointerdown).
+      handlers.onSeek(timeAt(clientX))
+      drag = null
+      hint.textContent = ''
+      return
+    }
     const dx = clientX - drag.startX
     if (drag.kind === 'move') {
       const target = clipAt(current.clips, timeAt(clientX))
@@ -156,13 +174,14 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           : rect.right - event.clientX < HANDLE_PX
             ? 'out'
             : 'move'
-    drag = { id, index, kind, startX: event.clientX, clips: current.clips }
+    drag = { id, index, kind, startX: event.clientX, clips: current.clips, moved: false }
     track.setPointerCapture(event.pointerId)
     render()
   })
 
   track.addEventListener('pointermove', event => {
     if (!drag) return
+    drag.moved = drag.moved || Math.abs(event.clientX - drag.startX) > CLICK_SLOP_PX
     const delta = (event.clientX - drag.startX) / current.pxPerSec
     const clip = drag.clips[drag.index]
     if (drag.kind === 'move') hint.textContent = `перенос «${clip.id}»`
@@ -178,10 +197,35 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   track.addEventListener('pointerup', stop)
   track.addEventListener('pointercancel', stop)
 
+  // Полоса перемотки под линейкой и сама линейка: перетаскивание указателем двигает курсор.
+  let scrubbing = false
+  const startScrub = (event: PointerEvent) => {
+    scrubbing = true
+    scrub.setPointerCapture(event.pointerId)
+    handlers.onSeek(timeAt(event.clientX))
+  }
+  scrub.addEventListener('pointerdown', startScrub)
+  ruler.addEventListener('pointerdown', startScrub)
+  scrub.addEventListener('pointermove', event => {
+    if (scrubbing) handlers.onSeek(timeAt(event.clientX))
+  })
+  const endScrub = () => {
+    scrubbing = false
+  }
+  scrub.addEventListener('pointerup', endScrub)
+  scrub.addEventListener('pointercancel', endScrub)
+
   return {
     render,
     setPlayhead(time: number): void {
-      playhead.style.left = `${time * current.pxPerSec}px`
+      // Двигаем курсор и подтягиваем прокрутку .timeline, если он ушёл за видимую часть.
+      const left = time * current.pxPerSec
+      playhead.style.left = `${left}px`
+      const margin = 40
+      if (left < view.scrollLeft + margin) view.scrollLeft = Math.max(0, left - margin)
+      else if (left > view.scrollLeft + view.clientWidth - margin) {
+        view.scrollLeft = left - view.clientWidth + margin
+      }
     },
     setZoom(pxPerSec: number): void {
       render({ pxPerSec: Math.max(4, Math.min(400, pxPerSec)) })
