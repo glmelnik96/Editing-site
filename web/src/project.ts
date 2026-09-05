@@ -145,3 +145,31 @@ export function createSaver(options: SaverOptions = {}) {
     },
   }
 }
+
+export type VersionCard = {
+  id: string
+  version: number
+  label: string
+  name: string
+  created_at: string
+  clips_count: number
+  duration: number
+}
+
+export function listVersions(id: string): Promise<{ versions: VersionCard[] }> {
+  return api<{ versions: VersionCard[] }>(`/api/v1/projects/${encodeURIComponent(id)}/versions`)
+}
+
+export function createCheckpoint(id: string, label: string): Promise<VersionCard> {
+  return api<VersionCard>(`/api/v1/projects/${encodeURIComponent(id)}/checkpoint`, {
+    method: 'POST',
+    body: JSON.stringify({ label }),
+  })
+}
+
+export function restoreVersion(id: string, versionId: string): Promise<Project> {
+  return api<Project>(`/api/v1/projects/${encodeURIComponent(id)}/restore`, {
+    method: 'POST',
+    body: JSON.stringify({ version_id: versionId }),
+  })
+}

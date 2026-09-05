@@ -9,11 +9,12 @@ import { api, ApiError } from './api'
 import type { Asset } from './assets'
 import { escapeHtml } from './html'
 import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
-import { createSaver, loadProject, type FieldError, type Project } from './project'
+import { createCheckpoint, createSaver, loadProject, type FieldError, type Project } from './project'
 import { assetData, type AssetData } from './strip'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountSource } from './source'
 import { mountTimeline, type AssetInfo } from './timeline/view'
+import { mountVersions } from './versions'
 
 const STATE_TEXT = {
   idle: 'сохранено',
@@ -29,20 +30,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <strong id="ed-name">Проект</strong>
       <span class="save-state" id="ed-state">загрузка…</span>
       <span id="ed-notice" class="muted"></span>
+      <span class="muted">пробел — играть, стрелки — шаг, Shift — точнее</span>
     </header>
     <div class="editor">
       <section id="ed-source"></section>
+      <section id="ed-versions"></section>
       <section>
         <div class="stage" id="ed-stage"></div>
         <div class="row">
           <button id="ed-play" type="button">▶</button>
           <button id="ed-split" type="button">Разрезать</button>
           <button id="ed-delete" type="button">Удалить клип</button>
+          <button id="ed-save" type="button">Сохранить точку</button>
           <button id="ed-zoom-in" type="button">+</button>
           <button id="ed-zoom-out" type="button">−</button>
           <select id="ed-aspect">
             <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
           </select>
+          <span class="muted" id="ed-time">0:00.0</span>
           <span class="muted" id="ed-total"></span>
         </div>
         <div id="ed-timeline"></div>
@@ -55,6 +60,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const noticeBox = el.querySelector('#ed-notice') as HTMLElement
   const stage = el.querySelector('#ed-stage') as HTMLElement
   const totalBox = el.querySelector('#ed-total') as HTMLElement
+  const timeBox = el.querySelector('#ed-time') as HTMLElement
   const errorBox = el.querySelector('#ed-error') as HTMLPreElement
   const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
 
@@ -67,6 +73,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let playIndex = 0
   let timelineTime = 0
   let stopped = false
+  let versions: { refresh: () => Promise<void> } | null = null
 
   const showError = (e: unknown) => {
     errorBox.hidden = false
@@ -76,6 +83,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const notice = (text: string) => {
     noticeBox.textContent = text
     if (text) window.setTimeout(() => (noticeBox.textContent = ''), 6000)
+  }
+
+  function showTime(): void {
+    timeBox.textContent = `${timelineTime.toFixed(1)} с`
   }
 
   const saver = createSaver({
@@ -135,12 +146,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const plan = seekPlan(clips, time)
     if (!plan) return
     const src = proxyOf(plan.assetId)
-    if (!src) return
+    if (!src) {
+      notice('Файл ещё обрабатывается, перемотка недоступна')
+      return
+    }
     playIndex = plan.index
     timelineTime = plan.timelineTime
     if (!active.src.endsWith(src)) active.src = src
     active.currentTime = plan.time
     timeline.setPlayhead(timelineTime)
+    showTime()
     prepareNext(plan.index)
   }
 
@@ -154,6 +169,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const plan = stepPlan(project.doc.clips, { index: playIndex, sourceTime: active.currentTime })
     timelineTime = plan.timelineTime
     timeline.setPlayhead(timelineTime)
+    showTime()
     if (plan.kind === 'advance') {
       if (!proxyOf(plan.assetId)) {
         // У следующего клипа ещё нет прокси: показывать пустой кадр хуже, чем честно встать.
@@ -236,6 +252,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     totalBox.textContent = `${totalDuration(project.doc.clips).toFixed(1)} с`
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
+    showTime()
     void ensureData(project.doc.clips)
   }
 
@@ -265,6 +282,19 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     applyClips(removeClip(project.doc.clips, id))
   })
 
+  el.querySelector('#ed-save')!.addEventListener('click', async () => {
+    if (!project) return
+    try {
+      // Сначала дописываем несохранённое: снимок должен поймать то, что видит человек.
+      if (saver.pending()) await saver.flush(project)
+      await createCheckpoint(projectId, '')
+      await versions?.refresh()
+      notice('Точка сохранена')
+    } catch (e) {
+      showError(e)
+    }
+  })
+
   el.querySelector('#ed-zoom-in')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() * 1.5))
   el.querySelector('#ed-zoom-out')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() / 1.5))
 
@@ -275,6 +305,31 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     render()
     saver.schedule(project)
   })
+
+  // Клавиши монтажа: пробел — играть/стоп, стрелки — шаг курсора, Home/End — края.
+  // Не работают, если фокус в поле ввода (например, в имени точки сохранения).
+  function onKey(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null
+    if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
+    if (!project) return
+    const total = totalDuration(project.doc.clips)
+    const step = event.shiftKey ? 0.1 : 1
+    if (event.code === 'Space') {
+      event.preventDefault()
+      ;(el.querySelector('#ed-play') as HTMLButtonElement).click()
+    } else if (event.code === 'ArrowLeft') {
+      event.preventDefault()
+      seek(Math.max(0, timelineTime - step))
+    } else if (event.code === 'ArrowRight') {
+      event.preventDefault()
+      seek(Math.min(total, timelineTime + step))
+    } else if (event.code === 'Home') {
+      seek(0)
+    } else if (event.code === 'End') {
+      seek(Math.max(0, total - 0.05))
+    }
+  }
+  document.addEventListener('keydown', onKey)
 
   async function boot(): Promise<void> {
     const [loaded, list] = await Promise.all([
@@ -291,6 +346,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
     }
     stateBox.textContent = STATE_TEXT.idle
+    versions = mountVersions(el.querySelector('#ed-versions') as HTMLElement, projectId, restored => {
+      project = restored
+      timelineTime = 0
+      render()
+      notice('Вернулись к сохранённой точке')
+    })
     render()
   }
 
@@ -299,6 +360,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   return {
     stop(): void {
       stopped = true
+      document.removeEventListener('keydown', onKey)
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
       if (project && saver.pending()) void saver.flush(project)
       else saver.cancel()
