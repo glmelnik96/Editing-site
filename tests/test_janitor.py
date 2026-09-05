@@ -216,6 +216,7 @@ def test_run_returns_stats(conn, settings):
     assert stats == {
         "uploads_expired": 0,
         "assets_expired": 0,
+        "renders_expired": 0,
         "orphans": 0,
         "sessions_expired": 0,
         "jobs_requeued": 0,
@@ -253,3 +254,43 @@ def test_asset_used_by_a_draft_project_survives_its_ttl(conn, settings, tmp_path
     conn.execute("UPDATE projects SET status = 'finished' WHERE id = ?", (project["id"],))
     assert rules.delete_expired_assets(conn, settings, NOW) == 1
     assert not asset_dir(settings, USER, asset).exists()
+
+
+def _render(conn, settings, expires_at, render_id="rnd_000000000001"):
+    """Проект с роликом на диске: строка в renders плюс файл, срок которого мы задаём."""
+    from server.app.storage import render_dir
+
+    project_id = f"prj_{render_id[4:]}"
+    conn.execute(
+        "INSERT INTO projects (id, user_id, name, doc, created_at, updated_at) "
+        "VALUES (?, ?, 'Ролик', '{}', ?, ?)",
+        (project_id, USER, now_iso(), now_iso()),
+    )
+    folder = render_dir(settings, USER, project_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{render_id}.mp4"
+    path.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
+        "created_at, expires_at) VALUES (?, ?, ?, 'job_1', 'draft', ?, 10, 5, ?, ?)",
+        (render_id, project_id, USER, str(path), now_iso(), iso(expires_at)),
+    )
+    return path
+
+
+def test_expired_renders_are_deleted_with_files(conn, settings):
+    old = _render(conn, settings, NOW - timedelta(minutes=1), "rnd_000000000001")
+    fresh = _render(conn, settings, NOW + timedelta(hours=1), "rnd_000000000002")
+    assert rules.delete_expired_renders(conn, NOW) == 1
+    assert not old.exists() and fresh.exists()
+    assert [r[0] for r in conn.execute("SELECT id FROM renders")] == ["rnd_000000000002"]
+    # Каталог проекта остаётся: в нём лежит живой ролик.
+    assert fresh.parent.is_dir()
+
+
+def test_expired_render_deleted_by_someone_else_leaves_no_trace(conn, settings):
+    """Проект успели завершить между выборкой и удалением: строки нет, файл не наш — не трогаем."""
+    path = _render(conn, settings, NOW - timedelta(minutes=1))
+    conn.execute("DELETE FROM renders")
+    assert rules.delete_expired_renders(conn, NOW) == 0
+    assert path.exists()

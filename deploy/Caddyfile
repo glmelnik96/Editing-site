@@ -23,6 +23,21 @@ VIDEO_DOMAIN_PLACEHOLDER {
 	# сам Caddy (Range, большие файлы).
 	# route фиксирует порядок: сначала forward_auth с исходным путём, потом срез префикса и отдача с диска.
 	# Caddy читает /srv/video/data как член группы video (bootstrap.sh, deploy.sh).
+	# Готовые ролики: тот же forward_auth, но отдаём вложением. Имя файла ставит браузер по
+	# атрибуту download у ссылки (тот же origin), поэтому здесь заголовок без filename.
+	handle /files/*/projects/*/renders/* {
+		route {
+			forward_auth 127.0.0.1:8010 {
+				uri /internal/authz
+			}
+			uri strip_prefix /files
+			root * /srv/video/data
+			header Cache-Control "private, max-age=3600"
+			header Content-Disposition attachment
+			file_server
+		}
+	}
+
 	handle /files/* {
 		route {
 			forward_auth 127.0.0.1:8010 {

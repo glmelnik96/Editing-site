@@ -105,3 +105,79 @@ def test_authz_requires_auth(app):
     with TestClient(app) as anon:
         r = anon.get("/internal/authz", headers={"X-Forwarded-Uri": "/files/a/assets/b/peaks.json"})
         assert r.status_code == 401
+
+
+def _render_on_disk(client, settings, user_id, name="Отпуск \"2026\"/май"):
+    """Проект с готовым роликом на диске: строка в renders плюс сам файл."""
+    project_id = client.post("/api/v1/projects", json={"name": name}).json()["id"]
+    render_id = "rnd_000000000001"
+    folder = settings.data_dir / user_id / "projects" / project_id / "renders"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{render_id}.mp4"
+    path.write_bytes(b"\0" * 32)
+    conn = sqlite3.connect(str(settings.db_path))
+    conn.execute(
+        "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
+        "created_at, expires_at) VALUES (?, ?, ?, 'job_1', 'draft', ?, 32, 5, ?, ?)",
+        (render_id, project_id, user_id, str(path), OLD, "2099-01-01T00:00:00.000Z"),
+    )
+    conn.commit()
+    conn.close()
+    return project_id, render_id
+
+
+def test_render_is_served_as_a_download(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project_id, render_id = _render_on_disk(client, settings, me["id"])
+    url = f"/files/{me['id']}/projects/{project_id}/renders/{render_id}.mp4"
+    r = client.get(url)
+    assert r.status_code == 200 and r.content == b"\0" * 32
+    disposition = r.headers["content-disposition"]
+    # Кириллица уезжает в filename* (RFC 5987), кавычки и слэш из названия вырезаны.
+    assert disposition.startswith(f'attachment; filename="{render_id}.mp4"; filename*=UTF-8\'\'')
+    assert "%D0%9E%D1%82%D0%BF%D1%83%D1%81%D0%BA" in disposition
+    assert '"' not in disposition.split("filename*=")[1] and "/" not in disposition.split("''")[1]
+    assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 204
+
+
+def test_render_download_falls_back_to_the_id(client, login_as, settings):
+    """Название из одних кавычек и слэшей не должно дать пустое имя файла."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project_id, render_id = _render_on_disk(client, settings, me["id"], name='"//"')
+    r = client.get(f"/files/{me['id']}/projects/{project_id}/renders/{render_id}.mp4")
+    assert r.headers["content-disposition"].endswith(f"filename*=UTF-8''{render_id}.mp4")
+
+
+def test_render_missing_on_disk_is_404(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project_id, render_id = _render_on_disk(client, settings, me["id"])
+    (settings.data_dir / me["id"] / "projects" / project_id / "renders" / f"{render_id}.mp4").unlink()
+    assert client.get(f"/files/{me['id']}/projects/{project_id}/renders/{render_id}.mp4").status_code == 404
+
+
+def test_foreign_render_is_404(client, login_as, settings):
+    login_as()
+    owner = client.get("/api/v1/me").json()
+    project_id, render_id = _render_on_disk(client, settings, owner["id"])
+    good = f"/files/{owner['id']}/projects/{project_id}/renders/{render_id}.mp4"
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    thief = client.get("/api/v1/me").json()
+    for url in (good, f"/files/{thief['id']}/projects/{project_id}/renders/{render_id}.mp4"):
+        assert client.get(url).status_code == 404, url
+        assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, url
+
+
+def test_render_url_shapes_that_are_not_ours(client, login_as, settings):
+    """Всё, что не {id}.mp4 в каталоге рендеров, до проверки прав не доходит."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project_id, render_id = _render_on_disk(client, settings, me["id"])
+    base = f"/files/{me['id']}/projects/{project_id}/renders"
+    for name in (f"{render_id}.mp4.part", "evil.exe", "source.mp4", f"{render_id}.mp4x"):
+        url = f"{base}/{name}"
+        assert client.get(url).status_code == 404, name
+        assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, name

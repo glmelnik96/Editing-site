@@ -19,7 +19,8 @@ PUBLIC_FILES = (
 
 ID_RE = re.compile(r"^[a-z]{3}_[0-9a-f]{12}$")
 _EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
-_FILE_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/([^/]+)$")
+_ASSET_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/([^/]+)$")
+_RENDER_URL_RE = re.compile(r"^/files/([^/]+)/projects/([^/]+)/renders/([^/]+)$")
 
 
 def safe_ext(filename: str) -> str:
@@ -69,14 +70,29 @@ def file_url(user_id: str, asset_id: str, name: str) -> str:
     return f"/files/{user_id}/assets/{asset_id}/{name}"
 
 
-def parse_file_url(path: str) -> tuple[str, str, str] | None:
-    """(user_id, asset_id, name) из пути /files/...; идентификаторы проверяются по форме."""
-    m = _FILE_URL_RE.match(path)
-    if not m:
-        return None
-    user_id, asset_id, name = m.groups()
-    if not (ID_RE.match(user_id) and ID_RE.match(asset_id)):
-        return None
-    if name in (".", ".."):
-        return None
-    return user_id, asset_id, name
+def parse_file_url(path: str) -> tuple[str, str, str, str] | None:
+    """(user_id, owner_id, name, kind) из пути /files/…; идентификаторы проверяются по форме.
+
+    Две формы: файлы ассета (`/assets/{id}/{имя}`) и готовые ролики
+    (`/projects/{id}/renders/{id}.mp4`). Вид возвращается четвёртым элементом, чтобы вызывающий
+    не разбирал путь второй раз.
+    """
+    m = _ASSET_URL_RE.match(path)
+    if m:
+        user_id, asset_id, name = m.groups()
+        if not (ID_RE.match(user_id) and ID_RE.match(asset_id)):
+            return None
+        if name in (".", ".."):
+            return None
+        return user_id, asset_id, name, "asset"
+
+    m = _RENDER_URL_RE.match(path)
+    if m:
+        user_id, project_id, name = m.groups()
+        if not (ID_RE.match(user_id) and ID_RE.match(project_id)):
+            return None
+        # Имя ролика всегда «{id}.mp4»: ничего другого в этом каталоге наружу не отдаётся.
+        if not name.endswith(".mp4") or not ID_RE.match(name[: -len(".mp4")]):
+            return None
+        return user_id, project_id, name, "render"
+    return None

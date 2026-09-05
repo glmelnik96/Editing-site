@@ -77,6 +77,26 @@ def delete_expired_assets(conn: sqlite3.Connection, settings: Settings, now: dat
     return deleted
 
 
+def delete_expired_renders(conn: sqlite3.Connection, now: datetime) -> int:
+    """Готовый ролик живёт render_ttl_hours (срок проставлен при сборке). Условие по expires_at
+    повторяется в DELETE: если проект успели завершить и строка ушла, rowcount будет 0.
+    Путь берём из строки: файл лежит в каталоге проекта, а сам каталог сносить нельзя —
+    рядом могут быть свежие ролики."""
+    cutoff = iso(now)
+    rows = conn.execute("SELECT id, path FROM renders WHERE expires_at < ?", (cutoff,)).fetchall()
+    deleted = 0
+    for row in rows:
+        with transaction(conn):
+            cur = conn.execute(
+                "DELETE FROM renders WHERE id = ? AND expires_at < ?", (row["id"], cutoff)
+            )
+            if cur.rowcount == 0:
+                continue
+        Path(row["path"]).unlink(missing_ok=True)
+        deleted += 1
+    return deleted
+
+
 def _older_than(path: Path, now: datetime, seconds: int) -> bool:
     try:
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)

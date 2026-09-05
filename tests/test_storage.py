@@ -61,7 +61,7 @@ def test_render_paths_come_from_ids(tmp_path):
 def test_file_url_roundtrip():
     url = file_url("usr_0123456789ab", "ast_0123456789ab", "proxy.mp4")
     assert url == "/files/usr_0123456789ab/assets/ast_0123456789ab/proxy.mp4"
-    assert parse_file_url(url) == ("usr_0123456789ab", "ast_0123456789ab", "proxy.mp4")
+    assert parse_file_url(url) == ("usr_0123456789ab", "ast_0123456789ab", "proxy.mp4", "asset")
 
 
 def test_parse_file_url_rejects_bad_shapes():
@@ -76,3 +76,15 @@ def test_parse_file_url_rejects_bad_shapes():
 def test_public_files_exclude_source():
     assert "proxy.mp4" in PUBLIC_FILES and "peaks.json" in PUBLIC_FILES
     assert not any(name.startswith("source") for name in PUBLIC_FILES)
+
+
+def test_parse_file_url_understands_renders():
+    url = "/files/usr_0123456789ab/projects/prj_0123456789ab/renders/rnd_0123456789ab.mp4"
+    assert parse_file_url(url) == ("usr_0123456789ab", "prj_0123456789ab", "rnd_0123456789ab.mp4", "render")
+    # В каталоге рендеров наружу идёт только «{id}.mp4», ничего другого.
+    base = "/files/usr_0123456789ab/projects/prj_0123456789ab/renders"
+    assert parse_file_url(f"{base}/../x") is None
+    assert parse_file_url(f"{base}/evil.exe") is None
+    assert parse_file_url(f"{base}/rnd_0123456789ab.part") is None
+    assert parse_file_url(f"{base}/notanid.mp4") is None
+    assert parse_file_url("/files/usr_x/projects/prj_0123456789ab/renders/rnd_0123456789ab.mp4") is None

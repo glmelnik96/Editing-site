@@ -104,3 +104,11 @@ def test_worker_unit_is_limited_and_installed():
         text = (DEPLOY / name).read_text(encoding="utf-8")
         assert "video-worker.service" in text, name
     assert "systemctl restart video-api video-worker" in (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+
+
+def test_caddy_serves_renders_as_attachment():
+    caddy = (DEPLOY / "Caddyfile").read_text(encoding="utf-8")
+    assert "handle /files/*/projects/*/renders/*" in caddy
+    assert "header Content-Disposition attachment" in caddy
+    # Частный маршрут обязан стоять раньше общего /files/*, иначе Caddy отдаст ролик без заголовка.
+    assert caddy.index("handle /files/*/projects/*/renders/*") < caddy.index("handle /files/* {")
