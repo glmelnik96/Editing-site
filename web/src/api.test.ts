@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { ApiError, parseError } from './api'
+import { ApiError, isRetryable, parseError } from './api'
 
 test('parseError reads the api error envelope', () => {
   const e = parseError(403, { error: { code: 'cross_site', message: 'Отклонено', details: { a: 1 } } })
@@ -20,4 +20,13 @@ test('parseError falls back for non-json bodies', () => {
 test('parseError tolerates a null or codeless error object', () => {
   expect(parseError(500, { error: null }).code).toBe('http_error')
   expect(parseError(500, { error: { message: 'x' } }).code).toBe('http_error')
+})
+
+test('retries only on network errors, 5xx and 429', () => {
+  expect(isRetryable(new Error('net'))).toBe(true)
+  expect(isRetryable(new ApiError(503, 'x', 'x'))).toBe(true)
+  expect(isRetryable(new ApiError(429, 'x', 'x'))).toBe(true)
+  expect(isRetryable(new ApiError(422, 'x', 'x'))).toBe(false)
+  expect(isRetryable(new ApiError(404, 'x', 'x'))).toBe(false)
+  expect(isRetryable(new ApiError(401, 'x', 'x'))).toBe(false)
 })

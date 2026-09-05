@@ -76,18 +76,24 @@ export function createSaver(options: SaverOptions = {}) {
   let queued: Project | null = null
   let saving = false
   let failed = false // последняя попытка сохранения провалилась не по вине документа
+  // Промис текущей цепочки сохранений и итог её последнего звена: на них смотрит flush, которому
+  // нужно не «отправлено», а «записано» — иначе следом за ним пойдёт работа со старым документом.
+  let chain: Promise<void> = Promise.resolve()
+  let lastError: unknown = null
 
   const notify = (state: 'idle' | 'pending' | 'saving' | 'failed') => options.onStateChange?.(state)
 
   async function run(project: Project): Promise<void> {
     saving = true
     failed = false
+    lastError = null
     notify('saving')
     let saved: Project | null = null
     try {
       saved = await request(project)
       options.onSaved?.(saved)
     } catch (error) {
+      lastError = error
       if (error instanceof ApiError && error.status === 409) {
         // Правку поверх чужой версии не досылаем: копить состояние после конфликта нельзя.
         queued = null
@@ -122,18 +128,26 @@ export function createSaver(options: SaverOptions = {}) {
         if (saving) return // запрос уже летит — очередь подхватит его собственный finally
         const next = queued
         queued = null
-        if (next) void run(next)
+        if (next) chain = run(next)
       }, delay)
     },
-    /** Сохранить немедленно (уход со страницы, кнопка «сохранить»). */
+    /**
+     * Сохранить немедленно и дождаться, пока очередь опустеет (уход со страницы, снимок, сборка).
+     *
+     * Ждём не свой запрос, а всю цепочку: при летящем сохранении правка встаёт в очередь, и её
+     * отправит finally текущего run. Если последнее звено цепочки не записалось — сеть, 401,
+     * конфликт версий, отказ проверки — молча резолвиться нельзя: вызывающий поверит, что на
+     * сервере лежит показанное на экране, и будет работать со старым документом.
+     */
     async flush(project: Project): Promise<void> {
       clearTimeout(timer)
-      if (saving) {
-        queued = project
-        return
+      if (saving) queued = project
+      else {
+        queued = null
+        chain = run(project)
       }
-      queued = null
-      await run(project)
+      await chain
+      if (lastError) throw lastError
     },
     /** Есть ли несохранённые правки (в очереди или уже отправляются). */
     pending(): boolean {
@@ -172,4 +186,46 @@ export function restoreVersion(id: string, versionId: string): Promise<Project> 
     method: 'POST',
     body: JSON.stringify({ version_id: versionId }),
   })
+}
+
+export type RenderCard = {
+  id: string
+  project_id: string
+  quality: 'draft' | 'final'
+  size: number
+  duration: number
+  created_at: string
+  expires_at: string
+  download: string
+}
+
+export type JobView = {
+  id: string
+  type: string
+  status: 'queued' | 'running' | 'done' | 'failed' | 'canceled'
+  progress: number
+  error: string | null
+}
+
+export function startRender(id: string, quality: 'draft' | 'final'): Promise<{ job_id: string; quality: string }> {
+  return api<{ job_id: string; quality: string }>(`/api/v1/projects/${encodeURIComponent(id)}/render`, {
+    method: 'POST',
+    body: JSON.stringify({ quality }),
+  })
+}
+
+export function listRenders(id: string): Promise<{ renders: RenderCard[] }> {
+  return api<{ renders: RenderCard[] }>(`/api/v1/projects/${encodeURIComponent(id)}/renders`)
+}
+
+export function loadJob(jobId: string): Promise<JobView> {
+  return api<JobView>(`/api/v1/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function cancelJob(jobId: string): Promise<void> {
+  return api<void>(`/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' })
+}
+
+export function deleteRender(renderId: string): Promise<void> {
+  return api<void>(`/api/v1/renders/${encodeURIComponent(renderId)}`, { method: 'DELETE' })
 }

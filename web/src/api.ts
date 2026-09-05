@@ -10,6 +10,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Повторяем только сбои сети, 5xx и 429: ошибка 4xx (401, 404, 422) сама не исправится. */
+export function isRetryable(e: unknown): boolean {
+  if (e instanceof ApiError) return e.status >= 500 || e.status === 429
+  return true
+}
+
 export function parseError(status: number, body: unknown): ApiError {
   if (body && typeof body === 'object' && 'error' in body && body.error && typeof body.error === 'object') {
     const err = body.error as { code?: string; message?: string; details?: unknown }

@@ -48,6 +48,8 @@ select { padding: 6px 8px; width: 100%; }
 .versions { list-style: none; padding: 0; margin: 8px 0 0; }
 .versions li { display: flex; gap: 8px; align-items: center; justify-content: space-between;
   padding: 4px 0; border-bottom: 1px solid #8882; font-size: 13px; }
+/* Готовый ролик: ссылка на скачивание и удаление держатся вместе у правого края строки. */
+.render-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 /* Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
 /* Левая колонка: исходник и точки сохранения друг под другом, обе видны без прокрутки. */
 .side { display: flex; flex-direction: column; gap: 12px; align-self: start; }

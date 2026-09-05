@@ -14,6 +14,7 @@ import { createCheckpoint, createSaver, loadProject, type FieldError, type Proje
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { mountRender } from './render'
 import { mountSource } from './source'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
@@ -38,6 +39,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <section class="side">
         <div id="ed-source"></div>
         <div id="ed-versions"></div>
+        <section id="ed-renders"></section>
       </section>
       <section>
         <div class="stage" id="ed-stage"></div>
@@ -81,6 +83,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let timelineTime = 0
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
+  let renders: { stop: () => void } | null = null
 
   /** Запомнить состояние ДО правки: именно к нему вернёт кнопка «Отменить». */
   function remember(): void {
@@ -411,6 +414,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (playing) seek(0)
       notice('Вернулись к сохранённой точке')
     })
+    renders = mountRender(el.querySelector('#ed-renders') as HTMLElement, projectId, async () => {
+      if (project && saver.pending()) await saver.flush(project)
+    })
     render()
   }
 
@@ -420,8 +426,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stop(): void {
       stopped = true
       document.removeEventListener('keydown', onKey)
+      renders?.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
-      if (project && saver.pending()) void saver.flush(project)
+      // Отказ здесь гасим: экран уже разбирается, показывать ошибку некому, а необработанный
+      // отказ промиса всплыл бы в консоль. О сбое уже сказал onError.
+      if (project && saver.pending()) void saver.flush(project).catch(() => {})
       else saver.cancel()
       active.pause()
       music.pause()

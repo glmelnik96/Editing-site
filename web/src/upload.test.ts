@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
-import { backoffMs, chunkCount, fingerprint, isRetryable, missingChunks, uploadFile } from './upload'
+import { backoffMs, chunkCount, fingerprint, missingChunks, uploadFile } from './upload'
 
 describe('chunk math', () => {
   it('counts chunks', () => {
@@ -17,13 +17,6 @@ describe('chunk math', () => {
     expect(fingerprint({ name: 'a.mp4', size: 5, lastModified: 7 })).toBe('upload:a.mp4:5:7')
     expect(backoffMs(0)).toBe(1000)
     expect(backoffMs(2)).toBe(4000)
-  })
-  it('retries only on network errors, 5xx and 429', () => {
-    expect(isRetryable(new Error('net'))).toBe(true)
-    expect(isRetryable(new ApiError(503, 'x', 'x'))).toBe(true)
-    expect(isRetryable(new ApiError(429, 'x', 'x'))).toBe(true)
-    expect(isRetryable(new ApiError(422, 'x', 'x'))).toBe(false)
-    expect(isRetryable(new ApiError(401, 'x', 'x'))).toBe(false)
   })
 })
 

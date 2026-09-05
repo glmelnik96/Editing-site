@@ -1,4 +1,4 @@
-import { api, ApiError } from './api'
+import { api, ApiError, isRetryable } from './api'
 
 export type UploadCreated = { upload_id: string; chunk_size: number; total_chunks: number; expires_at: string }
 export type UploadStatus = { upload_id: string; received: number[]; total: number; size: number; chunk_size: number }
@@ -35,12 +35,6 @@ export function fingerprint(f: { name: string; size: number; lastModified: numbe
 
 export function backoffMs(attempt: number): number {
   return 1000 * 2 ** attempt
-}
-
-/** Повторяем только сбои сети, 5xx и 429: ошибка 4xx не исправится сама. */
-export function isRetryable(e: unknown): boolean {
-  if (e instanceof ApiError) return e.status >= 500 || e.status === 429
-  return true
 }
 
 /** Повторяет fn с задержкой backoffMs, пока ошибка ретраится и попытки не исчерпаны. */
