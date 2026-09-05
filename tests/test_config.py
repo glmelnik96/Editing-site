@@ -110,3 +110,17 @@ def test_versions_kept_default():
 def test_versions_kept_is_bounded():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, versions_kept=0)
+
+
+def test_render_settings_have_sane_defaults():
+    s = Settings(_env_file=None)
+    assert s.render_timeout_sec == 4 * 3600
+    assert s.render_ttl_hours == 24
+    assert s.max_renders_queued == 2
+    assert s.draft_short_side == 720
+    assert s.final_short_side == 1080
+
+
+def test_render_short_side_is_bounded():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, final_short_side=99)

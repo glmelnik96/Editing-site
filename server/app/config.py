@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     max_projects_per_user: int = Field(default=200, ge=1)
     versions_kept: int = Field(default=5, ge=1, le=50)
 
+    # Рендер (раздел 9 спеки). Короткая сторона кадра задаёт разрешение вместе с пропорцией.
+    render_timeout_sec: int = Field(default=4 * 3600, ge=60)
+    render_ttl_hours: int = Field(default=24, ge=1)
+    max_renders_queued: int = Field(default=2, ge=1, le=20)
+    draft_short_side: int = Field(default=720, ge=240, le=2160)
+    final_short_side: int = Field(default=1080, ge=240, le=2160)
+
     @field_validator("public_base_url")
     @classmethod
     def _check_public_base_url(cls, value: str) -> str:
