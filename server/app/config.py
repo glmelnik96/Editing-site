@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     snap_window_sec: float = Field(default=0.35, ge=0.0, le=5.0)
     snap_buffer_sec: float = Field(default=0.3, ge=0.0, le=5.0)
     max_projects_per_user: int = Field(default=200, ge=1)
+    versions_kept: int = Field(default=5, ge=1, le=50)
 
     @field_validator("public_base_url")
     @classmethod

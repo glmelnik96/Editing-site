@@ -100,3 +100,13 @@ def test_project_limits_have_sane_defaults():
 def test_snap_window_is_bounded():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, snap_window_sec=-1)
+
+
+def test_versions_kept_default():
+    s = Settings(_env_file=None)
+    assert s.versions_kept == 5
+
+
+def test_versions_kept_is_bounded():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, versions_kept=0)
