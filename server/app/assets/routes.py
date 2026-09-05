@@ -13,6 +13,7 @@ from server.app.assets.views import AssetView, asset_view
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.errors import ApiError
 from server.app.jobs import cancel_jobs_for_target
+from server.app.projects.store import projects_using_asset
 from server.app.storage import asset_dir, upload_path
 from server.app.uploads.routes import api_error
 from server.app.uploads.store import UploadError, check_capacity, clean_filename, finalize_file, resolve_kind
@@ -115,7 +116,11 @@ def delete(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     """Сначала запись, потом файлы: упавший процесс не оставит запись без файлов, папку подберёт janitor.
-    Проверка «ассет стоит в незавершённом проекте» появится в M2 вместе с таблицей projects."""
+    Ассет, занятый в незавершённом проекте, не удаляется."""
+    _owned(conn, user, asset_id)
+    used_by = projects_using_asset(conn, user.id, asset_id)
+    if used_by:
+        raise ApiError(409, "asset_in_use", "Файл стоит в проекте", {"projects": used_by})
     with transaction(conn):
         cur = conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
         if cur.rowcount == 0:

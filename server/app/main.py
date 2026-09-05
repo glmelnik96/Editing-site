@@ -19,6 +19,7 @@ from server.app.config import Settings
 from server.app.errors import ApiError, install_error_handlers
 from server.app.files import router as files_router
 from server.app.health import router as health_router
+from server.app.projects.routes import router as projects_router
 from server.app.ratelimit import FixedWindowLimiter
 from server.app.security import install_origin_check
 from server.app.uploads.routes import router as uploads_router
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None, web_dist: Path | None = None) -
     app.include_router(uploads_router)
     app.include_router(assets_router)
     app.include_router(files_router)
+    app.include_router(projects_router)
     # Роутеры API из следующих задач подключаются ВЫШЕ этой строки.
     @app.api_route(
         "/api/{rest:path}",
