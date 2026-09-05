@@ -25,18 +25,20 @@ def _row(**over):
 def test_view_links_follow_status():
     v = asset_view(_row())
     assert v.files.model_dump() == {
-        "proxy": None, "thumbs": None, "thumbs_meta": None, "peaks": None, "analysis": None,
+        "proxy": None, "thumbs": None, "thumbs_meta": None, "peaks": None, "analysis": None, "vtt": None,
     }
     v = asset_view(_row(status="ready", has_audio=1))
     assert v.has_audio is True and v.files.proxy is None
     assert v.files.peaks == "/files/usr_0123456789ab/assets/ast_0123456789ab/peaks.json"
     assert v.files.thumbs == "/files/usr_0123456789ab/assets/ast_0123456789ab/thumbs.jpg"
+    assert v.files.vtt is None
     v = asset_view(_row(status="proxy_ready"))
     assert v.files.proxy.endswith("/proxy.mp4")
     v = asset_view(_row(kind="audio", status="proxy_ready"))
     assert v.files.proxy.endswith("/proxy.m4a") and v.files.thumbs is None
     v = asset_view(_row(kind="subtitle", status="ready"))
     assert v.files.peaks is None and v.files.proxy is None
+    assert v.files.vtt == "/files/usr_0123456789ab/assets/ast_0123456789ab/subs.vtt"
 
 
 def test_small_upload_list_get_delete(client, login_as, settings):
@@ -113,3 +115,22 @@ def test_me_has_quota_and_requires_auth(client, login_as):
     me = client.get("/api/v1/me").json()
     assert me["quota"] == {"used_bytes": 0, "limit_bytes": 10 * 1024 * 1024}
     assert me["role"] == "admin" and me["auth"] == "cookie" and now_iso().endswith("Z")
+
+
+def test_subtitle_upload_produces_a_vtt_link(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    r = _upload_small(client)
+    assert r.status_code == 201
+    asset = r.json()
+    assert asset["files"]["vtt"] == f"/files/{me['id']}/assets/{asset['id']}/subs.vtt"
+    body = client.get(asset["files"]["vtt"])
+    assert body.status_code == 200 and body.text.startswith("WEBVTT")
+
+
+def test_broken_subtitle_file_is_rejected_on_upload(client, login_as):
+    login_as()
+    bad = b"\xd0\xbd\xd0\xb5 \xd1\x81\xd1\x83\xd0\xb1\xd1\x82\xd1\x8b"
+    r = _upload_small(client, name="bad.srt", data=bad)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_subtitles"
+    assert client.get("/api/v1/assets").json()["assets"] == []

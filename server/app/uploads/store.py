@@ -19,6 +19,7 @@ from server.app.jobs import enqueue_job
 from server.app.storage import KINDS, asset_dir, kind_from_ext, safe_ext, upload_path
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
+from server.media.subtitles import SubtitleInvalid, to_vtt
 
 ANALYZE_PRIORITY = 10  # выше рендера (0): раздел 7 спеки
 MAX_FILENAME = 255
@@ -189,6 +190,12 @@ def received_chunks(conn: sqlite3.Connection, upload_id: str) -> list[int]:
     return [r[0] for r in rows]
 
 
+def _write_vtt(folder: Path, source: Path, ext: str) -> None:
+    """Рядом с исходником кладём subs.vtt: браузерный плеер понимает только его."""
+    text = source.read_text(encoding="utf-8-sig", errors="replace")
+    (folder / "subs.vtt").write_text(to_vtt(text, ext=ext), encoding="utf-8")
+
+
 def finalize_file(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -251,6 +258,14 @@ def finalize_file(
         os.replace(dst, src)
         shutil.rmtree(target_dir, ignore_errors=True)
         raise
+    if kind == "subtitle":
+        try:
+            _write_vtt(target_dir, dst, ext)
+        except SubtitleInvalid as exc:
+            with transaction(conn):
+                conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+            shutil.rmtree(target_dir, ignore_errors=True)
+            raise UploadError(422, "bad_subtitles", str(exc)) from exc
     return row
 
 

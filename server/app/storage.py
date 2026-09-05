@@ -13,7 +13,9 @@ VIDEO_EXTS = {"mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "mxf", "
 AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff", "aif", "wma"}
 SUBTITLE_EXTS = {"srt", "vtt"}
 # Файлы ассета, которые отдаются наружу. source.* сюда не входит намеренно (раздел 11 спеки).
-PUBLIC_FILES = ("proxy.mp4", "proxy.m4a", "thumbs.jpg", "thumbs.json", "peaks.json", "analysis.json")
+PUBLIC_FILES = (
+    "proxy.mp4", "proxy.m4a", "thumbs.jpg", "thumbs.json", "peaks.json", "analysis.json", "subs.vtt",
+)
 
 ID_RE = re.compile(r"^[a-z]{3}_[0-9a-f]{12}$")
 _EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")

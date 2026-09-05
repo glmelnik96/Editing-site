@@ -17,6 +17,7 @@ class AssetFiles(BaseModel):
     thumbs_meta: str | None = None
     peaks: str | None = None
     analysis: str | None = None
+    vtt: str | None = None
 
 
 class AssetView(BaseModel):
@@ -42,15 +43,15 @@ def asset_files(row: dict | sqlite3.Row) -> AssetFiles:
     user_id, asset_id, kind, status = row["user_id"], row["id"], row["kind"], row["status"]
     files = AssetFiles()
     if kind == "subtitle":
-        return files
-    if status in ("ready", "proxy_ready"):
+        files.vtt = file_url(user_id, asset_id, "subs.vtt")
+    elif status in ("ready", "proxy_ready"):
         files.peaks = file_url(user_id, asset_id, "peaks.json")
         files.analysis = file_url(user_id, asset_id, "analysis.json")
         if kind == "video":
             files.thumbs = file_url(user_id, asset_id, "thumbs.jpg")
             files.thumbs_meta = file_url(user_id, asset_id, "thumbs.json")
-    if status == "proxy_ready":
-        files.proxy = file_url(user_id, asset_id, "proxy.mp4" if kind == "video" else "proxy.m4a")
+        if status == "proxy_ready":
+            files.proxy = file_url(user_id, asset_id, "proxy.mp4" if kind == "video" else "proxy.m4a")
     return files
 
 
