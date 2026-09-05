@@ -190,6 +190,21 @@ def delete_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> b
     return cur.rowcount > 0
 
 
+def assets_in_drafts(conn: sqlite3.Connection) -> set[str]:
+    """Все ассеты, на которые ссылаются незавершённые проекты любого владельца.
+
+    Нужен janitor: файл, стоящий в черновике, не должен исчезнуть по сроку последнего обращения.
+    Пользователь мог неделю не открывать проект, но монтаж от этого не перестал существовать.
+    """
+    used: set[str] = set()
+    for row in conn.execute("SELECT doc FROM projects WHERE status = 'draft'"):
+        try:
+            used |= assets_of(json.loads(row["doc"]))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+    return used
+
+
 def projects_using_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) -> list[dict]:
     """Незавершённые проекты владельца, где встречается ассет. Документов мало, ищем перебором."""
     rows = conn.execute(

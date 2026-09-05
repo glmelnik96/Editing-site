@@ -33,7 +33,9 @@ class ProjectCreate(BaseModel):
 class ProjectSave(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     version: int = Field(ge=1)
-    doc: dict | None = None
+    # Документ обязателен: сохранение приходит целиком, и пропуск поля стёр бы весь монтаж.
+    # Пустой проект создаётся через POST без doc, а не сохранением без него.
+    doc: dict
 
 
 class ProjectView(BaseModel):

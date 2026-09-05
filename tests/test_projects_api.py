@@ -152,12 +152,27 @@ def test_projects_require_auth(client):
 def test_project_deleted_between_check_and_save_is_404(client, login_as, settings, monkeypatch):
     """Проект исчез в момент сохранения: клиенту «не найден», а не внутренняя ошибка."""
     login_as()
-    p = client.post("/api/v1/projects", json={"name": "Мой"}).json()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
     from server.app.projects import routes as project_routes
 
     def vanish(*args, **kwargs):
         raise KeyError(p["id"])
 
     monkeypatch.setattr(project_routes, "save_project", vanish)
-    r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "Мой", "version": 1, "doc": None})
+    r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "Мой", "version": 1, "doc": doc()})
     assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
+
+
+def test_save_without_a_document_is_rejected(client, login_as, settings):
+    """Сохранение приходит целиком: пропуск документа стёр бы весь монтаж."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
+    for body in ({"name": "Мой", "version": 1}, {"name": "Мой", "version": 1, "doc": None}):
+        r = client.put(f"/api/v1/projects/{p['id']}", json=body)
+        assert r.status_code == 422, r.text
+    still = client.get(f"/api/v1/projects/{p['id']}").json()
+    assert still["version"] == 1 and still["doc"]["clips"]
