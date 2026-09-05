@@ -152,3 +152,18 @@ export function layout(clips: Clip[], pxPerSec: number): Block[] {
     return block
   })
 }
+
+/**
+ * Куда встанет переносимый клип, если отпустить указатель на этом времени шкалы.
+ *
+ * Считается через ту же moveClip, что выполняет саму правку: иначе показ и результат разъехались бы.
+ * Возвращает номер позиции и время начала клипа на новом месте.
+ */
+export function dropTarget(clips: Clip[], from: number, time: number): { to: number; start: number } | null {
+  if (from < 0 || from >= clips.length) return null
+  const found = clipAt(clips, time)
+  const to = found ? found.index : clips.length - 1
+  const moved = moveClip(clips, from, to)
+  const index = moved.findIndex(c => c.id === clips[from].id)
+  return { to, start: timelineStart(moved, index) }
+}

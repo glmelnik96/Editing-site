@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Clip } from './model'
 import {
   clipAt,
+  dropTarget,
   insertClip,
   layout,
   moveClip,
@@ -127,6 +128,26 @@ describe('правки списка', () => {
     const ids = new Set([newClipId(three), newClipId(three), newClipId(three)])
     expect(ids.size).toBe(3)
     expect(newClipId(three).startsWith('c')).toBe(true)
+  })
+
+  it('считает, куда встанет переносимый клип', () => {
+    // three: c1 [0,4), c2 [4,6), c3 [6,9.5)
+    expect(dropTarget(three, 0, 5)).toEqual({ to: 1, start: 2 })
+    expect(dropTarget(three, 2, 1)).toEqual({ to: 0, start: 0 })
+    expect(dropTarget(three, 0, 100)).toEqual({ to: 2, start: 5.5 })
+    expect(dropTarget(three, 1, 4.5)).toEqual({ to: 1, start: 4 })
+  })
+
+  it('место вставки совпадает с тем, что сделает перенос', () => {
+    const preview = dropTarget(three, 0, 7)!
+    const moved = moveClip(three, 0, preview.to)
+    const index = moved.findIndex(c => c.id === 'c1')
+    expect(timelineStart(moved, index)).toBe(preview.start)
+  })
+
+  it('чужой номер клипа не роняет расчёт', () => {
+    expect(dropTarget(three, 9, 1)).toBeNull()
+    expect(dropTarget([], 0, 1)).toBeNull()
   })
 })
 
