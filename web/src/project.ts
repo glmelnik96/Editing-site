@@ -48,7 +48,7 @@ type SaverOptions = {
   onConflict?: (fresh: Project) => void
   onInvalid?: (errors: FieldError[]) => void
   onError?: (error: unknown) => void
-  onStateChange?: (state: 'idle' | 'pending' | 'saving') => void
+  onStateChange?: (state: 'idle' | 'pending' | 'saving' | 'failed') => void
 }
 
 function conflictProject(error: ApiError): Project | null {
@@ -75,11 +75,13 @@ export function createSaver(options: SaverOptions = {}) {
   let timer: number | undefined
   let queued: Project | null = null
   let saving = false
+  let failed = false // последняя попытка сохранения провалилась не по вине документа
 
-  const notify = (state: 'idle' | 'pending' | 'saving') => options.onStateChange?.(state)
+  const notify = (state: 'idle' | 'pending' | 'saving' | 'failed') => options.onStateChange?.(state)
 
   async function run(project: Project): Promise<void> {
     saving = true
+    failed = false
     notify('saving')
     let saved: Project | null = null
     try {
@@ -96,6 +98,9 @@ export function createSaver(options: SaverOptions = {}) {
         queued = null
         options.onInvalid?.(invalidErrors(error))
       } else {
+        // Сеть, 401, 500: правку не выбрасываем, но и повторять сами не будем — следующая
+        // правка отправит её вместе с собой, а пока честно показываем, что не сохранено.
+        failed = true
         options.onError?.(error)
       }
     } finally {
@@ -103,7 +108,7 @@ export function createSaver(options: SaverOptions = {}) {
       const next = queued
       queued = null
       if (next) await run(saved ? { ...next, version: saved.version } : next)
-      else notify('idle')
+      else notify(failed ? 'failed' : 'idle')
     }
   }
 

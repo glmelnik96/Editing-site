@@ -117,3 +117,39 @@ describe('автосохранение', () => {
     vi.useRealTimers()
   })
 })
+
+describe('состояние после сбоя', () => {
+  it('не показывает «сохранено», когда сохранение провалилось', async () => {
+    const states: string[] = []
+    const saver = createSaver({
+      request: async () => {
+        throw new ApiError(500, 'internal_error', 'ой')
+      },
+      delay: 0,
+      onError: () => {},
+      onStateChange: s => states.push(s),
+    })
+    await saver.flush(project(1))
+    expect(states.at(-1)).toBe('failed')
+  })
+
+  it('после удачного сохранения снова показывает «сохранено»', async () => {
+    let fail = true
+    const states: string[] = []
+    const saver = createSaver({
+      request: async () => {
+        if (fail) {
+          fail = false
+          throw new ApiError(500, 'internal_error', 'ой')
+        }
+        return project(2)
+      },
+      delay: 0,
+      onError: () => {},
+      onStateChange: s => states.push(s),
+    })
+    await saver.flush(project(1))
+    await saver.flush(project(1))
+    expect(states.at(-1)).toBe('idle')
+  })
+})

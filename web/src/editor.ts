@@ -15,7 +15,12 @@ import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Cli
 import { mountSource } from './source'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 
-const STATE_TEXT = { idle: 'сохранено', pending: 'правки не сохранены', saving: 'сохраняю…' }
+const STATE_TEXT = {
+  idle: 'сохранено',
+  pending: 'правки не сохранены',
+  saving: 'сохраняю…',
+  failed: 'не сохранено, попробуйте ещё правку',
+}
 
 export function mountEditor(el: HTMLElement, projectId: string) {
   el.innerHTML = `
@@ -150,6 +155,14 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timelineTime = plan.timelineTime
     timeline.setPlayhead(timelineTime)
     if (plan.kind === 'advance') {
+      if (!proxyOf(plan.assetId)) {
+        // У следующего клипа ещё нет прокси: показывать пустой кадр хуже, чем честно встать.
+        playing = false
+        active.pause()
+        music.pause()
+        notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
+        return
+      }
       swap()
       playIndex = plan.index
       active.currentTime = plan.time
@@ -194,6 +207,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     project = { ...project, doc: { ...project.doc, clips } }
     render()
     saver.schedule(project)
+    // Список изменился под играющим клипом: номер клипа больше ничего не значит, встаём заново
+    // по времени шкалы. Иначе плеер продолжил бы мерить время удалённого клипа.
+    if (playing) seek(Math.min(timelineTime, totalDuration(clips)))
   }
 
   async function ensureData(clips: Clip[]): Promise<void> {
@@ -283,7 +299,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   return {
     stop(): void {
       stopped = true
-      saver.cancel()
+      // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
+      if (project && saver.pending()) void saver.flush(project)
+      else saver.cancel()
       active.pause()
       music.pause()
     },
