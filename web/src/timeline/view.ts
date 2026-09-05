@@ -6,7 +6,7 @@
  */
 import { escapeHtml } from '../html'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
-import { clipAt, layout, moveClip, ms, totalDuration, trimClip, type Clip } from './model'
+import { clipAt, clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, totalDuration, trimClip, type Clip } from './model'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -50,7 +50,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     <div class="timeline">
       <div class="ruler" id="tl-ruler"></div>
       <div class="scrub" id="tl-scrub" title="Перемотка"></div>
-      <div class="track" id="tl-track"><div class="playhead" id="tl-playhead"></div></div>
+      <div class="track" id="tl-track"><div class="drop-ghost" id="tl-drop" hidden></div><div class="playhead" id="tl-playhead"></div></div>
       <div class="tl-hint muted" id="tl-hint"></div>
     </div>`
   const view = el.querySelector('.timeline') as HTMLElement
@@ -58,6 +58,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   const scrub = el.querySelector('#tl-scrub') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
+  const ghost = el.querySelector('#tl-drop') as HTMLElement
   const hint = el.querySelector('#tl-hint') as HTMLElement
 
   let current: RenderInput = { clips: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
@@ -131,7 +132,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     if (!drag) return
     if (!drag.moved) {
       // Клик без переноса: ставим курсор туда, куда ткнули (блок уже выделён в pointerdown).
+      // render() тут не будет — снимаем класс переноса вручную, иначе блок останется затемнённым.
+      track.querySelector(`.block[data-id="${CSS.escape(drag.id)}"]`)?.classList.remove('dragging')
       handlers.onSeek(timeAt(clientX))
+      ghost.hidden = true
       drag = null
       hint.textContent = ''
       return
@@ -149,6 +153,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       const edges = drag.kind === 'in' ? { in: ms(clip.in + delta) } : { out: ms(clip.out + delta) }
       handlers.onChange(trimClip(drag.clips, clip.id, edges, { duration: duration ?? undefined }))
     }
+    ghost.hidden = true
     drag = null
     hint.textContent = ''
   }
@@ -177,6 +182,8 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     drag = { id, index, kind, startX: event.clientX, clips: current.clips, moved: false }
     track.setPointerCapture(event.pointerId)
     render()
+    // Помечаем переносимый блок отдельным классом — render() пересобирает блоки заново, поэтому это после него.
+    track.querySelector(`.block[data-id="${CSS.escape(id)}"]`)?.classList.add('dragging')
   })
 
   track.addEventListener('pointermove', event => {
@@ -184,8 +191,17 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     drag.moved = drag.moved || Math.abs(event.clientX - drag.startX) > CLICK_SLOP_PX
     const delta = (event.clientX - drag.startX) / current.pxPerSec
     const clip = drag.clips[drag.index]
-    if (drag.kind === 'move') hint.textContent = `перенос «${clip.id}»`
-    else {
+    if (drag.kind === 'move') {
+      // Призрак только при настоящем переносе: клик мимо блока перематывает курсор, и мигать здесь незачем.
+      const preview = drag.moved ? dropTarget(current.clips, drag.index, timeAt(event.clientX)) : null
+      if (preview) {
+        const width = clipDuration(drag.clips[drag.index]) * current.pxPerSec
+        ghost.hidden = false
+        ghost.style.left = `${preview.start * current.pxPerSec}px`
+        ghost.style.width = `${Math.max(MIN_BLOCK_PX, width)}px`
+        hint.textContent = `«${clip.id}» встанет на ${preview.to + 1}-е место из ${current.clips.length}`
+      }
+    } else {
       const value = drag.kind === 'in' ? clip.in + delta : clip.out + delta
       hint.textContent = `${drag.kind === 'in' ? 'начало' : 'конец'}: ${Math.max(0, value).toFixed(2)} с`
     }
