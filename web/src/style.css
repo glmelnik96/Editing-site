@@ -33,8 +33,14 @@ pre { white-space: pre-wrap; word-break: break-all; padding: 12px; background: #
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff6b6b; pointer-events: none; }
 .tl-hint { height: 18px; font-size: 12px; padding-left: 6px; }
 .editor { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr); gap: 16px; }
-.stage { background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
-.stage video { max-width: 100%; max-height: 100%; }
+/* Высота сцены ограничена, а ширину задаёт пропорция вывода (редактор ставит max-width от неё):
+   иначе 9:16 растягивает сцену на полторы страницы и шкала уезжает под сгиб. */
+.stage { background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center;
+  --stage-h: 52vh; max-height: var(--stage-h); margin-inline: auto; }
+/* Кадр всегда занимает сцену целиком, с сохранением пропорций: прокси меньше сцены (640 px по
+   длинной стороне), и по max-width он вставал бы в свою натуральную величину, оставляя поля.
+   contain повторяет то, что делает сервер при fit=pad, поэтому предпросмотр не расходится с рендером. */
+.stage video { width: 100%; height: 100%; object-fit: contain; }
 .stage.crop video { width: 100%; height: 100%; object-fit: cover; }
 .save-state { font-size: 12px; opacity: .75; }
 

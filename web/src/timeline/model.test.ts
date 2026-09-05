@@ -8,6 +8,7 @@ import {
   moveClip,
   newClipId,
   removeClip,
+  sameOrder,
   sourceTime,
   splitAt,
   timelineStart,
@@ -163,5 +164,21 @@ describe('раскладка в пиксели', () => {
   it('не даёт блоку схлопнуться в невидимую полоску', () => {
     const tiny = layout([clip('c1', 0, 0.1)], 10)
     expect(tiny[0].width).toBeGreaterThanOrEqual(8)
+  })
+})
+
+describe('sameOrder', () => {
+  const c = (id: string): Clip => clip(id, 0, 1)
+
+  it('видит тот же состав в том же порядке', () => {
+    expect(sameOrder([c('c1'), c('c2')], [c('c1'), c('c2')])).toBe(true)
+    // Тот же состав, но времена подтянул сервер — список всё равно «тот же».
+    expect(sameOrder([c('c1')], [{ ...c('c1'), in: 0.3, in_verified: true }])).toBe(true)
+  })
+
+  it('видит смену состава и порядка', () => {
+    expect(sameOrder([c('c1'), c('c2')], [c('c2'), c('c1')])).toBe(false)
+    expect(sameOrder([c('c1')], [c('c1'), c('c2')])).toBe(false)
+    expect(sameOrder([c('c1')], [c('c9')])).toBe(false)
   })
 })

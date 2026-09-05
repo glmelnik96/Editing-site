@@ -6,7 +6,7 @@
  */
 import { escapeHtml } from '../html'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
-import { clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, totalDuration, trimClip, type Clip } from './model'
+import { clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, type Clip } from './model'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -71,6 +71,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     clips: Clip[]
     moved: boolean
   } | null = null
+  // Пришло, пока человек тянул блок. Во время переноса шкалу не пересобираем, иначе блок теряет
+  // подсветку и уезжает не туда: автосохранение отвечает свежим документом ровно посреди
+  // следующего переноса, а подгрузка кадров и волн приходит и того чаще.
+  let pending: Partial<RenderInput> | null = null
 
   // rect уже сдвинут прокруткой .timeline (её предка); scrollLeft — на случай, если сам track когда-то станет скроллиться
   const timeAt = (clientX: number): number => {
@@ -101,6 +105,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   }
 
   function render(input?: Partial<RenderInput>): void {
+    if (drag) {
+      pending = { ...(pending ?? {}), ...input }
+      return
+    }
     current = { ...current, ...input }
     const blocks = layout(current.clips, current.pxPerSec)
     const width = Math.max(200, totalDuration(current.clips) * current.pxPerSec)
@@ -128,34 +136,59 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     })
   }
 
+  /** Догнать то, что приходило во время переноса. Зовётся, когда drag уже снят. */
+  function flushPending(): void {
+    const queued = pending
+    pending = null
+    render(queued ?? undefined)
+  }
+
+  /**
+   * Список, к которому применяем правку: свежий, если он остался тем же по составу и порядку.
+   * Так не теряются резы, подтянутые сервером, пока человек тянул блок; изменился состав —
+   * берём тот список, с которым перенос начинали, иначе индексы уедут.
+   */
+  function targetClips(started: Clip[]): Clip[] {
+    const fresh = pending?.clips
+    return fresh && sameOrder(started, fresh) ? fresh : started
+  }
+
   function finishDrag(clientX: number): void {
     if (!drag) return
-    if (!drag.moved) {
+    const active = drag
+    const at = timeAt(clientX) // считаем в масштабе переноса: pending мог принести другой зум
+    drag = null
+    ghost.hidden = true
+    hint.textContent = ''
+    if (!active.moved) {
       // Клик без переноса: ставим курсор туда, куда ткнули (блок уже выделён в pointerdown).
-      // render() тут не будет — снимаем класс переноса вручную, иначе блок останется затемнённым.
-      track.querySelector(`.block[data-id="${CSS.escape(drag.id)}"]`)?.classList.remove('dragging')
-      handlers.onSeek(timeAt(clientX))
-      ghost.hidden = true
-      drag = null
-      hint.textContent = ''
+      handlers.onSeek(at)
+      flushPending() // снимет и класс переноса: блоки пересобираются заново
       return
     }
-    const dx = clientX - drag.startX
-    if (drag.kind === 'move') {
+    let next: Clip[] | null = null
+    if (active.kind === 'move') {
       // Та же функция, что рисовала призрак: показ и результат не могут разойтись.
-      const preview = dropTarget(current.clips, drag.index, timeAt(clientX))
-      if (preview && preview.to !== drag.index) handlers.onChange(moveClip(drag.clips, drag.index, preview.to))
-      else render()
+      const preview = dropTarget(current.clips, active.index, at)
+      if (preview && preview.to !== active.index) next = moveClip(targetClips(active.clips), active.index, preview.to)
     } else {
-      const clip = drag.clips[drag.index]
-      const delta = dx / current.pxPerSec
+      const clip = active.clips[active.index]
+      const delta = (clientX - active.startX) / current.pxPerSec
       const duration = current.assets.get(clip.asset_id)?.duration ?? undefined
-      const edges = drag.kind === 'in' ? { in: ms(clip.in + delta) } : { out: ms(clip.out + delta) }
-      handlers.onChange(trimClip(drag.clips, clip.id, edges, { duration: duration ?? undefined }))
+      const edges = active.kind === 'in' ? { in: ms(clip.in + delta) } : { out: ms(clip.out + delta) }
+      next = trimClip(targetClips(active.clips), clip.id, edges, { duration: duration ?? undefined })
     }
-    ghost.hidden = true
+    flushPending()
+    if (next) handlers.onChange(next)
+  }
+
+  /** Перенос отменён системой (жест перехватил браузер): возвращаем всё как было, правки нет. */
+  function abortDrag(): void {
+    if (!drag) return
     drag = null
+    ghost.hidden = true
     hint.textContent = ''
+    flushPending()
   }
 
   track.addEventListener('pointerdown', event => {
@@ -179,10 +212,11 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           : rect.right - event.clientX < HANDLE_PX
             ? 'out'
             : 'move'
+    // Выделение перерисовываем до начала переноса: с этого момента шкала заморожена и render()
+    // только копит пришедшее.
+    render()
     drag = { id, index, kind, startX: event.clientX, clips: current.clips, moved: false }
     track.setPointerCapture(event.pointerId)
-    render()
-    // Помечаем переносимый блок отдельным классом — render() пересобирает блоки заново, поэтому это после него.
     track.querySelector(`.block[data-id="${CSS.escape(id)}"]`)?.classList.add('dragging')
   })
 
@@ -207,11 +241,12 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     }
   })
 
-  const stop = (event: PointerEvent) => {
-    if (drag) finishDrag(event.clientX)
-  }
-  track.addEventListener('pointerup', stop)
-  track.addEventListener('pointercancel', stop)
+  track.addEventListener('pointerup', event => finishDrag(event.clientX))
+  // Отмена — это не «отпустил здесь»: раньше прерванный жест применял перенос по последней
+  // точке, и клип вставал не туда, куда его вели.
+  track.addEventListener('pointercancel', abortDrag)
+  // Страховка: если захват потерян, а pointerup до нас не дошёл, шкала осталась бы замороженной.
+  track.addEventListener('lostpointercapture', abortDrag)
 
   // Полоса перемотки под линейкой и сама линейка: перетаскивание указателем двигает курсор.
   let scrubbing = false

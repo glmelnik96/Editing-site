@@ -270,7 +270,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!project) return
     nameBox.textContent = project.name
     aspectPick.value = project.doc.output.aspect
-    stage.style.aspectRatio = String(aspectRatio(project.doc.output.aspect))
+    const ratio = aspectRatio(project.doc.output.aspect)
+    stage.style.aspectRatio = String(ratio)
+    stage.style.maxWidth = `calc(${ratio} * var(--stage-h))`
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)

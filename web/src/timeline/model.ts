@@ -159,6 +159,17 @@ export function layout(clips: Clip[], pxPerSec: number): Block[] {
  * Считается через ту же moveClip, что выполняет саму правку: иначе показ и результат разъехались бы.
  * Возвращает номер позиции и время начала клипа на новом месте.
  */
+/**
+ * Тот же ли это список: та же длина и те же клипы в том же порядке.
+ *
+ * Нужно, когда перенос уже начался, а список успел обновиться (ответ сервера с подтянутыми
+ * резами). Состав прежний — можно переносить в свежем списке и не терять правки сервера;
+ * состав изменился — индексы переноса к нему уже не относятся.
+ */
+export function sameOrder(a: Clip[], b: Clip[]): boolean {
+  return a.length === b.length && a.every((clip, i) => clip.id === b[i].id)
+}
+
 export function dropTarget(clips: Clip[], from: number, time: number): { to: number; start: number } | null {
   if (from < 0 || from >= clips.length) return null
   const found = clipAt(clips, time)
