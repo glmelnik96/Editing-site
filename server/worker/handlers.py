@@ -8,16 +8,21 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 from server.app.config import Settings
 from server.app.jobs import enqueue_job
-from server.app.storage import asset_dir
-from server.app.util import now_iso
+from server.app.projects.store import assets_of, get_project
+from server.app.storage import asset_dir, render_dir
+from server.app.util import iso, new_id, now_iso, utcnow
+from server.db.core import transaction
 from server.media.audio import analyze_audio, wav_args
 from server.media.probe import probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
+from server.media.render import RenderInvalid, SourceInfo, build_render_command, total_duration
 from server.media.run import MediaError, run_streaming, run_tool
 from server.media.thumbs import grid_layout, thumbs_args, thumbs_meta
 
@@ -189,4 +194,104 @@ def handle_proxy(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row)
     log.info("proxy: %s готов", asset["id"])
 
 
-HANDLERS = {"analyze": handle_analyze, "proxy": handle_proxy}
+RENDER_READY_STATUSES = ("ready", "proxy_ready")
+# Грубая оценка веса результата: точно не посчитать, но порядок величины отсекает
+# заведомо безнадёжный запуск до того, как ffmpeg заполнит диск.
+BITRATE_BY_QUALITY = {"draft": 2_000_000, "final": 5_000_000}
+SIZE_SAFETY = 2
+
+
+def disk_free_bytes(path: Path) -> int:
+    return shutil.disk_usage(path).free
+
+
+def _sources_for(
+    conn: sqlite3.Connection, settings: Settings, project: dict, owner_id: str
+) -> dict[str, SourceInfo]:
+    """Пути к исходникам проекта. Ассет мог исчезнуть или откатиться в обработку с момента сохранения."""
+    sources: dict[str, SourceInfo] = {}
+    for asset_id in sorted(assets_of(project["doc"])):
+        # Фильтр по владельцу тут избыточен (документ проверялся при сохранении), но стоит одного
+        # условия и снимает вопрос: собрать чужой файл нельзя даже при испорченном документе.
+        row = conn.execute(
+            "SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, owner_id)
+        ).fetchone()
+        if row is None:
+            raise MediaError("asset_gone", f"файл {asset_id} удалён, пересоберите проект")
+        if row["status"] not in RENDER_READY_STATUSES:
+            raise MediaError("asset_not_ready", f"файл {row['original_name']} ещё обрабатывается")
+        folder = asset_dir(settings, row["user_id"], row["id"])
+        name = "subs.vtt" if row["kind"] == "subtitle" else f"source.{row['ext']}"
+        sources[asset_id] = SourceInfo(
+            path=str(folder / name),
+            duration=float(row["duration"] or 0),
+            has_audio=bool(row["has_audio"]),
+        )
+    return sources
+
+
+def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:
+    """Собирает проект в один файл. Строка рендера появляется только после успеха."""
+    from server.worker.queue import is_canceled, set_progress
+
+    project = get_project(conn, job["user_id"], job["target_id"])
+    if project is None:
+        log.info("render: проект %s уже удалён, пропускаем", job["target_id"])
+        return
+
+    params = json.loads(job["params"] or "{}")
+    quality = params.get("quality", "draft")
+    duration = total_duration(project["doc"])
+    if duration <= 0:
+        raise MediaError("empty_project", "в проекте нет клипов")
+
+    sources = _sources_for(conn, settings, project, job["user_id"])
+    estimate = int(BITRATE_BY_QUALITY.get(quality, 5_000_000) / 8 * duration * SIZE_SAFETY)
+    if disk_free_bytes(settings.data_dir) < estimate:
+        raise MediaError("disk_low", "на диске мало места для сборки, освободите его и повторите")
+
+    render_id = new_id("rnd")
+    folder = render_dir(settings, job["user_id"], project["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    dst = folder / f"{render_id}.mp4"
+    tmp = dst.with_suffix(dst.suffix + ".part")
+
+    try:
+        args = build_render_command(
+            project["doc"], sources=sources, quality=quality, settings=settings, out_path=str(tmp)
+        )
+    except RenderInvalid as exc:
+        raise MediaError("bad_project", str(exc)) from exc
+
+    def on_line(line: str) -> None:
+        value = parse_progress(line, total=duration)
+        if value is not None:
+            set_progress(conn, job["id"], value)
+
+    try:
+        run_streaming(
+            args,
+            timeout=settings.render_timeout_sec,
+            on_line=on_line,
+            should_stop=lambda: is_canceled(conn, job["id"]),
+        )
+    except MediaError:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(dst)
+
+    now = utcnow()
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
+            "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                render_id, project["id"], job["user_id"], job["id"], quality, str(dst),
+                dst.stat().st_size, duration, iso(now),
+                iso(now + timedelta(hours=settings.render_ttl_hours)),
+            ),
+        )
+    log.info("render: %s готов (%s, %.1f с)", render_id, quality, duration)
+
+
+HANDLERS = {"analyze": handle_analyze, "proxy": handle_proxy, "render": handle_render}

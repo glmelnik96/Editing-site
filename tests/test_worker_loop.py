@@ -88,8 +88,14 @@ def test_canceled_job_is_left_canceled(conn, settings, monkeypatch):
 
 
 def test_unknown_job_type_fails_loudly(conn, settings, monkeypatch):
+    """Задание без обработчика падает с внятной ошибкой, а не молча теряется.
+
+    Все типы полосы cpu обработчики теперь имеют, поэтому пропажу изображаем подменой набора:
+    так же выглядел бы старый воркер, встретивший задание нового типа после отката версии.
+    """
     job_id = enqueue_job(conn, user_id=USER, type_="render", target_id="prj_1")
-    worker_main.run_once(conn, settings)  # обработчика render в M1b нет
+    monkeypatch.delitem(worker_main.HANDLERS, "render")
+    worker_main.run_once(conn, settings)
     row = conn.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,)).fetchone()
     assert row["status"] == "failed" and "render" in row["error"]
 

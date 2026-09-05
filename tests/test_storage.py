@@ -7,6 +7,8 @@ from server.app.storage import (
     file_url,
     kind_from_ext,
     parse_file_url,
+    render_dir,
+    render_url,
     safe_ext,
     upload_path,
 )
@@ -42,6 +44,18 @@ def test_paths_come_from_ids_only(tmp_path):
             asset_dir(s, bad, "ast_0123456789ab")
     with pytest.raises(ValueError):
         upload_path(s, "../x")
+
+
+def test_render_paths_come_from_ids(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert render_dir(s, "usr_0123456789ab", "prj_0123456789ab") == (
+        tmp_path / "d" / "usr_0123456789ab" / "projects" / "prj_0123456789ab" / "renders"
+    )
+    assert render_url("usr_0123456789ab", "prj_0123456789ab", "rnd_0123456789ab") == (
+        "/files/usr_0123456789ab/projects/prj_0123456789ab/renders/rnd_0123456789ab.mp4"
+    )
+    with pytest.raises(ValueError):
+        render_dir(s, "../../etc", "prj_0123456789ab")
 
 
 def test_file_url_roundtrip():

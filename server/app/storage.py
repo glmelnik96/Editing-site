@@ -51,6 +51,16 @@ def asset_dir(settings: Settings, user_id: str, asset_id: str) -> Path:
     return settings.data_dir / _check_id(user_id) / "assets" / _check_id(asset_id)
 
 
+def render_dir(settings: Settings, user_id: str, project_id: str) -> Path:
+    _check_id(user_id)
+    _check_id(project_id)
+    return settings.data_dir / user_id / "projects" / project_id / "renders"
+
+
+def render_url(user_id: str, project_id: str, render_id: str) -> str:
+    return f"/files/{user_id}/projects/{project_id}/renders/{render_id}.mp4"
+
+
 def upload_path(settings: Settings, upload_id: str) -> Path:
     return settings.uploads_tmp_path / _check_id(upload_id)
 
