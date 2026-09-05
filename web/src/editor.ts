@@ -7,10 +7,12 @@
  */
 import { api, ApiError } from './api'
 import type { Asset } from './assets'
+import { createHistory } from './history'
 import { escapeHtml } from './html'
 import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
-import { createCheckpoint, createSaver, loadProject, type FieldError, type Project } from './project'
+import { createCheckpoint, createSaver, loadProject, type FieldError, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
+import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountSource } from './source'
 import { mountTimeline, type AssetInfo } from './timeline/view'
@@ -30,7 +32,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <strong id="ed-name">Проект</strong>
       <span class="save-state" id="ed-state">загрузка…</span>
       <span id="ed-notice" class="muted"></span>
-      <span class="muted">пробел — играть, стрелки — шаг, Shift — точнее</span>
+      <span class="muted">пробел — играть, стрелки — шаг, Shift — точнее, Ctrl+Z — отменить</span>
     </header>
     <div class="editor">
       <section class="side">
@@ -40,6 +42,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <section>
         <div class="stage" id="ed-stage"></div>
         <div class="row">
+          <button id="ed-undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
           <button id="ed-play" type="button">▶</button>
           <button id="ed-split" type="button">Разрезать</button>
           <button id="ed-delete" type="button">Удалить клип</button>
@@ -49,7 +52,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <select id="ed-aspect">
             <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
           </select>
-          <span class="muted" id="ed-time">0:00.0</span>
+          <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
           <span class="muted" id="ed-total"></span>
         </div>
         <div id="ed-timeline"></div>
@@ -62,9 +65,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const noticeBox = el.querySelector('#ed-notice') as HTMLElement
   const stage = el.querySelector('#ed-stage') as HTMLElement
   const totalBox = el.querySelector('#ed-total') as HTMLElement
-  const timeBox = el.querySelector('#ed-time') as HTMLElement
   const errorBox = el.querySelector('#ed-error') as HTMLPreElement
   const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
+  const history = createHistory<ProjectDoc>(5)
+  const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
+  const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
 
   let project: Project | null = null
   let assets = new Map<string, AssetInfo>()
@@ -77,6 +82,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
 
+  /** Запомнить состояние ДО правки: именно к нему вернёт кнопка «Отменить». */
+  function remember(): void {
+    if (project) history.push(project.doc)
+    undoButton.disabled = !history.canUndo()
+  }
+
   const showError = (e: unknown) => {
     errorBox.hidden = false
     errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
@@ -88,7 +99,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   }
 
   function showTime(): void {
-    timeBox.textContent = `${timelineTime.toFixed(1)} с`
+    if (document.activeElement !== gotoInput) {
+      gotoInput.value = formatTimecode(timelineTime)
+      gotoInput.classList.remove('bad')
+    }
+    totalBox.textContent = project ? `из ${formatTimecode(totalDuration(project.doc.clips))}` : ''
   }
 
   const saver = createSaver({
@@ -99,6 +114,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     },
     onConflict: fresh => {
       project = fresh
+      history.clear()
+      undoButton.disabled = true
       render()
       notice('Проект изменился в другом месте, показана свежая версия')
     },
@@ -222,6 +239,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function applyClips(clips: Clip[]): void {
     if (!project) return
+    remember()
     project = { ...project, doc: { ...project.doc, clips } }
     render()
     saver.schedule(project)
@@ -251,7 +269,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     aspectPick.value = project.doc.output.aspect
     stage.style.aspectRatio = String(aspectRatio(project.doc.output.aspect))
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
-    totalBox.textContent = `${totalDuration(project.doc.clips).toFixed(1)} с`
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
     showTime()
@@ -302,10 +319,42 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   aspectPick.addEventListener('change', () => {
     if (!project) return
+    remember()
     const aspect = aspectPick.value as '16:9' | '9:16' | '1:1'
     project = { ...project, doc: { ...project.doc, output: { ...project.doc.output, aspect } } }
     render()
     saver.schedule(project)
+  })
+
+  function undo(): void {
+    if (!project) return
+    const previous = history.undo()
+    undoButton.disabled = !history.canUndo()
+    if (!previous) return
+    project = { ...project, doc: previous }
+    render()
+    saver.schedule(project)
+    if (playing) seek(Math.min(timelineTime, totalDuration(previous.clips)))
+    notice('Действие отменено')
+  }
+  undoButton.addEventListener('click', undo)
+
+  function applyGoto(): void {
+    if (!project) return
+    const parsed = parseTimecode(gotoInput.value)
+    if (parsed === null) {
+      gotoInput.classList.add('bad')
+      return
+    }
+    gotoInput.classList.remove('bad')
+    seek(Math.max(0, Math.min(parsed, totalDuration(project.doc.clips))))
+  }
+  gotoInput.addEventListener('change', applyGoto)
+  gotoInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      applyGoto()
+    }
   })
 
   // Клавиши монтажа: пробел — играть/стоп, стрелки — шаг курсора, Home/End — края.
@@ -313,6 +362,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function onKey(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
+    if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') {
+      event.preventDefault()
+      undo()
+      return
+    }
     if (!project) return
     const total = totalDuration(project.doc.clips)
     const step = event.shiftKey ? 0.1 : 1
@@ -349,6 +403,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     }
     stateBox.textContent = STATE_TEXT.idle
     versions = mountVersions(el.querySelector('#ed-versions') as HTMLElement, projectId, restored => {
+      remember()
       project = restored
       timelineTime = 0
       render()
