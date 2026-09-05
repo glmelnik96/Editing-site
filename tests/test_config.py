@@ -85,3 +85,18 @@ def test_empty_tmp_dir_env_means_default(tmp_path, monkeypatch):
     monkeypatch.setenv("VIDEO_TMP_DIR", "")
     s = Settings(_env_file=None, data_dir=tmp_path / "d")
     assert s.tmp_dir is None and s.tmp_path == tmp_path / "d" / "tmp"
+
+
+def test_project_limits_have_sane_defaults():
+    s = Settings(_env_file=None)
+    assert s.max_clips == 100
+    assert s.max_total_duration_sec == 3 * 3600
+    assert s.min_clip_sec == 0.1
+    assert s.snap_window_sec == 0.35
+    assert s.snap_buffer_sec == 0.3
+    assert s.max_projects_per_user == 200
+
+
+def test_snap_window_is_bounded():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, snap_window_sec=-1)

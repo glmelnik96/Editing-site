@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     silence_dense_min_sec: float = Field(default=0.15, gt=0)
     speech_offset_db: float = Field(default=16.0, ge=1.0, le=60.0)
 
+    # Пределы проекта (раздел 4 спеки) и подтяжка резов к паузам (раздел 10.6).
+    max_clips: int = Field(default=100, ge=1, le=1000)
+    max_total_duration_sec: int = Field(default=3 * 3600, ge=1)
+    min_clip_sec: float = Field(default=0.1, gt=0)
+    snap_window_sec: float = Field(default=0.35, ge=0.0, le=5.0)
+    snap_buffer_sec: float = Field(default=0.3, ge=0.0, le=5.0)
+    max_projects_per_user: int = Field(default=200, ge=1)
+
     @field_validator("public_base_url")
     @classmethod
     def _check_public_base_url(cls, value: str) -> str:
