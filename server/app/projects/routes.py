@@ -2,23 +2,26 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.errors import ApiError
+from server.app.jobs import enqueue_job
 from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     ProjectConflict,
     ProjectLimit,
+    active_renders,
     create_checkpoint,
     create_project,
     delete_project,
     finish_project,
     get_project,
     list_projects,
+    list_renders,
     list_versions,
     restore_version,
     save_project,
@@ -242,3 +245,59 @@ def restore(
     except KeyError as exc:
         raise ApiError(404, "not_found", "Точка сохранения не найдена") from exc
     return ProjectView(**project)
+
+
+class RenderRequest(BaseModel):
+    quality: Literal["draft", "final"] = "draft"
+
+
+class RenderQueued(BaseModel):
+    job_id: str
+    quality: str
+
+
+class RenderView(BaseModel):
+    id: str
+    project_id: str
+    quality: str
+    size: int
+    duration: float
+    created_at: str
+    expires_at: str
+    download: str
+
+
+class RenderList(BaseModel):
+    renders: list[RenderView]
+
+
+@router.post("/{project_id}/render", status_code=202, response_model=RenderQueued)
+def render(
+    project_id: str,
+    body: RenderRequest,
+    request: Request,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> RenderQueued:
+    """Ставит сборку в очередь. Ход виден в задании, готовый ролик появится в списке рендеров."""
+    project = _owned(conn, user, project_id)
+    if not project["doc"].get("clips"):
+        raise ApiError(422, "empty_project", "В проекте нет клипов")
+    settings = request.app.state.settings
+    # Предел считает и очередь, и выполняющееся: на слабой машине третий всё равно ждёт.
+    if active_renders(conn, user.id) > settings.max_renders_queued:
+        raise ApiError(409, "too_many_renders", "Уже собирается слишком много роликов, подождите")
+    job_id = enqueue_job(
+        conn, user_id=user.id, type_="render", target_id=project_id, params={"quality": body.quality}
+    )
+    return RenderQueued(job_id=job_id, quality=body.quality)
+
+
+@router.get("/{project_id}/renders", response_model=RenderList)
+def renders(
+    project_id: str,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> RenderList:
+    _owned(conn, user, project_id)
+    return RenderList(renders=[RenderView(**r) for r in list_renders(conn, user.id, project_id)])

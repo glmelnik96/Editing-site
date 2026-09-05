@@ -9,11 +9,12 @@ import json
 import logging
 import shutil
 import sqlite3
+from pathlib import Path
 
 from server.app.config import Settings
 from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
 from server.app.projects.snap import snap_clips
-from server.app.storage import asset_dir
+from server.app.storage import asset_dir, render_dir, render_url
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
 
@@ -220,7 +221,7 @@ def projects_using_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) 
 def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str) -> dict:
     """Завершение: проект остаётся историей, а его ассеты удаляются, если больше нигде не нужны.
 
-    Рендеры появятся в M3 и будут удаляться здесь же.
+    Рендеры проекта удаляются вместе с файлами: документ сохраняется, ролик пересобирается.
     """
     project = get_project(conn, user_id, project_id)
     if project is None:
@@ -233,6 +234,8 @@ def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, p
                 (now, now, project_id),
             )
         project = {**project, "status": "finished", "finished_at": now, "updated_at": now}
+    # Рендеры завершённого проекта не нужны никому: они собираются заново из документа.
+    delete_project_renders(conn, settings, user_id, project_id)
     for asset_id in sorted(assets_of(project["doc"])):
         with transaction(conn):
             # Проверяем занятость и удаляем в одной транзакции: иначе ассет успеет попасть
@@ -327,3 +330,71 @@ def restore_version(
         conn, settings, user_id, project_id,
         name=row["name"], raw_doc=json.loads(row["doc"]), version=current["version"],
     )
+
+
+def _render_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "quality": row["quality"],
+        "size": row["size"],
+        "duration": row["duration"],
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+        "download": render_url(row["user_id"], row["project_id"], row["id"]),
+    }
+
+
+def list_renders(conn: sqlite3.Connection, user_id: str, project_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM renders WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC, id",
+        (project_id, user_id),
+    )
+    return [_render_row(r) for r in rows]
+
+
+def get_render(conn: sqlite3.Connection, user_id: str, render_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM renders WHERE id = ? AND user_id = ?", (render_id, user_id)
+    ).fetchone()
+    return _render_row(row) if row else None
+
+
+def delete_render(conn: sqlite3.Connection, user_id: str, render_id: str) -> bool:
+    """Сначала запись, потом файл: упавший процесс не оставит запись без файла."""
+    row = conn.execute(
+        "SELECT path FROM renders WHERE id = ? AND user_id = ?", (render_id, user_id)
+    ).fetchone()
+    if row is None:
+        return False
+    with transaction(conn):
+        conn.execute("DELETE FROM renders WHERE id = ? AND user_id = ?", (render_id, user_id))
+    Path(row["path"]).unlink(missing_ok=True)
+    return True
+
+
+def active_renders(conn: sqlite3.Connection, user_id: str) -> int:
+    """Сколько сборок человек уже запустил: очередь плюс выполняющаяся."""
+    return conn.execute(
+        "SELECT count(*) FROM jobs WHERE user_id = ? AND type = 'render' "
+        "AND status IN ('queued', 'running')",
+        (user_id,),
+    ).fetchone()[0]
+
+
+def delete_project_renders(
+    conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str
+) -> int:
+    """Удаляет все готовые ролики проекта вместе с файлами и каталогом."""
+    rows = conn.execute(
+        "SELECT id FROM renders WHERE project_id = ? AND user_id = ?", (project_id, user_id)
+    ).fetchall()
+    with transaction(conn):
+        conn.execute(
+            "DELETE FROM renders WHERE project_id = ? AND user_id = ?", (project_id, user_id)
+        )
+    folder = render_dir(settings, user_id, project_id)
+    shutil.rmtree(folder, ignore_errors=True)
+    if folder.exists():
+        log.warning("не удалось удалить каталог рендеров %s", folder)
+    return len(rows)
