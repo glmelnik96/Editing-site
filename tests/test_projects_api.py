@@ -176,3 +176,56 @@ def test_save_without_a_document_is_rejected(client, login_as, settings):
         assert r.status_code == 422, r.text
     still = client.get(f"/api/v1/projects/{p['id']}").json()
     assert still["version"] == 1 and still["doc"]["clips"]
+
+
+def test_checkpoints_list_restore(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
+
+    r = client.post(f"/api/v1/projects/{p['id']}/checkpoint", json={"label": "до правок"})
+    assert r.status_code == 201, r.text
+    point = r.json()
+    assert point["label"] == "до правок" and point["clips_count"] == 1
+
+    bad = {"clips": [{"asset_id": VIDEO, "in": 0, "out": 30}]}
+    client.put(f"/api/v1/projects/{p['id']}", json={"name": "Испорчено", "version": 1, "doc": bad})
+
+    versions = client.get(f"/api/v1/projects/{p['id']}/versions").json()["versions"]
+    assert [v["label"] for v in versions] == ["до правок"]
+
+    r = client.post(f"/api/v1/projects/{p['id']}/restore", json={"version_id": point["id"]})
+    assert r.status_code == 200, r.text
+    restored = r.json()
+    assert restored["version"] == 3 and restored["name"] == "Мой"
+    assert restored["doc"]["clips"][0]["out"] == 5.0
+
+
+def test_checkpoint_without_a_label(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
+    r = client.post(f"/api/v1/projects/{p['id']}/checkpoint", json={})
+    assert r.status_code == 201 and r.json()["label"] == ""
+
+
+def test_restore_of_a_foreign_point_is_404(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
+    r = client.post(f"/api/v1/projects/{p['id']}/restore", json={"version_id": "pvr_00000000dead"})
+    assert r.status_code == 404
+
+
+def test_versions_of_a_foreign_project_are_404(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    assert client.get(f"/api/v1/projects/{p['id']}/versions").status_code == 404
+    assert client.post(f"/api/v1/projects/{p['id']}/checkpoint", json={}).status_code == 404

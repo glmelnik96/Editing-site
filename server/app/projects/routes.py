@@ -13,11 +13,14 @@ from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     ProjectConflict,
     ProjectLimit,
+    create_checkpoint,
     create_project,
     delete_project,
     finish_project,
     get_project,
     list_projects,
+    list_versions,
+    restore_version,
     save_project,
 )
 from server.db.core import get_db
@@ -164,4 +167,78 @@ def finish(
         project = finish_project(conn, request.app.state.settings, user.id, project_id)
     except KeyError as exc:
         raise ApiError(404, "not_found", "Проект не найден") from exc
+    return ProjectView(**project)
+
+
+class CheckpointCreate(BaseModel):
+    label: str = Field(default="", max_length=200)
+
+
+class RestoreRequest(BaseModel):
+    version_id: str = Field(min_length=1, max_length=64)
+
+
+class VersionView(BaseModel):
+    id: str
+    version: int
+    label: str
+    name: str
+    created_at: str
+    clips_count: int
+    duration: float
+
+
+class VersionList(BaseModel):
+    versions: list[VersionView]
+
+
+@router.post("/{project_id}/checkpoint", status_code=201, response_model=VersionView)
+def checkpoint(
+    project_id: str,
+    body: CheckpointCreate,
+    request: Request,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> VersionView:
+    _owned(conn, user, project_id)
+    try:
+        made = create_checkpoint(
+            conn, request.app.state.settings, user.id, project_id, label=body.label
+        )
+    except ProjectInvalid as exc:
+        raise invalid(exc) from exc
+    except KeyError as exc:
+        raise ApiError(404, "not_found", "Проект не найден") from exc
+    return VersionView(**made)
+
+
+@router.get("/{project_id}/versions", response_model=VersionList)
+def versions(
+    project_id: str,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> VersionList:
+    _owned(conn, user, project_id)
+    return VersionList(versions=[VersionView(**v) for v in list_versions(conn, user.id, project_id)])
+
+
+@router.post("/{project_id}/restore", response_model=ProjectView)
+def restore(
+    project_id: str,
+    body: RestoreRequest,
+    request: Request,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> ProjectView:
+    _owned(conn, user, project_id)
+    try:
+        project = restore_version(
+            conn, request.app.state.settings, user.id, project_id, body.version_id
+        )
+    except ProjectInvalid as exc:
+        raise invalid(exc) from exc
+    except ProjectConflict as exc:
+        raise conflict(exc) from exc
+    except KeyError as exc:
+        raise ApiError(404, "not_found", "Точка сохранения не найдена") from exc
     return ProjectView(**project)
