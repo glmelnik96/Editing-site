@@ -246,3 +246,84 @@ def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, p
             # Записи уже нет, а каталог остался: место займёт janitor, но знать об этом надо.
             log.warning("не удалось удалить каталог ассета %s", folder)
     return project
+
+
+MAX_LABEL = 200
+
+
+def _version_row(row: sqlite3.Row) -> dict:
+    doc = json.loads(row["doc"])
+    clips = doc.get("clips") or []
+    return {
+        "id": row["id"],
+        "version": row["version"],
+        "label": row["label"],
+        "name": row["name"],
+        "created_at": row["created_at"],
+        "clips_count": len(clips),
+        "duration": round(sum(c["out"] - c["in"] for c in clips), 3),
+    }
+
+
+def create_checkpoint(
+    conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str, *, label: str
+) -> dict:
+    """Снимок текущего состояния проекта. Старые снимки сверх пула вытесняются."""
+    label = (label or "").strip()
+    if len(label) > MAX_LABEL:
+        raise ProjectInvalid([{"field": "label", "message": f"имя точки не длиннее {MAX_LABEL} знаков"}])
+    project = get_project(conn, user_id, project_id)
+    if project is None:
+        raise KeyError(project_id)
+    if project["status"] != "draft":
+        raise ProjectInvalid([{"field": "status", "message": "завершённый проект не сохраняется"}])
+    row_id = new_id("pvr")
+    now = now_iso()
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO project_versions (id, project_id, user_id, version, label, name, doc, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row_id, project_id, user_id, project["version"], label, project["name"],
+                json.dumps(project["doc"], ensure_ascii=False), now,
+            ),
+        )
+        # Пул маленький: держим только самые свежие точки этого проекта.
+        conn.execute(
+            "DELETE FROM project_versions WHERE project_id = ? AND id NOT IN "
+            "(SELECT id FROM project_versions WHERE project_id = ? ORDER BY rowid DESC LIMIT ?)",
+            (project_id, project_id, settings.versions_kept),
+        )
+    return {
+        "id": row_id, "version": project["version"], "label": label, "name": project["name"],
+        "created_at": now, "clips_count": len(project["doc"].get("clips") or []),
+        "duration": round(sum(c["out"] - c["in"] for c in project["doc"].get("clips") or []), 3),
+    }
+
+
+def list_versions(conn: sqlite3.Connection, user_id: str, project_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM project_versions WHERE project_id = ? AND user_id = ? ORDER BY rowid DESC",
+        (project_id, user_id),
+    )
+    return [_version_row(r) for r in rows]
+
+
+def restore_version(
+    conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str, version_id: str
+) -> dict:
+    """Возврат к точке: снимок применяется как обычное сохранение, поэтому версия растёт,
+    а сама точка остаётся в пуле — откатить откат тоже можно."""
+    row = conn.execute(
+        "SELECT * FROM project_versions WHERE id = ? AND project_id = ? AND user_id = ?",
+        (version_id, project_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise KeyError(version_id)
+    current = get_project(conn, user_id, project_id)
+    if current is None:
+        raise KeyError(project_id)
+    return save_project(
+        conn, settings, user_id, project_id,
+        name=row["name"], raw_doc=json.loads(row["doc"]), version=current["version"],
+    )
