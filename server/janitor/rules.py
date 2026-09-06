@@ -106,12 +106,20 @@ def _older_than(path: Path, now: datetime, seconds: int) -> bool:
 
 
 def delete_orphans(conn: sqlite3.Connection, settings: Settings, now: datetime) -> int:
-    """Папки ассетов без записи и файлы загрузок без записи, старше часа."""
+    """Папки ассетов и проектов без записи и файлы загрузок без записи, старше часа."""
     count = 0
     known_assets = {r[0] for r in conn.execute("SELECT id FROM assets")}
     for assets_root in settings.data_dir.glob("usr_*/assets"):
         for d in assets_root.iterdir():
             if d.is_dir() and d.name not in known_assets and _older_than(d, now, ORPHAN_MIN_AGE_SEC):
+                _rmtree(d)
+                count += 1
+    # Каталог проекта переживает саму запись, если удаление оборвалось на полпути: в нём лежат
+    # готовые ролики и кэш субтитров — по файлу на каждую собранную версию.
+    known_projects = {r[0] for r in conn.execute("SELECT id FROM projects")}
+    for projects_root in settings.data_dir.glob("usr_*/projects"):
+        for d in projects_root.iterdir():
+            if d.is_dir() and d.name not in known_projects and _older_than(d, now, ORPHAN_MIN_AGE_SEC):
                 _rmtree(d)
                 count += 1
     known_uploads = {r[0] for r in conn.execute("SELECT id FROM uploads")}

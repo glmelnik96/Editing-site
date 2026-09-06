@@ -58,20 +58,20 @@ def transcript_path(settings: Settings, user_id: str, asset_id: str) -> Path:
     return asset_dir(settings, user_id, asset_id) / TRANSCRIPT_NAME
 
 
-def _project_dir(settings: Settings, user_id: str, project_id: str) -> Path:
+def project_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     _check_id(user_id)
     _check_id(project_id)
     return settings.data_dir / user_id / "projects" / project_id
 
 
 def render_dir(settings: Settings, user_id: str, project_id: str) -> Path:
-    return _project_dir(settings, user_id, project_id) / "renders"
+    return project_dir(settings, user_id, project_id) / "renders"
 
 
 def subs_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     """Кэш субтитров проекта: имя файла — версия проекта, поэтому правка документа не может
     отдать старые реплики. Наружу этот каталог не отдаётся (см. parse_file_url)."""
-    return _project_dir(settings, user_id, project_id) / "subs"
+    return project_dir(settings, user_id, project_id) / "subs"
 
 
 def render_url(user_id: str, project_id: str, render_id: str) -> str:

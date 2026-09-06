@@ -15,7 +15,7 @@ from pathlib import Path
 from server.app.config import Settings
 from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
 from server.app.projects.snap import snap_clips
-from server.app.storage import asset_dir, render_dir, render_url, subs_dir, transcript_path
+from server.app.storage import asset_dir, project_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
 from server.media.cues import build_cues
@@ -187,12 +187,23 @@ def save_project(
     }
 
 
-def delete_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> bool:
+def delete_project(
+    conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str
+) -> bool:
+    """Удаляет проект вместе с его каталогом на диске.
+
+    Сначала запись, потом файлы, как везде: упавший процесс не оставит запись без файлов.
+    В каталоге лежат готовые ролики и кэш субтитров — по файлу на каждую версию, для которой
+    собирали ролик, так что без уборки он растёт с каждой правкой документа.
+    """
     with transaction(conn):
         cur = conn.execute(
             "DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
         )
-    return cur.rowcount > 0
+    if cur.rowcount == 0:
+        return False
+    shutil.rmtree(project_dir(settings, user_id, project_id), ignore_errors=True)
+    return True
 
 
 def assets_in_drafts(conn: sqlite3.Connection) -> set[str]:

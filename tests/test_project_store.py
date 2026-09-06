@@ -161,9 +161,25 @@ def test_save_touches_the_assets_it_uses(conn, settings):
 
 def test_delete_is_scoped_and_returns_whether_it_deleted(conn, settings):
     p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    assert delete_project(conn, OTHER, p["id"]) is False
-    assert delete_project(conn, USER, p["id"]) is True
+    assert delete_project(conn, settings, OTHER, p["id"]) is False
+    assert delete_project(conn, settings, USER, p["id"]) is True
     assert get_project(conn, USER, p["id"]) is None
+
+
+def test_delete_takes_the_project_folder_with_it(conn, settings):
+    """В каталоге проекта лежат ролики и кэш субтитров — по файлу на каждую собранную версию.
+    Без уборки он растёт с каждой правкой документа и остаётся навсегда."""
+    from server.app.storage import project_dir
+
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    folder = project_dir(settings, USER, p["id"])
+    (folder / "subs").mkdir(parents=True)
+    (folder / "subs" / "1.srt").write_text("1", encoding="utf-8")
+
+    assert delete_project(conn, settings, OTHER, p["id"]) is False
+    assert folder.exists(), "чужое удаление не должно трогать файлы"
+    assert delete_project(conn, settings, USER, p["id"]) is True
+    assert not folder.exists()
 
 
 def test_assets_of_lists_every_referenced_asset(conn, settings):

@@ -152,10 +152,11 @@ def save(
 @router.delete("/{project_id}", status_code=204)
 def delete(
     project_id: str,
+    request: Request,
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
-    if not delete_project(conn, user.id, project_id):
+    if not delete_project(conn, request.app.state.settings, user.id, project_id):
         raise ApiError(404, "not_found", "Проект не найден")
     return Response(status_code=204)
 

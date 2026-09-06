@@ -294,3 +294,42 @@ def test_expired_render_deleted_by_someone_else_leaves_no_trace(conn, settings):
     conn.execute("DELETE FROM renders")
     assert rules.delete_expired_renders(conn, NOW) == 0
     assert path.exists()
+
+
+def _project_folder(conn, settings, name="Проект", *, keep_row=True):
+    """Каталог проекта на диске; keep_row=False оставляет каталог сиротой."""
+    from server.app.storage import project_dir
+
+    pid = "prj_000000000009"
+    if keep_row:
+        conn.execute(
+            "INSERT INTO projects (id, user_id, name, doc, created_at, updated_at) "
+            "VALUES (?, ?, ?, '{}', ?, ?)",
+            (pid, USER, name, now_iso(), now_iso()),
+        )
+    folder = project_dir(settings, USER, pid)
+    (folder / "subs").mkdir(parents=True, exist_ok=True)
+    (folder / "subs" / "1.srt").write_text("1", encoding="utf-8")
+    return folder
+
+
+def test_orphan_project_folder_is_collected(conn, settings):
+    """Каталог без записи переживал бы удаление проекта навсегда: в нём ролики и субтитры."""
+    folder = _project_folder(conn, settings, keep_row=False)
+    _age(folder, 2)
+    assert rules.delete_orphans(conn, settings, NOW) == 1
+    assert not folder.exists()
+
+
+def test_folder_of_a_living_project_is_left_alone(conn, settings):
+    folder = _project_folder(conn, settings)
+    _age(folder, 2)
+    assert rules.delete_orphans(conn, settings, NOW) == 0
+    assert folder.exists()
+
+
+def test_fresh_orphan_folder_waits_an_hour(conn, settings):
+    """Каталог мог появиться секунду назад под ещё не сохранённый проект."""
+    folder = _project_folder(conn, settings, keep_row=False)
+    assert rules.delete_orphans(conn, settings, NOW) == 0
+    assert folder.exists()
