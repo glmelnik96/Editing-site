@@ -124,3 +124,23 @@ def test_render_settings_have_sane_defaults():
 def test_render_short_side_is_bounded():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, final_short_side=99)
+
+
+def test_service_tokens_are_read_without_prefix(monkeypatch):
+    """Секреты соседей разложены на ВМ без префикса VIDEO_. Ровно на этом сосед и споткнулся:
+    переменную назвали SERVICE_TOKEN, а настройки искали BOARD_SERVICE_TOKEN, и токен молча не работал."""
+    monkeypatch.setenv("STREAM_SERVICE_TOKEN", "s-secret")
+    monkeypatch.setenv("BOARD_SERVICE_TOKEN", "b-secret")
+    monkeypatch.setenv("VIDEO_STREAM_SERVICE_TOKEN", "мимо")
+    s = Settings(_env_file=None)
+    assert s.stream_service_token == "s-secret"
+    assert s.board_service_token == "b-secret"
+
+
+def test_service_tokens_default_to_empty(monkeypatch):
+    for name in ("STREAM_SERVICE_TOKEN", "BOARD_SERVICE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(_env_file=None)
+    assert s.stream_service_token == "" and s.board_service_token == ""
+    assert s.board_base_url == "http://127.0.0.1:8020"
+    assert s.stream_base_url == "http://127.0.0.1:8014"

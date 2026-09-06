@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Пустая переменная окружения для пути к бинарю значит «искать в PATH», а не запускать пустую строку.
@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     max_renders_queued: int = Field(default=2, ge=1, le=20)
     draft_short_side: int = Field(default=720, ge=240, le=2160)
     final_short_side: int = Field(default=1080, ge=240, le=2160)
+
+    # Единый кабинет: соседи по ВМ. Служебные секреты названы БЕЗ префикса VIDEO_ — так они
+    # разложены в /opt/editing-site/.env (спека §4). validation_alias отменяет env_prefix
+    # только для этих двух полей, остальные читаются как раньше. Ровно на этом споткнулся сосед:
+    # переменную положили как SERVICE_TOKEN, а настройки искали BOARD_SERVICE_TOKEN.
+    stream_service_token: str = Field(default="", validation_alias=AliasChoices("STREAM_SERVICE_TOKEN"))
+    board_service_token: str = Field(default="", validation_alias=AliasChoices("BOARD_SERVICE_TOKEN"))
+    # Ходим на loopback: три сервиса на одной машине, Caddy и интернет тут не при чём.
+    board_base_url: str = "http://127.0.0.1:8020"
+    stream_base_url: str = "http://127.0.0.1:8014"
+    service_timeout_sec: float = Field(default=3.0, gt=0, le=30)
 
     @field_validator("public_base_url")
     @classmethod
