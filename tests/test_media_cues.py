@@ -217,3 +217,17 @@ def test_every_line_of_a_cue_fits_the_width():
     cues = build_cues(words, max_chars=20, max_lines=2, max_dur=4.0)
     assert cues
     assert all(len(line) <= 20 for cue in cues for line in cue["text"].split("\n"))
+
+
+def test_cue_does_not_end_on_a_lonely_number():
+    """Число, оторванное от своей единицы измерения, на границе реплики так же плохо,
+    как и внутри строки: «5» и «кг» должны остаться вместе."""
+    words = [w("Весит", 0.0, 0.5), w("ровно", 0.5, 1.0), w("5", 1.0, 1.2), w("кг", 1.2, 1.6)]
+    cues = build_cues(words, max_chars=12, max_lines=1, max_dur=4.0)
+    assert cues[0]["text"].split()[-1] != "5"
+
+
+def test_cue_does_not_end_on_an_opening_quote():
+    words = [w("Он", 0.0, 0.3), w("сказал", 0.3, 0.9), w("«", 0.9, 1.0), w("привет", 1.0, 1.6)]
+    cues = build_cues(words, max_chars=12, max_lines=1, max_dur=4.0)
+    assert not cues[0]["text"].endswith("«")
