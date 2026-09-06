@@ -26,6 +26,8 @@ def test_view_links_follow_status():
     v = asset_view(_row())
     assert v.files.model_dump() == {
         "proxy": None, "thumbs": None, "thumbs_meta": None, "peaks": None, "analysis": None, "vtt": None,
+        # Транскрипт из статуса не выводится: его наличие приходит из базы отдельным флагом.
+        "transcript": None,
     }
     v = asset_view(_row(status="ready", has_audio=1))
     assert v.has_audio is True and v.files.proxy is None

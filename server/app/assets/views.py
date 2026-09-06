@@ -1,6 +1,8 @@
 """Карточка ассета для API: метаданные и относительные ссылки на производные файлы.
 
 Ссылки выводятся из статуса, а не из наличия файлов на диске: список ассетов не должен ходить на диск.
+Транскрипт из статуса не выводится (его может и не быть), поэтому его наличие передаётся отдельно —
+из базы, тем же одним запросом на весь список.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ class AssetFiles(BaseModel):
     peaks: str | None = None
     analysis: str | None = None
     vtt: str | None = None
+    transcript: str | None = None
 
 
 class AssetView(BaseModel):
@@ -39,7 +42,7 @@ class AssetView(BaseModel):
     files: AssetFiles
 
 
-def asset_files(row: dict | sqlite3.Row) -> AssetFiles:
+def asset_files(row: dict | sqlite3.Row, *, has_transcript: bool = False) -> AssetFiles:
     user_id, asset_id, kind, status = row["user_id"], row["id"], row["kind"], row["status"]
     files = AssetFiles()
     if kind == "subtitle":
@@ -52,10 +55,15 @@ def asset_files(row: dict | sqlite3.Row) -> AssetFiles:
             files.thumbs_meta = file_url(user_id, asset_id, "thumbs.json")
         if status == "proxy_ready":
             files.proxy = file_url(user_id, asset_id, "proxy.mp4" if kind == "video" else "proxy.m4a")
+    if has_transcript:
+        # Ссылка на API, а не на /files/: transcript.json наружу файлом не отдаётся (PUBLIC_FILES),
+        # а ручка тем же адресом выдаёт ещё и SRT с VTT. Наличие приходит извне: оно живёт в базе,
+        # а не выводится из статуса, и ради него список ассетов не должен ходить на диск.
+        files.transcript = f"/api/v1/assets/{asset_id}/transcript"
     return files
 
 
-def asset_view(row: dict | sqlite3.Row) -> AssetView:
+def asset_view(row: dict | sqlite3.Row, *, has_transcript: bool = False) -> AssetView:
     has_audio = row["has_audio"]
     return AssetView(
         id=row["id"],
@@ -73,5 +81,5 @@ def asset_view(row: dict | sqlite3.Row) -> AssetView:
         error=row["error"],
         created_at=row["created_at"],
         last_access_at=row["last_access_at"],
-        files=asset_files(row),
+        files=asset_files(row, has_transcript=has_transcript),
     )
