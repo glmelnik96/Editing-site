@@ -74,6 +74,16 @@ def test_admin_missing_from_a_neighbour_list_is_not_a_denial(conn):
     assert admin_row.admin is True
 
 
+def test_admin_is_always_a_row(conn):
+    """Администратора нет ни в одном списке — он всё равно в таблице: доступ у него из конфигурации.
+    Без этого администратор просто исчезал бы с экрана."""
+    conn.execute("DELETE FROM whitelist WHERE email = ?", (ADMIN,))
+    s = make_settings()
+    view = cabinet.collect(conn, s, clients(lambda r: httpx.Response(200, json={"emails": []}), s))
+    admin_row = next(p for p in view.people if p.email == ADMIN)
+    assert admin_row.admin is True and admin_row.access["video"] is False
+
+
 def test_dead_neighbour_does_not_break_the_others(conn):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/api/v1/admin"):

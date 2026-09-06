@@ -77,6 +77,11 @@ def collect(conn: sqlite3.Connection, settings: Settings, clients: list[RemoteCl
     for people in lists.values():
         if people is not None:
             emails.update(normalize_email(p.email) for p in people)
+    # Администратор виден всегда, даже когда ни в одном списке его нет: доступ у него из
+    # конфигурации сервисов (спека §6). Без этой строки строка администратора просто пропала бы
+    # из таблицы — у нас его в whitelist держать не обязательно, и у соседей тоже.
+    if admin_email:
+        emails.add(admin_email)
 
     rows = []
     for email in sorted(emails):
