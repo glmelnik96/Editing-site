@@ -505,6 +505,54 @@ main.card {
 .secret code { overflow-wrap: anywhere; }
 
 /* ═══ 9. Редактор ════════════════════════════════════════════════════════ */
+
+/* Шапка проекта: название, состояние сохранения и подсказка. Общая шапка приложения одна
+   на всё, второй здесь быть не должно. */
+.project-bar {
+  align-items: baseline;
+  gap: 16px;
+  padding: 0 24px;
+  margin: 16px 0 8px;
+}
+.project-name { overflow-wrap: anywhere; }
+
+/* Вкладки: открыта одна панель, остальные скрыты атрибутом hidden. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.tab {
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 150ms var(--ease), border-color 150ms var(--ease);
+}
+.tab:hover { color: var(--paper); }
+.tab.on {
+  color: var(--brand-ink);
+  background: var(--brand);
+  border-color: var(--brand);
+}
+/* Точка новости: в панели появилось то, чего человек ещё не видел. */
+.tab.news::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--brand);
+  vertical-align: middle;
+}
+.tab.on.news::after { background: var(--brand-ink); }
+
 /* Правила работающего интерфейса: перенесены из прежнего файла и перекрашены
  * на токены. Устройство панелей не менялось. */
 

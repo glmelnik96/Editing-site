@@ -29,19 +29,26 @@ const STATE_TEXT = {
 
 export function mountEditor(el: HTMLElement, projectId: string) {
   el.innerHTML = `
-    <header class="bar">
-      <a class="button" href="#/">← к файлам</a>
-      <strong id="ed-name">Проект</strong>
-      <span class="save-state" id="ed-state">загрузка…</span>
-      <span id="ed-notice" class="muted"></span>
-      <span class="muted">пробел — играть, стрелки — шаг, Shift — точнее, Ctrl+Z — отменить</span>
-    </header>
+    <div class="project-bar row">
+      <a class="btn btn-ghost" href="#/projects">← Проекты</a>
+      <strong id="ed-name" class="display-m project-name">Проект</strong>
+      <span class="small" id="ed-state">загрузка…</span>
+      <span id="ed-notice" class="meta"></span>
+    </div>
     <div class="editor">
       <section class="side">
-        <div id="ed-source"></div>
-        <div id="ed-transcript"></div>
-        <div id="ed-versions"></div>
-        <section id="ed-renders"></section>
+        <nav class="tabs" id="ed-tabs">
+          <button type="button" class="tab" data-tab="source">Исходник</button>
+          <button type="button" class="tab" data-tab="transcript">Текст</button>
+          <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
+          <button type="button" class="tab" data-tab="versions">Точки</button>
+          <button type="button" class="tab" data-tab="renders">Сборка</button>
+        </nav>
+        <div id="ed-source" data-panel="source"></div>
+        <div id="ed-transcript" data-panel="transcript" hidden></div>
+        <div id="ed-subtitles" data-panel="subtitles" hidden></div>
+        <div id="ed-versions" data-panel="versions" hidden></div>
+        <section id="ed-renders" data-panel="renders" hidden></section>
       </section>
       <section>
         <div class="stage" id="ed-stage"></div>
@@ -270,6 +277,55 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   // пересоздаёт при каждом выборе файла, а этот слушатель переживает пересоздание.
   sourceBox.addEventListener('timeupdate', event => transcript.setTime((event.target as HTMLMediaElement).currentTime), true)
 
+  /* ═══ Вкладки левой колонки ═══════════════════════════════════════════════
+   *
+   * Пять панелей разом спорили за внимание, а нужна почти всегда одна. Панель монтируется при
+   * первом открытии своей вкладки и дальше живёт: перезагружать транскрипт на каждый клик незачем.
+   */
+  const tabsBar = el.querySelector('#ed-tabs') as HTMLElement
+  const panels = new Map<string, HTMLElement>(
+    Array.from(el.querySelectorAll<HTMLElement>('[data-panel]')).map(node => [node.dataset.panel ?? '', node]),
+  )
+  const mounted = new Set<string>(['source', 'transcript']) // эти нужны сразу: на них завязан выбор файла
+  let tab = 'source'
+  let booted = false
+
+  function openPanel(name: string): void {
+    if (mounted.has(name) || !booted) return
+    mounted.add(name)
+    if (name === 'versions') {
+      versions = mountVersions(panels.get('versions') as HTMLElement, projectId, restored => {
+        remember()
+        project = restored
+        timelineTime = 0
+        render()
+        // Документ подменили целиком: играющий клип мог исчезнуть, встаём заново на начало.
+        if (playing) seek(0)
+        notice('Вернулись к сохранённой точке')
+      })
+    }
+    if (name === 'renders') {
+      renders = mountRender(panels.get('renders') as HTMLElement, projectId, async () => {
+        if (project && saver.pending()) await saver.flush(project)
+      })
+    }
+  }
+
+  function showTab(name: string): void {
+    tab = name
+    panels.forEach((panel, key) => (panel.hidden = key !== name))
+    tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button => {
+      button.classList.toggle('on', button.dataset.tab === name)
+      if (button.dataset.tab === name) button.classList.remove('news')
+    })
+    openPanel(name)
+  }
+
+  tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>
+    button.addEventListener('click', () => showTab(button.dataset.tab ?? 'source')),
+  )
+  showTab('source')
+
   function applyClips(clips: Clip[]): void {
     if (!project) return
     remember()
@@ -437,18 +493,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
     }
     stateBox.textContent = STATE_TEXT.idle
-    versions = mountVersions(el.querySelector('#ed-versions') as HTMLElement, projectId, restored => {
-      remember()
-      project = restored
-      timelineTime = 0
-      render()
-      // Документ подменили целиком: играющий клип мог исчезнуть, встаём заново на начало.
-      if (playing) seek(0)
-      notice('Вернулись к сохранённой точке')
-    })
-    renders = mountRender(el.querySelector('#ed-renders') as HTMLElement, projectId, async () => {
-      if (project && saver.pending()) await saver.flush(project)
-    })
+    booted = true
+    // Панель открытой вкладки могла ждать загрузки проекта — теперь ей есть с чем работать.
+    openPanel(tab)
     render()
   }
 
