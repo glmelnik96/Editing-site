@@ -73,6 +73,24 @@ select { padding: 6px 8px; width: 100%; }
 .tc { width: 92px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 .tc.bad { outline: 2px solid #b3261e; }
 
+/* Панель транскрипта: это текст для чтения, поэтому пометки качества тише слов — слабая полоска
+   у подозрительной реплики и пунктир под таймкодом с неподтверждённой границей, всё прочее в
+   подсказке при наведении. Прозрачная рамка стоит у всех реплик, иначе полоска у одной сдвигала
+   бы её текст относительно соседних. */
+/* user-select снят намеренно: протаскивание по тексту — это выбор куска, и синее выделение
+   браузера рисовало бы поверх нашего вторую, спорящую с ним границу. */
+.transcript { max-height: 40vh; overflow-y: auto; margin-top: 8px; font-size: 14px; line-height: 1.7;
+  user-select: none; }
+.tr-seg { margin: 0 0 8px; padding-left: 8px; border-left: 2px solid transparent; }
+.tr-seg.suspect { border-left-color: #ffd16688; }
+.tr-at { margin-right: 6px; font-size: 11px; opacity: .55; font-variant-numeric: tabular-nums; }
+.tr-at.unsure { border-bottom: 1px dotted #ffd166; }
+.tr-w { padding: 0 1px; border-radius: 3px; cursor: pointer; }
+.tr-w:hover { background: #8883; }
+.tr-w.picked { background: #3a7d5c55; }
+.tr-w.anchor { box-shadow: inset 0 -2px 0 #7fd1ab; }
+.tr-w.now { background: #ffd16655; }
+
 /* Призрак показывает, куда встанет клип, если отпустить указатель. */
 .drop-ghost { position: absolute; top: 2px; height: 72px; z-index: 2; pointer-events: none;
   border: 2px dashed #7fd1ab; border-radius: 5px; background: #7fd1ab22; }

@@ -229,3 +229,44 @@ export function cancelJob(jobId: string): Promise<void> {
 export function deleteRender(renderId: string): Promise<void> {
   return api<void>(`/api/v1/renders/${encodeURIComponent(renderId)}`, { method: 'DELETE' })
 }
+
+/**
+ * Слово транскрипта во времени исходника.
+ *
+ * interpolated — времена разложены по слогам, а не измерены: точность около ±0.3 с. Резать по ним
+ * напрямую нельзя, поэтому кусок из выделения кладётся клипом со snap_to_pauses.
+ */
+export type TranscriptWord = { w: string; s: number; e: number; interpolated?: boolean }
+
+export type TranscriptSegment = {
+  id: number
+  start: number
+  end: number
+  text: string
+  start_verified: boolean
+  end_verified: boolean
+  suspect: boolean
+  words?: TranscriptWord[]
+}
+
+/** Карты пауз (silences, silences_dense) и stats тоже приходят, но панели они не нужны. */
+export type Transcript = {
+  asset_id: string
+  provider: string
+  model: string
+  language: string
+  duration: number
+  segments: TranscriptSegment[]
+}
+
+export function loadTranscript(assetId: string): Promise<Transcript> {
+  return api<Transcript>(`/api/v1/assets/${encodeURIComponent(assetId)}/transcript?format=json`)
+}
+
+/** Язык не передаём: сервер возьмёт свой по умолчанию, а угадывать за человека нам нечем. */
+export function startTranscribe(assetId: string): Promise<{ job_id: string; language: string }> {
+  return api<{ job_id: string; language: string }>(
+    `/api/v1/assets/${encodeURIComponent(assetId)}/transcribe`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}

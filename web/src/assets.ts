@@ -19,6 +19,9 @@ export type Asset = {
     peaks: string | null
     analysis: string | null
     vtt: string | null
+    // Ссылка на ручку транскрипта, если расшифровка уже есть: по ней панель текста решает,
+    // показывать текст или кнопку «Расшифровать».
+    transcript: string | null
   }
 }
 
@@ -59,6 +62,11 @@ export function statusText(status: string): string {
 
 export function needsPolling(assets: { status: string }[]): boolean {
   return assets.some(a => !FINAL.has(a.status))
+}
+
+/** Карточка одного ассета: по ней панель текста видит, не появился ли транскрипт. */
+export function loadAsset(id: string): Promise<Asset> {
+  return api<Asset>(`/api/v1/assets/${encodeURIComponent(id)}`)
 }
 
 function row(a: Asset): string {

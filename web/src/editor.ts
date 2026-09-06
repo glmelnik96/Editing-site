@@ -16,6 +16,7 @@ import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountRender } from './render'
 import { mountSource } from './source'
+import { mountTranscript } from './transcript'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
 
@@ -38,6 +39,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     <div class="editor">
       <section class="side">
         <div id="ed-source"></div>
+        <div id="ed-transcript"></div>
         <div id="ed-versions"></div>
         <section id="ed-renders"></section>
       </section>
@@ -224,21 +226,49 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onSelect: () => {},
   })
 
-  const source = mountSource(el.querySelector('#ed-source') as HTMLElement, {
-    onAdd: (asset, range) => {
-      const clips = project?.doc.clips ?? []
-      const clip: Clip = {
-        id: newClipId(clips),
-        asset_id: asset.id,
-        in: ms(range.from),
-        out: ms(range.to),
-        snap_to_pauses: false,
-        in_verified: false,
-        out_verified: false,
-      }
-      applyClips(insertClip(clips, clip))
+  /** Кусок исходника в конец шкалы: приходит и от полосы файла, и от выделения в тексте. */
+  function addClip(assetId: string, from: number, to: number, snap: boolean): void {
+    const clips = project?.doc.clips ?? []
+    const clip: Clip = {
+      id: newClipId(clips),
+      asset_id: assetId,
+      in: ms(from),
+      out: ms(to),
+      snap_to_pauses: snap,
+      in_verified: false,
+      out_verified: false,
+    }
+    applyClips(insertClip(clips, clip))
+  }
+
+  const sourceBox = el.querySelector('#ed-source') as HTMLElement
+  const source = mountSource(sourceBox, {
+    onAdd: (asset, range) => addClip(asset.id, range.from, range.to, false),
+  })
+
+  const sourcePlayer = (): HTMLMediaElement | null => sourceBox.querySelector('video, audio')
+
+  const transcript = mountTranscript(el.querySelector('#ed-transcript') as HTMLElement, {
+    onSeek: seconds => {
+      const player = sourcePlayer()
+      if (player) player.currentTime = seconds
+    },
+    // Времена слов интерполированы (±0.3 с), поэтому клип идёт со снэпом: границы досадит на
+    // измеренные паузы сервер. Это тот же путь, которым кладёт кусок агент через API.
+    onTake: (start, end) => {
+      const asset = source.current()
+      if (asset) addClip(asset.id, start, end, true)
     },
   })
+
+  // Панель текста работает с тем же файлом, что и панель исходника. О смене файла узнаём по
+  // событию из самой панели: change от её списка всплывает до контейнера, и лезть внутрь чужой
+  // панели за её select не приходится. Тот же файл setAsset пропускает, так что change от полей
+  // таймкода панель текста не тревожит.
+  sourceBox.addEventListener('change', () => transcript.setAsset(source.current()))
+  // timeupdate не всплывает — слушаем на фазе перехвата: плеер исходника панель исходника
+  // пересоздаёт при каждом выборе файла, а этот слушатель переживает пересоздание.
+  sourceBox.addEventListener('timeupdate', event => transcript.setTime((event.target as HTMLMediaElement).currentTime), true)
 
   function applyClips(clips: Clip[]): void {
     if (!project) return
@@ -429,6 +459,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       stopped = true
       document.removeEventListener('keydown', onKey)
       renders?.stop()
+      transcript.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
       // Отказ здесь гасим: экран уже разбирается, показывать ошибку некому, а необработанный
       // отказ промиса всплыл бы в консоль. О сбое уже сказал onError.
