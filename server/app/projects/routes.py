@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from server.app.auth.deps import CurrentUser, current_user
@@ -14,7 +14,9 @@ from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     ProjectConflict,
     ProjectLimit,
+    SubtitlesUnavailable,
     active_renders,
+    build_project_subtitles,
     create_checkpoint,
     create_project,
     delete_project,
@@ -301,3 +303,33 @@ def renders(
 ) -> RenderList:
     _owned(conn, user, project_id)
     return RenderList(renders=[RenderView(**r) for r in list_renders(conn, user.id, project_id)])
+
+
+@router.get("/{project_id}/subtitles")
+def subtitles(
+    project_id: str,
+    request: Request,
+    fmt: Annotated[Literal["srt", "vtt"], Query(alias="format")] = "srt",
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> Response:
+    """Субтитры проекта — ровно тот файл, который уйдёт в сборку ролика.
+
+    Отдаём до рендера, а не после: агент смонтировал проект по транскрипту и хочет вычитать текст
+    в шкале ролика, пока ещё есть что править. Сборка ленивая, дальше работает кэш версии.
+    """
+    project = _owned(conn, user, project_id)
+    try:
+        srt = build_project_subtitles(conn, request.app.state.settings, project)
+    except SubtitlesUnavailable as exc:
+        # Текст берём у сборки: она формулирует отказ для человека, и вторая формулировка здесь
+        # разошлась бы с той, что видно в карточке упавшего задания.
+        raise ApiError(422, "no_transcript", str(exc)) from exc
+    if srt is None:
+        raise ApiError(
+            422,
+            "no_transcript_subtitles",
+            "В проекте нет субтитров из расшифровки: загруженный файл лежит у своего ассета",
+        )
+    path = srt if fmt == "srt" else srt.with_suffix(".vtt")
+    return Response(content=path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
