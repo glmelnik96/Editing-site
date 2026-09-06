@@ -70,10 +70,6 @@ class Settings(BaseSettings):
     draft_short_side: int = Field(default=720, ge=240, le=2160)
     final_short_side: int = Field(default=1080, ge=240, le=2160)
 
-    # Единый кабинет: соседи по ВМ. Служебные секреты названы БЕЗ префикса VIDEO_ — так они
-    # разложены в /opt/editing-site/.env (спека §4). validation_alias отменяет env_prefix
-    # только для этих двух полей, остальные читаются как раньше. Ровно на этом споткнулся сосед:
-    # переменную положили как SERVICE_TOKEN, а настройки искали BOARD_SERVICE_TOKEN.
     # Транскрипция (раздел 10 спеки). Пустой ключ запрещает запуск, а не пытается ходить в сеть.
     transcribe_base_url: str = "https://foundation-models.api.cloud.ru/v1"
     transcribe_api_key: str = ""
@@ -89,6 +85,10 @@ class Settings(BaseSettings):
     # очередь рендеров нельзя: полосы работают параллельно, каждая своим потоком.
     worker_lanes: str = "cpu,net"
 
+    # Единый кабинет: соседи по ВМ. Служебные секреты названы БЕЗ префикса VIDEO_ — так они
+    # разложены в /opt/editing-site/.env (спека §4). validation_alias отменяет env_prefix
+    # только для этих двух полей, остальные читаются как раньше. Ровно на этом споткнулся сосед:
+    # переменную положили как SERVICE_TOKEN, а настройки искали BOARD_SERVICE_TOKEN.
     stream_service_token: str = Field(default="", validation_alias=AliasChoices("STREAM_SERVICE_TOKEN"))
     board_service_token: str = Field(default="", validation_alias=AliasChoices("BOARD_SERVICE_TOKEN"))
     # Ходим на loopback: три сервиса на одной машине, Caddy и интернет тут не при чём.
