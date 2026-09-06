@@ -49,6 +49,16 @@ export function splitCue(cues: Cue[], index: number): Cue[] {
   return next
 }
 
+/** «1 реплика», «3 реплики», «11 реплик»: счётчик на экране не должен спотыкаться о падеж. */
+export function plural(count: number): string {
+  const tail = count % 100
+  const last = count % 10
+  if (tail >= 11 && tail <= 14) return `${count} реплик`
+  if (last === 1) return `${count} реплика`
+  if (last >= 2 && last <= 4) return `${count} реплики`
+  return `${count} реплик`
+}
+
 export function mountSubtitles(el: HTMLElement, projectId: string, handlers: SubtitleHandlers) {
   let stopped = false
   let project: Project | null = null
@@ -116,7 +126,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     const applied = project?.doc.subtitles?.source === 'cues'
     el.innerHTML = shell(`
       <div class="row">
-        <span class="small">${list.length} реплик</span>
+        <span class="small">${plural(list.length)}</span>
         <select class="field" id="sub-mode">
           <option value="burn"${mode === 'burn' ? ' selected' : ''}>вжечь в кадр</option>
           <option value="soft"${mode === 'soft' ? ' selected' : ''}>отдельной дорожкой</option>
