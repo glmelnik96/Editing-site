@@ -120,3 +120,64 @@ def test_apply_rejects_unknown_service(conn):
     with pytest.raises(cabinet.CabinetError):
         cabinet.apply(conn, s, clients(both_ok, s), email="new@x.ru", grant=["мимо"], revoke=[],
                       added_by=ADMIN)
+
+
+@pytest.fixture
+def settings(settings):
+    """Перекрываем фикстуру приложения, добавляя служебные секреты: без них соседи
+    в кабинете помечены «не настроен» и до HTTP дело не доходит. Одноимённый параметр —
+    та же фикстура из conftest (штатный приём pytest)."""
+    settings.board_service_token = "b"
+    settings.stream_service_token = "s"
+    return settings
+
+
+def patch_neighbours(monkeypatch, handler):
+    """Подменяем построение клиента: в тестах наружу ходить нельзя."""
+    from server.app.admin import routes
+
+    monkeypatch.setattr(
+        routes, "build_client", lambda s: httpx.Client(transport=httpx.MockTransport(handler))
+    )
+
+
+def test_cabinet_page(client, login_as, monkeypatch):
+    patch_neighbours(monkeypatch, both_ok)
+    login_as()
+    body = client.get("/api/v1/admin/cabinet").json()
+    assert [s["key"] for s in body["services"]] == ["video", "board", "stream"]
+    assert all(isinstance(p["access"], dict) for p in body["people"])
+
+
+def test_cabinet_change_reports_each_service(client, login_as, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/admin" in request.url.path:
+            return httpx.Response(403, json={})
+        return httpx.Response(201, json={})
+
+    patch_neighbours(monkeypatch, handler)
+    login_as()
+    r = client.post("/api/v1/admin/cabinet/access",
+                    json={"email": "new@x.ru", "grant": ["video", "board", "stream"]})
+    assert r.status_code == 200
+    results = {row["service"]: row["ok"] for row in r.json()["results"]}
+    assert results == {"video": True, "board": False, "stream": True}
+
+
+def test_cabinet_refuses_admin_and_unknown_service(client, login_as, monkeypatch):
+    patch_neighbours(monkeypatch, both_ok)
+    login_as()
+    me = client.get("/api/v1/me").json()
+    r = client.post("/api/v1/admin/cabinet/access", json={"email": me["email"], "revoke": ["video"]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "cannot_change_admin"
+    r = client.post("/api/v1/admin/cabinet/access", json={"email": "new@x.ru", "grant": ["мимо"]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_service"
+
+
+def test_cabinet_is_admin_and_browser_only(client, login_as, bearer_client, monkeypatch):
+    """Кабинет управляет допуском, значит токену агента он закрыт — как и обычный whitelist."""
+    patch_neighbours(monkeypatch, both_ok)
+    assert bearer_client.get("/api/v1/admin/cabinet").status_code == 403
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@x.ru"}).status_code == 201
+    login_as("other@x.ru", "Другой")
+    assert client.get("/api/v1/admin/cabinet").status_code == 403
