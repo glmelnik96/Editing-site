@@ -1,40 +1,41 @@
 /**
- * Дверь — единственный экран гостя: одно предложение о том, что здесь делают, и одна кнопка.
+ * Дверь — единственный экран гостя: что здесь делают и одна кнопка.
  *
- * Ни списка возможностей, ни футера: человек, впервые открывший сайт, должен прочитать строку
- * и нажать кнопку, а не выбирать, что прочитать сначала.
+ * Вёрстка и хронометраж взяты у Presentation Remote: колонка 880 прижата к верху (не по центру),
+ * слова заголовка выходят из размытия по очереди, следом пояснение, следом кнопка. Так у трёх
+ * сервисов ВМ одинаковое первое впечатление, и человек узнаёт знакомое место.
  */
 import { loginErrorText } from './errors'
 import { escapeHtml } from './html'
 
-const TITLE = 'Здесь из записей собирают ролики.'
+const TITLE = 'Привет! Это онлайн-редактор видеороликов.'
 const LEAD = 'Загрузите запись, вырежьте лишнее, добавьте музыку и субтитры — заберите готовый файл.'
-const WORD_STEP_MS = 70
+
+// Хронометраж первого экрана, мс от загрузки — тот же, что у соседа.
+const WORDS_FROM = 150
+const WORDS_STEP = 70
+const NOTE_AT = 900
+const BUTTON_AT = 1350
 
 export function mountDoor(el: HTMLElement): void {
-  // Слова проявляются по очереди: заголовок читается как фраза, а не выпрыгивает целиком.
   // При prefers-reduced-motion всё движение гасит style.css, отдельной ветки здесь не нужно.
-  const words = TITLE.split(' ')
-  const title = words
-    .map((w, i) => `<span class="appear" style="display:inline-block;--delay:${i * WORD_STEP_MS}ms">${w}</span>`)
+  const title = TITLE.split(' ')
+    .map((w, i) => `<span class="word-in" style="--delay:${WORDS_FROM + i * WORDS_STEP}ms">${w}</span>`)
     .join(' ')
-  const afterTitle = words.length * WORD_STEP_MS // очередь продолжается пояснением и кнопкой
 
   const code = new URLSearchParams(location.search).get('error')
   const error = code
-    ? `<p class="error" style="margin:16px 0 0">${escapeHtml(loginErrorText(code))}</p>`
+    ? `<p class="error msg-in" style="margin:0;--delay:${NOTE_AT + 300}ms">${escapeHtml(loginErrorText(code))}</p>`
     : ''
 
-  // Колонка стоит по центру и чуть выше середины: снизу воздуха больше, чем сверху,
-  // иначе текст на широком экране кажется съехавшим вниз.
   el.innerHTML = `
-    <section class="screen" style="min-height:calc(100vh - 58px);display:flex;flex-direction:column;
-      align-items:center;justify-content:center;text-align:center;padding-bottom:8vh">
-      <div style="max-width:820px">
-        <h1 class="display-xl">${title}</h1>
-        <p class="lead appear" style="margin:0 0 32px;--delay:${afterTitle}ms">${LEAD}</p>
-        <a class="btn btn-key appear" style="--delay:${afterTitle + WORD_STEP_MS}ms" href="/api/v1/auth/login">Войти через Яндекс</a>
-        ${error}
+    <main class="door">
+      <h1 class="display-xl" style="margin:0">${title}</h1>
+      <p class="lead msg-in door-note" style="margin:0;--delay:${NOTE_AT}ms">${LEAD}</p>
+      ${error}
+      <div class="row" style="margin:0">
+        <a class="btn btn-key chip-in" style="--delay:${BUTTON_AT}ms"
+          href="/api/v1/auth/login">Войти через Яндекс</a>
       </div>
-    </section>`
+    </main>`
 }

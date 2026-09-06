@@ -22,6 +22,25 @@ const CARD_STYLE = [
   'text-decoration:none',
 ].join(';')
 
+// Два шага пути, а не два равных выбора: сначала в сервис приносят исходники, потом из них
+// собирают ролик. Равновеликие карточки заставляли бы выбирать там, где выбора нет.
+const STEPS = [
+  {
+    href: '#/files',
+    step: 'Шаг 1',
+    title: 'Загрузить исходники',
+    lead: 'Записи, музыка, готовые субтитры — всё, из чего будет собран ролик',
+    key: true,
+  },
+  {
+    href: '#/new',
+    step: 'Шаг 2',
+    title: 'Открыть редактор',
+    lead: 'Вырезать лишнее, расшифровать речь, собрать готовый файл',
+    key: false,
+  },
+]
+
 const ROW_STYLE = [
   'justify-content:space-between',
   'margin:0',
@@ -31,12 +50,14 @@ const ROW_STYLE = [
   'text-decoration:none',
 ].join(';')
 
-function card(href: string, title: string, lead: string, delayMs: number): string {
+function card(step: (typeof STEPS)[number], delayMs: number): string {
   return `
-    <a class="card appear" href="${href}" style="${CARD_STYLE};--delay:${delayMs}ms">
-      <h2 class="display-m" style="margin:0">${title}</h2>
-      <p class="lead" style="margin:0">${lead}</p>
-      <span style="margin-top:auto;color:var(--brand);font-size:24px;line-height:1">→</span>
+    <a class="card appear step-card${step.key ? ' step-key' : ''}" href="${step.href}"
+      style="${CARD_STYLE};--delay:${delayMs}ms">
+      <span class="meta step-mark">${step.step}</span>
+      <h2 class="display-m" style="margin:0">${step.title}</h2>
+      <p class="lead" style="margin:0">${step.lead}</p>
+      <span class="step-arrow">→</span>
     </a>`
 }
 
@@ -67,9 +88,10 @@ export function mountHome(el: HTMLElement, me: Me): { stop: () => void } {
   el.innerHTML = `
     <div class="screen stack" style="--stack-gap:32px" id="home-column">
       <h1 class="display-l appear" style="margin:0">Привет, ${escapeHtml(name)}</h1>
-      <div class="grid-2">
-        ${card('#/new', 'Собрать ролик', 'Возьмите запись и соберите из неё готовый файл', 60)}
-        ${card('#/files', 'Мои записи', 'Загруженные файлы и их обработка', 120)}
+      <div class="steps">
+        ${card(STEPS[0], 60)}
+        <span class="step-then meta" aria-hidden="true">потом</span>
+        ${card(STEPS[1], 120)}
       </div>
     </div>`
 

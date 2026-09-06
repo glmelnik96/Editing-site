@@ -423,25 +423,126 @@ main.card {
 
 /* ═══ 8. Движение ════════════════════════════════════════════════════════ */
 
-@keyframes appear {
+/* Движение общее с Presentation Remote: одна кривая, одни длительности, одинаковый порядок
+ * появления. backwards, а не both: после анимации элемент возвращается к обычному виду, и если
+ * анимация не сыграла вовсе, содержимое всё равно видно. --delay строит очередь. */
+
+/* Слово выходит из размытия и поднимается — так появляется крупный заголовок. */
+@keyframes word-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+.word-in {
+  display: inline-block;
+  animation: word-in 0.8s var(--ease) var(--delay, 0s) backwards;
+}
+
+/* Блок текста подъезжает снизу. */
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
-/* backwards, а не both: после анимации элемент возвращается к обычному виду, и если
- * анимация не сыграла вовсе, содержимое всё равно видно. --delay строит очередь. */
-.appear {
-  animation: appear 0.3s var(--ease) var(--delay, 0s) backwards;
+.appear,
+.msg-in {
+  animation: msg-in 0.7s var(--ease) var(--delay, 0s) backwards;
+}
+
+/* Кнопка-ответ въезжает справа: она отвечает на то, что сказано выше. */
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.chip-in {
+  animation: chip-in 0.6s var(--ease) var(--delay, 0s) backwards;
+}
+
+/* Экран проявляется целиком. */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.page-in {
+  animation: page-in 0.6s var(--ease) backwards;
+}
+
+/* Дверь: колонка прижата к верху, а не стоит по центру — так же, как у соседей по ВМ.
+   По центру экрана заголовок «плавает», и на широком мониторе кажется съехавшим вниз. */
+.door {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 10vh 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.door-note { max-width: 640px; }
+@media (min-width: 768px) {
+  .door { padding-top: 14vh; }
 }
 
 /* ═══ 8а. Экраны: записи, новый проект, проекты, настройки ═══════════════ */
 
 .space-between { justify-content: space-between; }
+
+/* Два шага пути, а не два равных выбора. Первый крупнее и с зелёной рамкой, второй тише:
+   у человека без записей второй шаг делать не с чем, и он не должен звать одинаково. */
+.steps {
+  display: grid;
+  grid-template-columns: 1.25fr auto 1fr;
+  align-items: stretch;
+  gap: 16px;
+}
+/* Карточки одной высоты, а «потом» посередине между ними: разная высота читалась бы как
+   разная важность, а разводить шаги нужно порядком, а не размером. */
+.step-then { align-self: center; }
+.step-mark { color: var(--dim); }
+.step-key { border-color: var(--brand); }
+.step-key .step-mark { color: var(--brand); }
+.step-arrow {
+  margin-top: auto;
+  color: var(--dim);
+  font-size: 24px;
+  line-height: 1;
+}
+.step-key .step-arrow { color: var(--brand); }
+.step-then {
+  color: var(--dim);
+  text-align: center;
+  white-space: nowrap;
+}
+.step-card:not(.step-key) .display-m { color: var(--muted); }
+.step-card:not(.step-key):hover .display-m { color: var(--paper); }
+@media (max-width: 720px) {
+  .steps { grid-template-columns: 1fr; }
+  .step-then { text-align: left; }
+}
 
 /* Зона загрузки: крупная цель, в которую попадают и мышью, и перетаскиванием. */
 .dropzone {
@@ -940,6 +1041,7 @@ th.access .muted {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    filter: none !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }

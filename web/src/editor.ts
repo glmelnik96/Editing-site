@@ -40,10 +40,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <section class="side">
         <nav class="tabs" id="ed-tabs">
           <button type="button" class="tab" data-tab="source">Исходник</button>
-          <button type="button" class="tab" data-tab="transcript">Текст</button>
+          <button type="button" class="tab" data-tab="transcript">Транскрибация</button>
           <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
           <button type="button" class="tab" data-tab="versions">Точки</button>
-          <button type="button" class="tab" data-tab="renders">Сборка</button>
+          <button type="button" class="tab" data-tab="renders">Рендер</button>
         </nav>
         <div id="ed-source" data-panel="source"></div>
         <div id="ed-transcript" data-panel="transcript" hidden></div>
