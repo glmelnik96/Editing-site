@@ -269,7 +269,7 @@ def test_short_audio_is_one_chunk():
 
 
 def test_boundary_goes_to_the_nearest_pause():
-    """Граница на паузе не рвёт слово пополам: в окне ±60 с от цели ищем самую近ую тишину."""
+    """Граница на паузе не рвёт слово пополам: в окне ±60 с от цели ищем ближайшую тишину."""
     silences = [{"start": 570.0, "end": 572.0}, {"start": 640.0, "end": 641.0}]
     plan = chunk_plan(duration=1200.0, silences=silences, target=600, window=60)
     assert plan[0] == (0.0, 571.0)  # середина паузы
