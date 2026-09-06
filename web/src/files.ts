@@ -56,8 +56,10 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void) {
   }
 
   function card(a: Asset): string {
+    // Подпись рядом с пилюлей нужна, только если добавляет знание: «анализ» дважды подряд —
+    // это шум, а «анализ, 40 %» и текст ошибки сказать стоит.
     const work = progressText(a.status, a.progress ?? null)
-    const note = a.error ? a.error : work
+    const note = a.error ? a.error : work === statusText(a.status) ? '' : work
     const state = a.status === 'failed' ? ' pill-bad' : ''
     const ready = a.status === 'ready' || a.status === 'proxy_ready'
     return `<article class="card row asset-card">
