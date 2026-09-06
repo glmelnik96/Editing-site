@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     snap_buffer_sec: float = Field(default=0.3, ge=0.0, le=5.0)
     max_projects_per_user: int = Field(default=200, ge=1)
     versions_kept: int = Field(default=5, ge=1, le=50)
+    # Реплики субтитров лежат в документе проекта (спека §5.2): часовой ролик — это около тысячи
+    # реплик, и предел стоит там, где документ ещё читается целиком каждым сохранением.
+    max_cues: int = Field(default=2000, ge=1, le=20000)
 
     # Рендер (раздел 9 спеки). Короткая сторона кадра задаёт разрешение вместе с пропорцией.
     render_timeout_sec: int = Field(default=4 * 3600, ge=60)

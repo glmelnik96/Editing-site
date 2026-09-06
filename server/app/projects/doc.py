@@ -8,18 +8,21 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from itertools import pairwise
 
 from server.app.config import Settings
 
 ASPECTS = ("16:9", "9:16", "1:1")
 FITS = ("pad", "crop")
 FPS_VALUES = (25, 30, 50, 60)
-SUB_SOURCES = ("file", "transcript")
+SUB_SOURCES = ("file", "transcript", "cues")
 SUB_MODES = ("burn", "soft")
 SUB_STYLES = ("default",)
 CLIP_READY_STATUSES = ("ready", "proxy_ready")
 TIME_DIGITS = 3
 MAX_CLIP_ID = 64  # идентификатор клипа хранится в документе: без предела клиент раздует его сотней клипов
+MAX_CUE_TEXT = 200  # реплика длиннее не влезет в кадр ни при какой пропорции — это уже не субтитр
+MAX_CUE_LINES = 2  # под две строки свёрстан кадр (спека §5.3)
 
 
 @dataclass(frozen=True)
@@ -199,7 +202,72 @@ def _validate_music(raw: object, assets: dict[str, AssetInfo], errors: _Errors) 
     }
 
 
-def _validate_subtitles(raw: object, assets: dict[str, AssetInfo], errors: _Errors) -> dict | None:
+def _validate_cue_text(raw: object, where: str, errors: _Errors) -> str | None:
+    if not isinstance(raw, str):
+        errors.add(f"{where}.text", "text реплики должен быть строкой")
+        return None
+    # Перевод строки внутри реплики значащий — по нему субтитр ложится в кадр двумя строками,
+    # поэтому чистим только края, а CRLF из браузерного поля приводим к одному виду.
+    text = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        errors.add(f"{where}.text", "текст реплики не может быть пустым")
+        return None
+    if len(text) > MAX_CUE_TEXT:
+        errors.add(f"{where}.text", f"текст реплики не длиннее {MAX_CUE_TEXT} знаков")
+        return None
+    if text.count("\n") >= MAX_CUE_LINES:
+        errors.add(f"{where}.text", f"в реплике не больше {MAX_CUE_LINES} строк")
+        return None
+    return text
+
+
+def _validate_cue(raw: object, index: int, errors: _Errors) -> dict | None:
+    where = f"subtitles.cues[{index}]"
+    if not isinstance(raw, dict):
+        errors.add(where, "реплика должна быть объектом")
+        return None
+    start = _number(raw.get("start"))
+    end = _number(raw.get("end"))
+    if start is None or start < 0:
+        errors.add(f"{where}.start", "start реплики — неотрицательное число секунд")
+        start = None
+    if end is None:
+        errors.add(f"{where}.end", "end реплики должен быть числом секунд")
+    elif start is not None and _round(end) <= _round(start):
+        # Сравниваем уже округлённые времена: реплика в полмиллисекунды прошла бы проверку,
+        # а в документ легла бы нулевой длины и в кадре не показалась вовсе.
+        errors.add(f"{where}.end", "end реплики должен быть больше start")
+        end = None
+    text = _validate_cue_text(raw.get("text"), where, errors)
+    if start is None or end is None or text is None:
+        return None
+    return {"start": _round(start), "end": _round(end), "text": text}
+
+
+def _validate_cues(raw: object, settings: Settings, errors: _Errors) -> list[dict] | None:
+    if not isinstance(raw, list):
+        errors.add("subtitles.cues", "cues должен быть списком реплик")
+        return None
+    if not raw:
+        errors.add("subtitles.cues", "в субтитрах должна быть хотя бы одна реплика")
+        return None
+    if len(raw) > settings.max_cues:
+        errors.add("subtitles.cues", f"реплик больше {settings.max_cues}")
+        return None
+    cues = [cue for index, item in enumerate(raw) if (cue := _validate_cue(item, index, errors))]
+    if len(cues) != len(raw):
+        return None  # часть реплик уже с ошибками: порядок проверять не по чему
+    cues.sort(key=lambda cue: cue["start"])
+    for previous, cue in pairwise(cues):
+        if cue["start"] < previous["end"]:
+            errors.add("subtitles.cues", "реплики накладываются: в кадре был бы сразу второй субтитр")
+            return None
+    return cues
+
+
+def _validate_subtitles(
+    raw: object, assets: dict[str, AssetInfo], settings: Settings, errors: _Errors
+) -> dict | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
@@ -209,12 +277,21 @@ def _validate_subtitles(raw: object, assets: dict[str, AssetInfo], errors: _Erro
     if source not in SUB_SOURCES:
         errors.add("subtitles.source", f"source: {', '.join(SUB_SOURCES)}")
         return None
-    asset_id = raw.get("asset_id")
-    asset = assets.get(asset_id) if isinstance(asset_id, str) else None
-    want_kind = "subtitle" if source == "file" else "video"
-    if asset is None or asset.kind != want_kind:
-        errors.add("subtitles.asset_id", f"для source={source} нужен ассет вида {want_kind}")
-        return None
+    cues = None
+    asset_id = None
+    if source == "cues":
+        # Реплики самодостаточны: расшифровка нужна была, чтобы их собрать, а не чтобы показать,
+        # и удалённый ассет расшифровки не должен мешать собрать ролик.
+        cues = _validate_cues(raw.get("cues"), settings, errors)
+        if cues is None:
+            return None
+    else:
+        asset_id = raw.get("asset_id")
+        asset = assets.get(asset_id) if isinstance(asset_id, str) else None
+        want_kind = "subtitle" if source == "file" else "video"
+        if asset is None or asset.kind != want_kind:
+            errors.add("subtitles.asset_id", f"для source={source} нужен ассет вида {want_kind}")
+            return None
     mode = raw.get("mode", "burn")
     if mode not in SUB_MODES:
         errors.add("subtitles.mode", f"mode: {', '.join(SUB_MODES)}")
@@ -223,7 +300,10 @@ def _validate_subtitles(raw: object, assets: dict[str, AssetInfo], errors: _Erro
     if style not in SUB_STYLES:
         errors.add("subtitles.style", f"style: {', '.join(SUB_STYLES)}")
         return None
-    return {"source": source, "asset_id": asset_id, "mode": mode, "style": style}
+    out = {"source": source, "asset_id": asset_id, "mode": mode, "style": style}
+    if cues is not None:
+        out["cues"] = cues
+    return out
 
 
 def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Settings) -> dict:
@@ -256,7 +336,7 @@ def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Setting
             errors.add("clips", f"ролик длиннее {settings.max_total_duration_sec} с")
 
     music = _validate_music(raw.get("music"), assets, errors)
-    subtitles = _validate_subtitles(raw.get("subtitles"), assets, errors)
+    subtitles = _validate_subtitles(raw.get("subtitles"), assets, settings, errors)
     if errors:
         raise ProjectInvalid(errors.items)
     return {"output": output, "clips": clips, "music": music, "subtitles": subtitles}

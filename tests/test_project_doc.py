@@ -130,6 +130,96 @@ def test_subtitles_rules():
     ) == ["subtitles.mode"]
 
 
+def subs_doc(**over) -> dict:
+    """Документ с репликами в субтитрах: источник cues ассета не просит."""
+    return doc(subtitles={
+        "source": "cues", "cues": [{"start": 0.0, "end": 2.0, "text": "Привет"}], **over,
+    })
+
+
+def test_cues_source_needs_no_asset():
+    """Реплики самодостаточны: расшифровка нужна была, чтобы их собрать, а не чтобы показать."""
+    out = validate_doc(subs_doc(), assets=ASSETS, settings=S)
+    assert out["subtitles"]["source"] == "cues"
+    assert out["subtitles"]["cues"] == [{"start": 0.0, "end": 2.0, "text": "Привет"}]
+    assert out["subtitles"]["asset_id"] is None
+    assert out["subtitles"]["mode"] == "burn" and out["subtitles"]["style"] == "default"
+
+
+def test_cues_are_sorted_by_start():
+    raw = subs_doc(cues=[{"start": 5.0, "end": 6.0, "text": "два"},
+                         {"start": 0.0, "end": 1.0, "text": "раз"}])
+    out = validate_doc(raw, assets=ASSETS, settings=S)
+    assert [c["text"] for c in out["subtitles"]["cues"]] == ["раз", "два"]
+
+
+def test_overlapping_cues_are_refused():
+    """Наложение — это два субтитра в кадре одновременно."""
+    raw = subs_doc(cues=[{"start": 0.0, "end": 3.0, "text": "раз"},
+                         {"start": 2.0, "end": 4.0, "text": "два"}])
+    assert errors_of(raw) == ["subtitles.cues"]
+    # Встык — не наложение: одна реплика сменяет другую.
+    touching = subs_doc(cues=[{"start": 0.0, "end": 3.0, "text": "раз"},
+                              {"start": 3.0, "end": 4.0, "text": "два"}])
+    assert len(validate_doc(touching, assets=ASSETS, settings=S)["subtitles"]["cues"]) == 2
+
+
+def test_cue_needs_text_and_positive_length():
+    assert errors_of(subs_doc(cues=[{"start": 1.0, "end": 1.0, "text": "нет длины"}])) == [
+        "subtitles.cues[0].end"
+    ]
+    assert errors_of(subs_doc(cues=[{"start": -1.0, "end": 1.0, "text": "до начала"}])) == [
+        "subtitles.cues[0].start"
+    ]
+    for bad_text in ("   ", "я" * 201, "раз\nдва\nтри", 5, None):
+        assert errors_of(subs_doc(cues=[{"start": 0.0, "end": 1.0, "text": bad_text}])) == [
+            "subtitles.cues[0].text"
+        ]
+
+
+def test_cue_of_half_a_millisecond_is_refused():
+    """Времена округляются до миллисекунд: реплика короче не покажется в кадре вовсе."""
+    assert errors_of(subs_doc(cues=[{"start": 1.0, "end": 1.0004, "text": "мигом"}])) == [
+        "subtitles.cues[0].end"
+    ]
+
+
+def test_cue_text_and_times_are_normalized():
+    raw = subs_doc(cues=[{"start": 0.00049, "end": 2.66666, "text": " раз\r\nдва "}])
+    out = validate_doc(raw, assets=ASSETS, settings=S)
+    assert out["subtitles"]["cues"][0] == {"start": 0.0, "end": 2.667, "text": "раз\nдва"}
+
+
+def test_cue_list_bounds():
+    assert errors_of(subs_doc(cues=[])) == ["subtitles.cues"]
+    assert errors_of(subs_doc(cues="раз")) == ["subtitles.cues"]
+    assert errors_of(subs_doc(cues=["раз"])) == ["subtitles.cues[0]"]
+    many = [{"start": i * 2.0, "end": i * 2.0 + 1.0, "text": "а"} for i in range(S.max_cues + 1)]
+    assert errors_of(subs_doc(cues=many)) == ["subtitles.cues"]
+
+
+def test_every_bad_cue_is_reported_not_just_the_first():
+    """Карточки правит человек: он должен увидеть все испорченные разом, а не по одной."""
+    raw = subs_doc(cues=[{"start": 0.0, "end": 1.0, "text": ""},
+                         {"start": 2.0, "end": 1.0, "text": "назад"}])
+    assert errors_of(raw) == ["subtitles.cues[0].text", "subtitles.cues[1].end"]
+
+
+def test_cues_of_other_sources_are_not_kept():
+    """У file и transcript реплик нет: лишнее поле не должно доехать до рендера."""
+    for source, asset in (("transcript", "ast_000000000001"), ("file", "ast_000000000004")):
+        raw = doc(subtitles={"source": source, "asset_id": asset,
+                             "cues": [{"start": 0, "end": 1, "text": "х"}]})
+        out = validate_doc(raw, assets=ASSETS, settings=S)
+        assert "cues" not in out["subtitles"] and out["subtitles"]["asset_id"] == asset
+
+
+def test_cues_source_ignores_a_sent_asset():
+    """Ассет источнику cues не нужен: присланный не должен удержать файл от уборки."""
+    out = validate_doc(subs_doc(asset_id="ast_000000000001"), assets=ASSETS, settings=S)
+    assert out["subtitles"]["asset_id"] is None
+
+
 def test_wrong_shapes_do_not_crash():
     assert errors_of([]) == ["doc"]
     assert errors_of({"clips": "нет"}) == ["clips"]
