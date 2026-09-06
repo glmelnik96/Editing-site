@@ -1,5 +1,6 @@
-"""SRT и VTT из транскрипта. Чистые функции: ни диска, ни сети, ни ffmpeg."""
-from server.media.subs import to_srt, to_vtt
+"""SRT и VTT из реплик. Чистые функции: ни диска, ни сети, ни ffmpeg."""
+from server.media.cues import build_cues
+from server.media.subs import cues_to_srt, cues_to_vtt, to_srt, to_vtt
 
 
 def transcript(*segments: dict) -> dict:
@@ -81,6 +82,28 @@ def test_segments_without_text_or_time_are_skipped():
 def test_negative_time_is_clamped_to_zero():
     out = to_srt(transcript(segment(-0.5, 1.0, "раньше файла")))
     assert out.splitlines()[1] == "00:00:00,000 --> 00:00:01,000"
+
+
+def test_cues_from_the_typography_module_need_no_conversion():
+    """Реплика из cues.py — тот же {start, end, text}, что и сегмент: приводить одно к другому
+    нечего, экспорт просто получает список без обёртки транскрипта."""
+    words = [{"w": "Мы", "s": 0.0, "e": 0.4}, {"w": "поехали", "s": 0.4, "e": 1.0},
+             {"w": "в", "s": 1.0, "e": 1.1}, {"w": "большой", "s": 1.1, "e": 1.8},
+             {"w": "старый", "s": 1.8, "e": 2.4}, {"w": "дом", "s": 2.4, "e": 2.9}]
+    cues = build_cues(words, max_chars=20, max_lines=2, max_dur=4.0)
+    out = cues_to_srt(cues)
+    assert out.startswith("1\n00:00:00,000 --> 00:00:02,900\n")
+    # Перенос, который выбрала типографика, доезжает до файла второй строкой реплики.
+    assert out.splitlines()[2:4] == ["Мы поехали", "в большой старый дом"]
+    assert cues_to_vtt(cues).startswith("WEBVTT\n\n00:00:00.000 --> 00:00:02.900\n")
+
+
+def test_the_transcript_export_is_the_same_formatter():
+    """Транскрипт — те же реплики под ключом segments, и обёртка не должна менять вывод."""
+    cue = {"start": 1.23, "end": 4.913, "text": "привет"}
+    assert to_srt({"segments": [cue]}) == cues_to_srt([cue])
+    assert to_vtt({"segments": [cue]}) == cues_to_vtt([cue])
+    assert to_srt({}) == cues_to_srt([]) and to_srt("не словарь") == ""
 
 
 def test_words_and_extra_fields_do_not_leak_into_subtitles():

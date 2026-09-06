@@ -9,6 +9,7 @@ from pathlib import Path
 from server.app.config import Settings
 
 KINDS = ("video", "audio", "subtitle")
+TRANSCRIPT_NAME = "transcript.json"
 VIDEO_EXTS = {"mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "mxf", "ts", "wmv", "flv", "3gp"}
 AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff", "aif", "wma"}
 SUBTITLE_EXTS = {"srt", "vtt"}
@@ -52,10 +53,25 @@ def asset_dir(settings: Settings, user_id: str, asset_id: str) -> Path:
     return settings.data_dir / _check_id(user_id) / "assets" / _check_id(asset_id)
 
 
-def render_dir(settings: Settings, user_id: str, project_id: str) -> Path:
+def transcript_path(settings: Settings, user_id: str, asset_id: str) -> Path:
+    """Расшифровка ассета: её пишет воркер, а читают экспорт и сборка субтитров проекта."""
+    return asset_dir(settings, user_id, asset_id) / TRANSCRIPT_NAME
+
+
+def _project_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     _check_id(user_id)
     _check_id(project_id)
-    return settings.data_dir / user_id / "projects" / project_id / "renders"
+    return settings.data_dir / user_id / "projects" / project_id
+
+
+def render_dir(settings: Settings, user_id: str, project_id: str) -> Path:
+    return _project_dir(settings, user_id, project_id) / "renders"
+
+
+def subs_dir(settings: Settings, user_id: str, project_id: str) -> Path:
+    """Кэш субтитров проекта: имя файла — версия проекта, поэтому правка документа не может
+    отдать старые реплики. Наружу этот каталог не отдаётся (см. parse_file_url)."""
+    return _project_dir(settings, user_id, project_id) / "subs"
 
 
 def render_url(user_id: str, project_id: str, render_id: str) -> str:

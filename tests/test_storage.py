@@ -10,6 +10,8 @@ from server.app.storage import (
     render_dir,
     render_url,
     safe_ext,
+    subs_dir,
+    transcript_path,
     upload_path,
 )
 
@@ -56,6 +58,28 @@ def test_render_paths_come_from_ids(tmp_path):
     )
     with pytest.raises(ValueError):
         render_dir(s, "../../etc", "prj_0123456789ab")
+
+
+def test_project_subs_live_beside_the_renders(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert subs_dir(s, "usr_0123456789ab", "prj_0123456789ab") == (
+        tmp_path / "d" / "usr_0123456789ab" / "projects" / "prj_0123456789ab" / "subs"
+    )
+    for bad in ("../../etc", "prj_x"):
+        with pytest.raises(ValueError):
+            subs_dir(s, "usr_0123456789ab", bad)
+    # Каталог субтитров наружу не отдаётся: из /files/ доступны только готовые ролики.
+    base = "/files/usr_0123456789ab/projects/prj_0123456789ab"
+    assert parse_file_url(f"{base}/subs/3.srt") is None
+
+
+def test_transcript_lives_next_to_the_source(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert transcript_path(s, "usr_0123456789ab", "ast_0123456789ab") == (
+        asset_dir(s, "usr_0123456789ab", "ast_0123456789ab") / "transcript.json"
+    )
+    # Наружу файлом не отдаётся: транскрипт уходит через API, а не через /files/.
+    assert "transcript.json" not in PUBLIC_FILES
 
 
 def test_file_url_roundtrip():

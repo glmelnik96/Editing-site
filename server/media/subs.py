@@ -1,10 +1,15 @@
-"""Транскрипт → SRT и WebVTT. Чистое: ни диска, ни базы, ни настроек.
+"""Реплики → SRT и WebVTT. Чистое: ни диска, ни базы, ни настроек.
 
-Реплика здесь — сегмент транскрипта как есть, одна на сегмент. Умной разбивки на строки (не больше
-двух строк, около 42 знаков, разрыв на паузе или знаке препинания) тут нет намеренно: она приедет
-в M4b вместе с пересчётом слов через клипы, и придумывать её второй раз здесь нельзя.
+Реплик тут два сорта, и формат у них общий — {start, end, text}:
 
-Времена — от начала исходника, как в самом транскрипте (спека §10.8).
+* сегмент транскрипта как есть, одна реплика на сегмент, во времени исходника (спека §10.8):
+  `to_srt`, `to_vtt`;
+* реплика из `media/cues.py`, уже разбитая на строки и пересчитанная через клипы проекта
+  (спека §10.9): `cues_to_srt`, `cues_to_vtt`.
+
+Разница только в том, откуда взять список: у транскрипта он лежит под ключом `segments`. Поэтому
+разбиение на строки живёт в `cues.py`, а здесь его нет и не будет — второе место, где текст режется
+на реплики, рано или поздно разъедется с первым.
 """
 from __future__ import annotations
 
@@ -44,16 +49,15 @@ def _text(value: object) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def _cues(transcript: dict) -> list[tuple[float, float, str]]:
+def _clean(cues: list[dict]) -> list[tuple[float, float, str]]:
     """Реплики по возрастанию времени.
 
-    Сегмент без разборчивых времён или без текста пропускается: показать его нечем, а пустая
-    реплика ломает формат. Порядок задаём здесь, а не верим транскрипту: сегменты в нём собраны из
-    чанков, и чужой файл мог прийти как угодно.
+    Реплика без разборчивых времён или без текста пропускается: показать её нечем, а пустая
+    ломает формат. Порядок задаём здесь, а не верим входу: сегменты транскрипта собраны из чанков,
+    а чужой файл мог прийти как угодно.
     """
-    segments = transcript.get("segments") if isinstance(transcript, dict) else None
     out: list[tuple[float, float, str]] = []
-    for item in segments or []:
+    for item in cues or []:
         if not isinstance(item, dict):
             continue
         start, end = _as_float(item.get("start")), _as_float(item.get("end"))
@@ -65,23 +69,37 @@ def _cues(transcript: dict) -> list[tuple[float, float, str]]:
     return out
 
 
-def to_srt(transcript: dict) -> str:
-    """Транскрипт в SRT: номера с единицы, времена через запятую, пустая строка между репликами."""
+def _segments(transcript: dict) -> list:
+    return transcript.get("segments") or [] if isinstance(transcript, dict) else []
+
+
+def cues_to_srt(cues: list[dict]) -> str:
+    """Реплики в SRT: номера с единицы, времена через запятую, пустая строка между репликами."""
     blocks = [
         f"{number}\n{_timecode(start, sep=',')} --> {_timecode(end, sep=',')}\n{text}"
-        for number, (start, end, text) in enumerate(_cues(transcript), start=1)
+        for number, (start, end, text) in enumerate(_clean(cues), start=1)
     ]
     # Без реплик — пустой файл: номер и таймкод придумывать не из чего.
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
-def to_vtt(transcript: dict) -> str:
-    """Транскрипт в WebVTT: заголовок, времена через точку, номера реплик не нужны."""
+def cues_to_vtt(cues: list[dict]) -> str:
+    """Реплики в WebVTT: заголовок, времена через точку, номера реплик не нужны."""
     blocks = [
         f"{_timecode(start, sep='.')} --> {_timecode(end, sep='.')}\n{text}"
-        for start, end, text in _cues(transcript)
+        for start, end, text in _clean(cues)
     ]
     body = "\n\n".join(blocks) + "\n" if blocks else ""
     # Заголовок и пустая строка после него стоят всегда, даже когда реплик нет: без заголовка это
     # уже не WebVTT, и плеер откажется от файла целиком.
     return f"{VTT_HEADER}\n\n{body}"
+
+
+def to_srt(transcript: dict) -> str:
+    """Транскрипт в SRT: сегменты как есть, во времени исходника."""
+    return cues_to_srt(_segments(transcript))
+
+
+def to_vtt(transcript: dict) -> str:
+    """Транскрипт в WebVTT: сегменты как есть, во времени исходника."""
+    return cues_to_vtt(_segments(transcript))

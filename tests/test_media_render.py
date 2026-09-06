@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from server.app.config import Settings
@@ -175,12 +177,6 @@ class TestСубтитры:
         assert SOURCES["ast_s"].path in args
         assert "subtitles=" not in filter_of(args)
 
-    def test_субтитры_из_транскрипта_пока_не_собираются(self):
-        with pytest.raises(RenderInvalid) as e:
-            build(doc(subtitles={"source": "transcript", "asset_id": "ast_1",
-                                 "mode": "burn", "style": "default"}))
-        assert "M4" in str(e.value) or "транскрипт" in str(e.value).lower()
-
     def test_путь_субтитров_экранируется(self):
         sources = dict(SOURCES)
         sources["ast_s"] = SourceInfo(path="/d/it's:weird/subs.vtt", duration=0.0, has_audio=False)
@@ -188,6 +184,46 @@ class TestСубтитры:
                                     settings=S, out_path="/d/o.mp4.part")
         chain = filter_of(args)
         assert r"\:" in chain and r"\'" in chain
+
+
+class TestСубтитрыИзТранскрипта:
+    """Файл собирает вызывающий: чистая функция на диск не ходит и написать его не может."""
+
+    CACHE = Path("/d/u/projects/prj_1/subs/3.srt")
+
+    def subs_doc(self, **over):
+        return doc(subtitles={"source": "transcript", "asset_id": "ast_1", "mode": "burn",
+                              "style": "default", **over})
+
+    def build(self, document, path=CACHE):
+        return build_render_command(document, sources=SOURCES, quality="draft", settings=S,
+                                    out_path="/d/o.mp4.part", subtitles_path=path)
+
+    def test_вжигается_переданный_файл(self):
+        chain = filter_of(self.build(self.subs_doc()))
+        assert "subs/3.srt" in chain
+        assert chain.index("concat=") < chain.index("subtitles=")
+
+    def test_мягкая_дорожка_из_того_же_файла(self):
+        args = self.build(self.subs_doc(mode="soft"))
+        assert "mov_text" in args and str(self.CACHE) in args
+        assert "subtitles=" not in filter_of(args)
+
+    def test_без_пути_это_ошибка_вызывающего(self):
+        # Не «неподдержанный случай», а недоделка вызывающего — и сказать надо именно это.
+        with pytest.raises(RenderInvalid) as e:
+            self.build(self.subs_doc(), path=None)
+        assert "subtitles_path" in str(e.value)
+
+    def test_путь_кэша_экранируется_как_и_чужой(self):
+        chain = filter_of(self.build(self.subs_doc(), path=Path(r"C:\d\it's\subs\3.srt")))
+        assert r"\:" in chain and r"\'" in chain
+
+    def test_путь_не_подменяет_загруженный_файл(self):
+        """У source=file субтитры лежат рядом с ассетом: путь кэша тут ни при чём."""
+        args = self.build(doc(subtitles={"source": "file", "asset_id": "ast_s", "mode": "soft",
+                                         "style": "default"}))
+        assert SOURCES["ast_s"].path in args and str(self.CACHE) not in args
 
 
 class TestКодирование:

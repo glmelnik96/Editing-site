@@ -1,9 +1,11 @@
+import json
+
 import pytest
 
 from server.app.config import Settings
 from server.app.jobs import enqueue_job
-from server.app.projects.store import create_project
-from server.app.storage import asset_dir, render_dir
+from server.app.projects.store import create_project, save_project
+from server.app.storage import asset_dir, render_dir, subs_dir, transcript_path
 from server.app.util import now_iso
 from server.db.core import connect
 from server.db.migrate import migrate
@@ -62,6 +64,25 @@ def fake_ffmpeg(payload=b"video"):
     return run
 
 
+def add_transcript(settings):
+    words = [{"w": f"слово{i}", "s": round(i * 0.4, 3), "e": round(i * 0.4 + 0.3, 3),
+              "interpolated": True} for i in range(12)]
+    transcript_path(settings, USER, ASSET).write_text(
+        json.dumps({"asset_id": ASSET, "duration": 60.0, "segments": [
+            {"id": 1, "start": 0.0, "end": 4.8, "text": " ".join(w["w"] for w in words),
+             "words": words},
+        ]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def subs_project(conn, settings, mode="burn"):
+    return create_project(conn, settings, USER, name="С субтитрами", raw_doc={
+        "clips": [{"asset_id": ASSET, "in": 1.0, "out": 6.0}],
+        "subtitles": {"source": "transcript", "asset_id": ASSET, "mode": mode, "style": "default"},
+    })
+
+
 class TestУспех:
     def test_рендер_кладёт_файл_и_строку(self, conn, settings, monkeypatch):
         project = make_project(conn, settings)
@@ -99,6 +120,72 @@ class TestУспех:
         handlers.handle_render(conn, settings, take_render(conn, project["id"], quality="final"))
         assert seen["preset"] == "veryfast"
         assert conn.execute("SELECT quality FROM renders").fetchone()[0] == "final"
+
+
+class TestСубтитрыИзТранскрипта:
+    def spy_args(self, monkeypatch):
+        """Перехватывает командную строку: настоящий ffmpeg тут не нужен, важна только сборка."""
+        seen = {}
+
+        def run(args, **kwargs):
+            seen["args"] = args
+            with open(args[-1], "wb") as f:
+                f.write(b"v")
+
+        monkeypatch.setattr(handlers, "run_streaming", run)
+        return seen
+
+    def test_собранный_файл_попадает_в_команду(self, conn, settings, monkeypatch):
+        add_transcript(settings)
+        project = subs_project(conn, settings)
+        seen = self.spy_args(monkeypatch)
+        handlers.handle_render(conn, settings, take_render(conn, project["id"]))
+
+        srt = subs_dir(settings, USER, project["id"]) / f"{project['version']}.srt"
+        assert srt.exists() and srt.read_text(encoding="utf-8")
+        command = " ".join(seen["args"])
+        assert "subtitles=" in command and srt.name in command
+
+    def test_мягкая_дорожка_берёт_тот_же_файл(self, conn, settings, monkeypatch):
+        add_transcript(settings)
+        project = subs_project(conn, settings, mode="soft")
+        seen = self.spy_args(monkeypatch)
+        handlers.handle_render(conn, settings, take_render(conn, project["id"]))
+
+        srt = subs_dir(settings, USER, project["id"]) / f"{project['version']}.srt"
+        assert str(srt) in seen["args"] and "mov_text" in seen["args"]
+
+    def test_без_расшифровки_задание_падает_внятно(self, conn, settings, monkeypatch):
+        project = subs_project(conn, settings)
+        monkeypatch.setattr(handlers, "run_streaming", lambda *a, **k: pytest.fail("собирать нечего"))
+        with pytest.raises(MediaError) as e:
+            handlers.handle_render(conn, settings, take_render(conn, project["id"]))
+        # Человек должен прочитать «закажите расшифровку», а не ругань ffmpeg на пустой путь.
+        assert e.value.reason == "no_transcript" and "расшифров" in e.value.message.lower()
+        assert conn.execute("SELECT count(*) FROM renders").fetchone()[0] == 0
+
+    def test_новая_версия_собирается_заново_а_прежняя_переиспользуется(
+        self, conn, settings, monkeypatch
+    ):
+        add_transcript(settings)
+        project = subs_project(conn, settings)
+        monkeypatch.setattr(handlers, "run_streaming", fake_ffmpeg())
+        handlers.handle_render(conn, settings, take_render(conn, project["id"]))
+
+        first = subs_dir(settings, USER, project["id"]) / f"{project['version']}.srt"
+        # Якорь переживёт вторую сборку той же версии — значит файл взяли из кэша.
+        first.write_text("ЯКОРЬ", encoding="utf-8")
+        handlers.handle_render(conn, settings, take_render(conn, project["id"]))
+        assert first.read_text(encoding="utf-8") == "ЯКОРЬ"
+
+        saved = save_project(
+            conn, settings, USER, project["id"], name=project["name"],
+            raw_doc={**project["doc"], "clips": [{"asset_id": ASSET, "in": 2.0, "out": 6.0}]},
+            version=project["version"],
+        )
+        handlers.handle_render(conn, settings, take_render(conn, saved["id"]))
+        second = first.with_name(f"{saved['version']}.srt")
+        assert second.exists() and second.read_text(encoding="utf-8") != "ЯКОРЬ"
 
 
 class TestОтказы:

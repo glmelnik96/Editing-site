@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from server.app.config import Settings
 
@@ -90,6 +91,27 @@ def _music_chain(music: dict, total: float) -> str:
     return ",".join(parts)
 
 
+def _subtitles_file(
+    subtitles: dict, sources: dict[str, SourceInfo], subtitles_path: Path | None
+) -> str:
+    """Откуда взять файл субтитров. Вжигание и мягкая дорожка дальше работают одинаково: источник
+    решает только это.
+
+    У загруженного файла он лежит рядом с ассетом, а реплики из транскрипта собирает вызывающий —
+    сборщик команды на диск не ходит и написать этот файл не может.
+    """
+    if subtitles.get("source") == "transcript":
+        if subtitles_path is None:
+            raise RenderInvalid(
+                "субтитры из транскрипта не собраны: вызывающий не передал subtitles_path"
+            )
+        return str(subtitles_path)
+    source = sources.get(subtitles["asset_id"])
+    if source is None:
+        raise RenderInvalid(f"ассет субтитров {subtitles['asset_id']} недоступен")
+    return source.path
+
+
 def build_render_command(
     doc: dict,
     *,
@@ -97,6 +119,7 @@ def build_render_command(
     quality: str,
     settings: Settings,
     out_path: str,
+    subtitles_path: Path | None = None,
 ) -> list[str]:
     """Полная командная строка ffmpeg для сборки проекта."""
     preset = QUALITY.get(quality)
@@ -141,8 +164,6 @@ def build_render_command(
 
     music = doc.get("music")
     subtitles = doc.get("subtitles")
-    if subtitles and subtitles.get("source") == "transcript":
-        raise RenderInvalid("субтитры из транскрипта появятся в M4")
 
     video_out, audio_out = "[v]", "[a]"
     filters.append(f"{''.join(concat_labels)}concat=n={len(clips)}:v=1:a=1{video_out}{audio_out}")
@@ -162,15 +183,13 @@ def build_render_command(
 
     subtitle_input: int | None = None
     if subtitles:
-        source = sources.get(subtitles["asset_id"])
-        if source is None:
-            raise RenderInvalid(f"ассет субтитров {subtitles['asset_id']} недоступен")
+        subtitle_file = _subtitles_file(subtitles, sources, subtitles_path)
         if subtitles["mode"] == "burn":
-            escaped = escape_for_filter(source.path)
+            escaped = escape_for_filter(subtitle_file)
             filters.append(f"{video_out}subtitles='{escaped}':force_style='{SUBTITLE_STYLE}'[vsub]")
             video_out = "[vsub]"
         else:
-            args += ["-i", source.path]
+            args += ["-i", subtitle_file]
             subtitle_input = index
             index += 1
 

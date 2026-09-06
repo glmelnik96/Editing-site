@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -14,9 +15,12 @@ from pathlib import Path
 from server.app.config import Settings
 from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
 from server.app.projects.snap import snap_clips
-from server.app.storage import asset_dir, render_dir, render_url
+from server.app.storage import asset_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
+from server.media.cues import build_cues
+from server.media.subs import cues_to_srt, cues_to_vtt
+from server.media.timeline import words_through_clips
 
 log = logging.getLogger("video.projects")
 
@@ -330,6 +334,93 @@ def restore_version(
         conn, settings, user_id, project_id,
         name=row["name"], raw_doc=json.loads(row["doc"]), version=current["version"],
     )
+
+
+# ── Субтитры проекта из расшифровки (спека §10.9) ──────────────────────────────────────────────
+
+# Ширина строки по пропорции кадра: в вертикальном кадре длинная строка уезжает за край.
+SUB_CHARS_BY_ASPECT = {"16:9": 42, "9:16": 24, "1:1": 32}
+SUB_LINES = 2
+SUB_MAX_DUR = 4.0
+
+
+class SubtitlesUnavailable(Exception):
+    """Субтитры проекта нечем собрать: у исходника нет расшифровки.
+
+    Свой тип, а не MediaError: ту же сборку зовёт HTTP-ручка, и ей нужен свой код ответа, а не
+    ошибка запуска ffmpeg.
+    """
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Через временный файл: ffmpeg не должен открыть половину субтитров.
+
+    В имени временного файла стоит pid: черновик и финал одной версии собираются одновременно,
+    и общий «.part» они отобрали бы друг у друга.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _owner_of(conn: sqlite3.Connection, project_id: str) -> str:
+    """Владелец проекта: от него строятся пути к файлам, а в карточке проекта его нет."""
+    row = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if row is None:
+        raise KeyError(project_id)
+    return row["user_id"]
+
+
+def build_project_subtitles(
+    conn: sqlite3.Connection, settings: Settings, project: dict
+) -> Path | None:
+    """Субтитры проекта в кэш `subs/{version}.srt` и `.vtt`; возвращает путь к `.srt`.
+
+    None — субтитров в документе нет или они из загруженного файла: тот уже лежит рядом с ассетом,
+    собирать нечего.
+
+    Реплики режутся из слов, пересчитанных через клипы: транскрипт живёт во времени исходника, а в
+    ролике от исходника остались только выбранные куски и стоят они в другом порядке. Возьми слова
+    как есть — и субтитры разъедутся с картинкой.
+    """
+    doc = project.get("doc") or {}
+    subtitles = doc.get("subtitles")
+    if not subtitles or subtitles.get("source") != "transcript":
+        return None
+    owner = _owner_of(conn, project["id"])
+    folder = subs_dir(settings, owner, project["id"])
+    version = project["version"]
+    srt, vtt = folder / f"{version}.srt", folder / f"{version}.vtt"
+    if srt.exists() and vtt.exists():
+        # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
+        # документа. Пересборка дала бы те же реплики и стоила бы времени на каждой сборке.
+        return srt
+
+    # Ассет субтитров принадлежит владельцу проекта: документ проверялся по его же ассетам.
+    asset_id = subtitles["asset_id"]
+    try:
+        transcript = json.loads(
+            transcript_path(settings, owner, asset_id).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        # Пустой путь до ffmpeg доводить нельзя: он упал бы на открытии файла, и в карточке
+        # задания оказалась бы ругань кодека вместо понятного «закажите расшифровку».
+        raise SubtitlesUnavailable(
+            "у файла нет расшифровки: закажите её и соберите проект заново"
+        ) from exc
+
+    aspect = (doc.get("output") or {}).get("aspect")
+    cues = build_cues(
+        words_through_clips(transcript, doc.get("clips") or [], asset_id=asset_id),
+        # Пропорция проверена при сохранении; запасное значение — на испорченный документ.
+        max_chars=SUB_CHARS_BY_ASPECT.get(aspect, SUB_CHARS_BY_ASPECT["16:9"]),
+        max_lines=SUB_LINES,
+        max_dur=SUB_MAX_DUR,
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    _write_atomic(srt, cues_to_srt(cues))
+    _write_atomic(vtt, cues_to_vtt(cues))
+    return srt
 
 
 def _render_row(row: sqlite3.Row) -> dict:

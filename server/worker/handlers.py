@@ -21,8 +21,13 @@ from urllib.parse import urlsplit
 
 from server.app.config import Settings
 from server.app.jobs import enqueue_job
-from server.app.projects.store import assets_of, get_project
-from server.app.storage import asset_dir, render_dir
+from server.app.projects.store import (
+    SubtitlesUnavailable,
+    assets_of,
+    build_project_subtitles,
+    get_project,
+)
+from server.app.storage import TRANSCRIPT_NAME, asset_dir, render_dir
 from server.app.transcribe.provider import ProviderError, TranscribeProvider, build_client
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
@@ -270,6 +275,13 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
     if disk_free_bytes(settings.data_dir) < estimate:
         raise MediaError("disk_low", "на диске мало места для сборки, освободите его и повторите")
 
+    # Субтитры из расшифровки собираются до команды: сборщик команды на диск не ходит и получает
+    # готовый файл аргументом.
+    try:
+        subtitles_path = build_project_subtitles(conn, settings, project)
+    except SubtitlesUnavailable as exc:
+        raise MediaError("no_transcript", str(exc)) from exc
+
     render_id = new_id("rnd")
     folder = render_dir(settings, job["user_id"], project["id"])
     folder.mkdir(parents=True, exist_ok=True)
@@ -278,7 +290,8 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
 
     try:
         args = build_render_command(
-            project["doc"], sources=sources, quality=quality, settings=settings, out_path=str(tmp)
+            project["doc"], sources=sources, quality=quality, settings=settings, out_path=str(tmp),
+            subtitles_path=subtitles_path,
         )
     except RenderInvalid as exc:
         raise MediaError("bad_project", str(exc)) from exc
@@ -318,7 +331,6 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
 
 # Транскрибировать можно то же, что и монтировать: анализ прошёл, карты пауз лежат на диске.
 TRANSCRIBE_READY_STATUSES = RENDER_READY_STATUSES
-TRANSCRIPT_NAME = "transcript.json"
 CHUNK_PREFIX = "chunk-"
 PROGRESS_SENT = 0.9  # доля прогресса на отправку чанков, остальное — сборка и запись
 # Звук и чанки лежат на диске одновременно: WAV 16 кГц моно даёт 32 КБ/с, а чанки в худшем случае
