@@ -1,77 +1,688 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-body { margin: 0; background: #f4f4f2; color: #1c1c1c; }
-@media (prefers-color-scheme: dark) { body { background: #161716; color: #e6e6e3; } }
-.bar { display: flex; gap: 16px; align-items: center; padding: 12px 20px; border-bottom: 1px solid #8884; }
-.bar span { flex: 1; }
-.card { max-width: 720px; margin: 24px auto; padding: 20px 24px; border: 1px solid #8884; border-radius: 8px; }
-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #8883; }
-form { display: flex; gap: 8px; margin-top: 12px; }
-input { flex: 1; padding: 6px 8px; }
-button, .button { padding: 6px 12px; cursor: pointer; }
-pre { white-space: pre-wrap; word-break: break-all; padding: 12px; background: #8882; border-radius: 6px; }
-.error { color: #b3261e; }
-.progress { height: 6px; margin: 4px 0 8px; background: #8883; border-radius: 3px; }
-.progress > i { display: block; height: 100%; background: #3a7d5c; border-radius: 3px; transition: width .2s; }
-.status-failed { color: #b3261e; }
-.muted { opacity: .7; }
-.player { display: block; width: 100%; max-width: 640px; margin: 12px 0; background: #000; border-radius: 6px; }
+/* Визуальная система сайта. Спека: docs/superpowers/specs/2026-09-06-ux-redesign-and-subtitle-review-design.md, §3.
+ *
+ * Разделы файла:
+ *   1. Шрифты          — @font-face владельца, общие с соседями по ВМ
+ *   2. Токены          — единственное место, где живут цвета
+ *   3. Основа          — body и голые элементы, чтобы старая разметка не выпадала из системы
+ *   4. Типографика     — .display-* / .lead / .small / .meta / .mono
+ *   5. Кнопки          — .btn и семейство
+ *   6. Поверхности     — .card / .field / .pill / .screen
+ *   7. Раскладка       — .stack / .row / .grid-2
+ *   8. Движение        — .appear и отключение движения целиком
+ *   9. Редактор        — шапка, сцена, шкала, исходник, текст, списки, кабинет доступа
+ *
+ * Разделы 1–8 — новая система, раздел 9 — правила работающего редактора: они перенесены
+ * из прежнего файла и перекрашены на токены, устройство панелей не менялось (это M5b).
+ */
 
-.timeline { border: 1px solid #8884; border-radius: 8px; overflow-x: auto; background: #0002; }
-.ruler { position: relative; height: 18px; font-size: 11px; }
-.ruler .tick { position: absolute; top: 2px; opacity: .6; border-left: 1px solid #8886; padding-left: 3px; }
-.track { position: relative; height: 76px; }
-.block { position: absolute; top: 2px; overflow: hidden; border-radius: 5px; background: #2f5d4a;
-  border: 1px solid #0006; cursor: grab; user-select: none; touch-action: none; }
-.block.selected { outline: 2px solid #7fd1ab; }
-.block .frame { position: absolute; top: 0; width: 160px; height: 90px; background-repeat: no-repeat; opacity: .75; }
-.block .label { position: absolute; left: 6px; top: 4px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; }
-.block .wave { position: absolute; left: 0; bottom: 0; }
-.block .handle { position: absolute; top: 0; bottom: 0; width: 8px; background: #7fd1ab88; cursor: ew-resize; }
-.block .handle-in { left: 0; } .block .handle-out { right: 0; }
-.block .unverified { margin-left: 6px; color: #ffd166; font-weight: bold; }
-.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff6b6b; pointer-events: none; }
-.tl-hint { height: 18px; font-size: 12px; padding-left: 6px; }
-.editor { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr); gap: 16px; }
+/* ═══ 1. Шрифты ══════════════════════════════════════════════════════════ */
+
+/* Display Light (300) — только для крупного: на чёрном фоне светлое начертание
+ * читается спокойнее жирного, так же сделано в референсе. */
+@font-face {
+  font-family: 'SB Sans Display';
+  src: url('/fonts/sb-sans-display-300.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SB Sans Text';
+  src: url('/fonts/sb-sans-text-300.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SB Sans Text';
+  src: url('/fonts/sb-sans-text-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ═══ 2. Токены ══════════════════════════════════════════════════════════ */
+
+:root {
+  --ink: #030503; /* фон страницы */
+  --paper: #f4f6f4; /* основной текст */
+  --muted: #a1a1a1; /* вторичный текст */
+  --dim: #6b6f6d; /* плейсхолдеры, третичный */
+  --panel: #171717; /* карточки, поля, панели */
+  --line: #262626; /* рамки: единственный способ показать глубину, теней нет */
+  --brand: #3fb67c; /* действие; общий цвет с соседями по ВМ */
+  --brand-hover: #55c48f;
+  --brand-ink: #0a0c0b; /* текст на зелёном */
+  --warn: #e5b769; /* неподтверждённая граница, подозрительная реплика */
+  --bad: #e06c60; /* ошибка */
+
+  /* Одна кривая на всё движение: разнобой в анимации читается как неряшливость. */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --font-display: 'SB Sans Display', 'SB Sans Text', system-ui, sans-serif;
+  --font-text: 'SB Sans Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  color-scheme: dark;
+  accent-color: var(--brand); /* галочки и ползунки браузера — тоже зелёные */
+}
+
+/* ═══ 3. Основа ══════════════════════════════════════════════════════════ */
+
+/* Ширина считается вместе с полями и рамкой: иначе поле на всю ширину карточки
+ * вылезает за её правый край ровно на сумму своих padding и border. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font: 400 16px/1.45 var(--font-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--brand);
+  text-decoration-color: color-mix(in srgb, var(--brand) 40%, transparent);
+}
+a:hover {
+  color: var(--brand-hover);
+}
+
+/* Заголовки старой разметки (h1…h3 в панелях) держат ту же шкалу, что классы
+ * .display-*: экраны переезжают на классы постепенно, а выглядеть одинаково должны сразу. */
+h1,
+h2,
+h3 {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.015em;
+}
+h1 {
+  font-size: 44px;
+  line-height: 1;
+  margin-bottom: 16px;
+}
+h2 {
+  font-size: 32px;
+  line-height: 1.1;
+}
+h3 {
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+/* Поля ввода. Галочки и радио исключены: им нужен родной вид браузера, а не панель с рамкой. */
+input:not([type='checkbox']):not([type='radio']),
+select,
+textarea {
+  font: inherit;
+  color: var(--paper);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  transition: border-color 0.15s var(--ease);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+::placeholder {
+  color: var(--dim);
+}
+input[type='checkbox'] {
+  flex: 0 0 auto; /* в строке формы галочка не растягивается на всю ширину, как поле адреса */
+  width: 16px;
+  height: 16px;
+}
+
+/* Формы старых панелей — строка «поле + кнопка». Перенос включён: с новыми радиусами
+ * и полями строка кабинета доступа иначе уезжает за край карточки. */
+form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+input {
+  flex: 1;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+th,
+td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 12px 0 0;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.muted {
+  color: var(--muted);
+}
+.error,
+.status-failed {
+  color: var(--bad);
+}
+
+/* ═══ 4. Типографика ═════════════════════════════════════════════════════ */
+
+/* Крупное — семейством Display и начертанием 300; интерлиньяж плотнее кегля. */
+.display-xl {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 64px;
+  line-height: 0.98;
+  letter-spacing: -0.015em;
+}
+.display-l {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 44px;
+  line-height: 1;
+  letter-spacing: -0.015em;
+}
+.display-m {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 32px;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.lead {
+  font-weight: 300;
+  font-size: 20px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.small {
+  font-size: 14px;
+  line-height: 1.4;
+}
+.meta {
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+/* Цифры моноширинного вида, а не моноширинный шрифт: таймкоды в столбце не пляшут,
+ * а буквы вокруг них остаются текстовыми. */
+.mono {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 719px) {
+  .display-xl {
+    font-size: 40px;
+  }
+}
+
+/* ═══ 5. Кнопки ══════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: none;
+  color: var(--paper);
+  font: inherit;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+/* Ключевая кнопка на экране одна: зелёный — единственный цвет действия. */
+.btn-key {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+.btn-key:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+.btn-ghost {
+  border-color: var(--line);
+}
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+.btn-icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 12px;
+  border-color: var(--line);
+}
+.btn-icon:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Голая кнопка старых панелей выглядит как .btn-ghost: экраны переезжают на классы
+ * постепенно, а редактор должен читаться единой системой уже сейчас. */
+button,
+.button {
+  display: inline-block;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--paper);
+  font: inherit;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease);
+}
+button:hover:not(:disabled),
+.button:hover {
+  border-color: var(--brand);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ═══ 6. Поверхности ═════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 20px 24px;
+}
+/* Старые экраны ставят карточку как <main class="card"> прямо в корень страницы —
+ * поля и ширину колонки задавать больше некому. У новых это делает .screen. */
+main.card {
+  max-width: 1120px;
+  margin: 16px auto;
+}
+
+.field {
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--panel);
+  color: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+  transition: border-color 0.15s var(--ease);
+}
+.field:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.screen {
+  max-width: 1120px;
+  margin-inline: auto;
+  padding: 24px;
+}
+@media (max-width: 719px) {
+  .screen {
+    padding: 16px;
+  }
+}
+
+/* ═══ 7. Раскладка ═══════════════════════════════════════════════════════ */
+
+/* Вертикальный ритм — через gap, а не через margin у соседей: так расстояние
+ * задаётся в одном месте и не зависит от того, что именно положили внутрь. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack-gap, 16px);
+}
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--row-gap, 8px);
+  margin: 8px 0;
+}
+/* Внутри .stack расстояние держит стопка — свой отступ строка снимает. */
+.stack > .row {
+  margin: 0;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--grid-gap, 16px);
+}
+@media (max-width: 719px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ═══ 8. Движение ════════════════════════════════════════════════════════ */
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* backwards, а не both: после анимации элемент возвращается к обычному виду, и если
+ * анимация не сыграла вовсе, содержимое всё равно видно. --delay строит очередь. */
+.appear {
+  animation: appear 0.3s var(--ease) var(--delay, 0s) backwards;
+}
+
+/* ═══ 9. Редактор ════════════════════════════════════════════════════════ */
+/* Правила работающего интерфейса: перенесены из прежнего файла и перекрашены
+ * на токены. Устройство панелей не менялось. */
+
+/* --- Шапка и общая рамка --- */
+
+.bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.bar span {
+  flex: 1;
+}
+.save-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.editor {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
+  gap: 16px;
+  padding: 16px 24px;
+}
+/* Левая колонка: исходник, текст и точки сохранения друг под другом, все видны без прокрутки.
+ * Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: start;
+}
+.side .card {
+  margin: 0;
+  max-width: none;
+}
+/* Выбор исходника — во всю ширину панели, а не по длине самого длинного имени файла. */
+#src-pick {
+  width: 100%;
+}
+
+/* --- Сцена и плеер --- */
+
 /* Высота сцены ограничена, а ширину задаёт пропорция вывода (редактор ставит max-width от неё):
    иначе 9:16 растягивает сцену на полторы страницы и шкала уезжает под сгиб. */
-.stage { background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center;
-  --stage-h: 52vh; max-height: var(--stage-h); margin-inline: auto; }
+.stage {
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  --stage-h: 52vh;
+  max-height: var(--stage-h);
+  margin-inline: auto;
+}
 /* Кадр всегда занимает сцену целиком, с сохранением пропорций: прокси меньше сцены (640 px по
    длинной стороне), и по max-width он вставал бы в свою натуральную величину, оставляя поля.
    contain повторяет то, что делает сервер при fit=pad, поэтому предпросмотр не расходится с рендером. */
-.stage video { width: 100%; height: 100%; object-fit: contain; }
-.stage.crop video { width: 100%; height: 100%; object-fit: cover; }
-.save-state { font-size: 12px; opacity: .75; }
+.stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.stage.crop video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.player {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin: 12px 0;
+  background: var(--ink);
+  border-radius: 12px;
+}
 
-.row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-select { padding: 6px 8px; width: 100%; }
+/* --- Шкала --- */
 
-.scrub { position: relative; height: 12px; background: #8881; cursor: ew-resize; touch-action: none; }
-.playhead { z-index: 3; }
-.timeline { position: relative; }
+.timeline {
+  position: relative;
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  /* Клип — приглушённый зелёный: он из того же семейства, что кнопка действия,
+   * но не спорит с ней за внимание. Ручки и подсветка — светлее клипа. */
+  --clip: color-mix(in srgb, var(--brand) 24%, var(--ink));
+}
+.ruler {
+  position: relative;
+  height: 18px;
+  font-size: 11px;
+}
+.ruler .tick {
+  position: absolute;
+  top: 2px;
+  color: var(--dim);
+  border-left: 1px solid var(--line);
+  padding-left: 3px;
+}
+.track {
+  position: relative;
+  height: 76px;
+}
+.block {
+  position: absolute;
+  top: 2px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--clip);
+  border: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.block.selected {
+  outline: 2px solid var(--brand-hover);
+}
+.block .frame {
+  position: absolute;
+  top: 0;
+  width: 160px;
+  height: 90px;
+  background-repeat: no-repeat;
+  opacity: 0.75;
+}
+/* Тень под подписью — не глубина, а читаемость: имя клипа лежит поверх кадра из видео. */
+.block .label {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  font-size: 11px;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+}
+.block .wave {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+}
+.block .handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: color-mix(in srgb, var(--brand-hover) 55%, transparent);
+  cursor: ew-resize;
+}
+.block .handle-in {
+  left: 0;
+}
+.block .handle-out {
+  right: 0;
+}
+.block .unverified {
+  margin-left: 6px;
+  color: var(--warn);
+  font-weight: bold;
+}
+.block.dragging {
+  opacity: 0.55;
+}
+/* Призрак показывает, куда встанет клип, если отпустить указатель. */
+.drop-ghost {
+  position: absolute;
+  top: 2px;
+  height: 72px;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px dashed var(--brand-hover);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+/* Красная риска текущего кадра — конвенция монтажных программ; другого красного
+ * в системе нет, поэтому берём --bad. Ошибку она здесь не значит. */
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--bad);
+  pointer-events: none;
+  z-index: 3;
+}
+.scrub {
+  position: relative;
+  height: 12px;
+  background: var(--line);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.tl-hint {
+  height: 18px;
+  font-size: 12px;
+  padding-left: 6px;
+}
 
-.versions { list-style: none; padding: 0; margin: 8px 0 0; }
-.versions li { display: flex; gap: 8px; align-items: center; justify-content: space-between;
-  padding: 4px 0; border-bottom: 1px solid #8882; font-size: 13px; }
-/* Готовый ролик: ссылка на скачивание и удаление держатся вместе у правого края строки. */
-.render-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
-/* Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
-/* Левая колонка: исходник и точки сохранения друг под другом, обе видны без прокрутки. */
-.side { display: flex; flex-direction: column; gap: 12px; align-self: start; }
-.side .card { margin: 0; }
+/* --- Панель исходника --- */
 
 /* Полоса исходника: весь файл, залитый кусок между границами, ручки и риска текущего кадра. */
-.src-strip { position: relative; height: 26px; margin: 8px 0; border-radius: 4px;
-  background: #8882; cursor: pointer; touch-action: none; }
-.src-strip.empty { opacity: .4; cursor: default; }
-.src-sel { position: absolute; top: 0; bottom: 0; background: #3a7d5c88; border-left: 2px solid #7fd1ab;
-  border-right: 2px solid #7fd1ab; }
-.src-handle { position: absolute; top: -2px; bottom: -2px; width: 10px; margin-left: -5px;
-  background: #7fd1ab; border-radius: 3px; cursor: ew-resize; }
-.src-cursor { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #ff6b6b; pointer-events: none; }
-.tc { width: 92px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-.tc.bad { outline: 2px solid #b3261e; }
+.src-strip {
+  position: relative;
+  height: 26px;
+  margin: 8px 0;
+  border-radius: 12px;
+  background: var(--line);
+  cursor: pointer;
+  touch-action: none;
+}
+.src-strip.empty {
+  opacity: 0.4;
+  cursor: default;
+}
+.src-sel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--brand) 45%, transparent);
+  border-left: 2px solid var(--brand-hover);
+  border-right: 2px solid var(--brand-hover);
+}
+.src-handle {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 10px;
+  margin-left: -5px;
+  background: var(--brand-hover);
+  border-radius: 3px;
+  cursor: ew-resize;
+}
+.src-cursor {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--bad);
+  pointer-events: none;
+}
+/* Поле таймкода: узкое, цифры не пляшут при перемотке. Ширина считается с полями
+ * (border-box), поэтому её больше, чем было: внутрь должно влезать «1:32.4». */
+.tc {
+  width: 104px;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.tc.bad {
+  border-color: var(--bad);
+  outline: 2px solid var(--bad);
+}
+
+/* --- Панель текста --- */
 
 /* Панель транскрипта: это текст для чтения, поэтому пометки качества тише слов — слабая полоска
    у подозрительной реплики и пунктир под таймкодом с неподтверждённой границей, всё прочее в
@@ -79,26 +690,112 @@ select { padding: 6px 8px; width: 100%; }
    бы её текст относительно соседних. */
 /* user-select снят намеренно: протаскивание по тексту — это выбор куска, и синее выделение
    браузера рисовало бы поверх нашего вторую, спорящую с ним границу. */
-.transcript { max-height: 40vh; overflow-y: auto; margin-top: 8px; font-size: 14px; line-height: 1.7;
-  user-select: none; }
-.tr-seg { margin: 0 0 8px; padding-left: 8px; border-left: 2px solid transparent; }
-.tr-seg.suspect { border-left-color: #ffd16688; }
-.tr-at { margin-right: 6px; font-size: 11px; opacity: .55; font-variant-numeric: tabular-nums; }
-.tr-at.unsure { border-bottom: 1px dotted #ffd166; }
-.tr-w { padding: 0 1px; border-radius: 3px; cursor: pointer; }
-.tr-w:hover { background: #8883; }
-.tr-w.picked { background: #3a7d5c55; }
-.tr-w.anchor { box-shadow: inset 0 -2px 0 #7fd1ab; }
-.tr-w.now { background: #ffd16655; }
+.transcript {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.7;
+  user-select: none;
+}
+.tr-seg {
+  margin: 0 0 8px;
+  padding-left: 8px;
+  border-left: 2px solid transparent;
+}
+.tr-seg.suspect {
+  border-left-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.tr-at {
+  margin-right: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.tr-at.unsure {
+  border-bottom: 1px dotted var(--warn);
+}
+.tr-w {
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.tr-w:hover {
+  background: var(--line);
+}
+.tr-w.picked {
+  background: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+/* Подчёркивание якоря — вкладкой в фон, а не рамкой: рамка сдвинула бы слово в строке. */
+.tr-w.anchor {
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+.tr-w.now {
+  background: color-mix(in srgb, var(--warn) 35%, transparent);
+}
 
-/* Призрак показывает, куда встанет клип, если отпустить указатель. */
-.drop-ghost { position: absolute; top: 2px; height: 72px; z-index: 2; pointer-events: none;
-  border: 2px dashed #7fd1ab; border-radius: 5px; background: #7fd1ab22; }
-.block.dragging { opacity: .55; }
+/* --- Списки точек сохранения, сборок и загрузок --- */
 
-/* Кабинет: галочка доступа стоит по центру своей клетки, иначе столбец читается вкось. */
-th.access, td.access { text-align: center; }
+.versions {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.versions li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+/* Готовый ролик: ссылка на скачивание и удаление держатся вместе у правого края строки. */
+.render-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.progress {
+  height: 6px;
+  margin: 4px 0 8px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress > i {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  border-radius: 999px;
+  transition: width 0.2s var(--ease);
+}
+
+/* --- Кабинет доступа --- */
+
+/* Галочка доступа стоит по центру своей клетки, иначе столбец читается вкось. */
+th.access,
+td.access {
+  text-align: center;
+}
 /* Состояние недоступного сервиса — подписью под названием столбца, а не вместо него. */
-th.access .muted { display: block; font-weight: normal; font-size: 12px; }
-/* В строке формы галочка не растягивается на всю ширину, как поле адреса. */
-input[type="checkbox"] { flex: 0 0 auto; }
+th.access .muted {
+  display: block;
+  font-weight: normal;
+  font-size: 12px;
+}
+
+/* ═══ Движение выключено целиком ═════════════════════════════════════════ */
+/* Стоит последним и с !important, чтобы гасить и то, что объявлено выше, и то,
+ * что появится в разделах экранов позже. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
