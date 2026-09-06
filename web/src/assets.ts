@@ -1,7 +1,12 @@
-import { api, ApiError } from './api'
-import { escapeHtml } from './html'
-import { playerMarkup, progressText } from './player'
-import { uploadFile } from './upload'
+/**
+ * Записи (ассеты): типы, общее форматирование и запросы к API.
+ *
+ * Разметка списка записей живёт в `files.ts`, выбор записи — в `newproject.ts`. Здесь остаётся
+ * только то, что нужно нескольким экранам сразу: формат размера и времени, состояние обработки,
+ * кадр из полоски и память о выбранной записи.
+ */
+import { api } from './api'
+import { assetData, type AssetData } from './strip'
 
 export type Asset = {
   id: string
@@ -33,7 +38,8 @@ const STATUS: Record<string, string> = {
   failed: 'ошибка',
 }
 const FINAL = new Set(['proxy_ready', 'failed']) // 'ready' — промежуточный: звук и полоска готовы, прокси ещё собирается
-const POLL_MS = 3000
+const READY = new Set(['ready', 'proxy_ready']) // из такой записи уже можно резать клип
+export const POLL_MS = 3000
 
 export function fmtSize(bytes: number): string {
   const units = ['Б', 'КБ', 'МБ', 'ГБ']
@@ -56,6 +62,20 @@ export function fmtDuration(sec: number | null): string {
   return `${h ? h + ':' : ''}${mm}:${String(r).padStart(2, '0')}`
 }
 
+/** Время в поясе человека: сервер отдаёт UTC с Z, и «создан 03:20» в чужом поясе просто врёт. */
+export function fmtWhen(ts: string | null): string {
+  if (!ts) return '—'
+  const at = new Date(ts)
+  if (Number.isNaN(at.getTime())) return ts
+  return at.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export function statusText(status: string): string {
   return STATUS[status] ?? status
 }
@@ -64,129 +84,100 @@ export function needsPolling(assets: { status: string }[]): boolean {
   return assets.some(a => !FINAL.has(a.status))
 }
 
+/** Годится ли запись в клип: длительность известна, обработка дошла хотя бы до звука и полоски. */
+export function isReady(a: Asset): boolean {
+  return READY.has(a.status) && a.duration !== null && a.duration > 0
+}
+
+export function listAssets(): Promise<{ assets: Asset[] }> {
+  return api<{ assets: Asset[] }>('/api/v1/assets')
+}
+
+export function deleteAsset(id: string): Promise<void> {
+  return api<void>(`/api/v1/assets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 /** Карточка одного ассета: по ней панель текста видит, не появился ли транскрипт. */
 export function loadAsset(id: string): Promise<Asset> {
   return api<Asset>(`/api/v1/assets/${encodeURIComponent(id)}`)
 }
 
-function row(a: Asset): string {
-  const cls = a.status === 'failed' ? ' class="status-failed"' : ''
-  const err = a.error ? ` <span class="muted">${escapeHtml(a.error)}</span>` : ''
-  const prog = progressText(a.status, a.progress ?? null)
-  const progHtml = prog ? ` <span class="muted">${escapeHtml(prog)}</span>` : ''
-  const watch = a.files.proxy
-    ? `<button data-watch="${escapeHtml(a.id)}" data-proxy="${escapeHtml(a.files.proxy)}" data-kind="${escapeHtml(a.kind)}">Смотреть</button>`
-    : ''
-  return `<tr>
-    <td>${escapeHtml(a.original_name)}</td><td>${escapeHtml(a.kind)}</td><td>${fmtSize(a.size)}</td>
-    <td>${fmtDuration(a.duration)}</td><td${cls}>${escapeHtml(statusText(a.status))}${progHtml}${err}</td>
-    <td>${watch}</td><td><button data-delete="${escapeHtml(a.id)}" data-name="${escapeHtml(a.original_name)}">Удалить</button></td></tr>`
+/* ═══ Кадр из полоски ═══════════════════════════════════════════════════════ */
+
+const FRAME_H = 90 // высота места под кадр; ширину задаёт пропорция самого кадра
+const FRAME_AT = 0.1 // кадр берём не с нуля: первый кадр записи слишком часто чёрный
+
+const FRAME_STYLE = [
+  `height:${FRAME_H}px`,
+  'width:160px',
+  'flex:0 0 auto',
+  'border-radius:12px',
+  'background-color:var(--line)',
+  'background-repeat:no-repeat',
+].join(';')
+
+/**
+ * Место под кадр из полоски. Сам кадр приезжает позже: раскладку спрайта надо сначала загрузить,
+ * а список должен появиться сразу — поэтому здесь только пустая рамка и ссылки для `paintFrames`.
+ */
+export function frameHtml(a: Asset): string {
+  if (!a.files.thumbs || !a.files.thumbs_meta) return `<span style="${FRAME_STYLE}"></span>`
+  return `<span style="${FRAME_STYLE}" data-frame="${a.id}"
+    data-sprite="${a.files.thumbs}" data-meta="${a.files.thumbs_meta}" data-at="${(a.duration ?? 0) * FRAME_AT}"></span>`
 }
 
 /**
- * Панель ассетов: загрузка файлов, список со статусами (опрос раз в 3 с, пока идёт обработка), удаление с подтверждением.
- * onChanged (если передан) вызывается после успешной загрузки и после успешного удаления — обновить квоту в шапке.
+ * Дорисовать кадры в уже нарисованной разметке.
+ *
+ * Клетка спрайта задаётся долями, а не пикселями: спрайт нарезан воркером под свою ширину кадра
+ * (настройка сервера), а в карточке место другое — в процентах кадр встаёт в клетку при любой.
  */
-export function mountAssets(el: HTMLElement, onChanged?: () => void): { refresh: () => Promise<void>; stop: () => void } {
-  el.innerHTML = `
-    <main class="card">
-      <h2>Файлы</h2>
-      <p class="muted">До 5 ГБ на файл. Загрузка продолжится с места разрыва, если выбрать тот же файл снова.</p>
-      <input id="asset-files" type="file" multiple />
-      <div id="asset-progress"></div>
-      <table>
-        <thead><tr><th>Имя</th><th>Вид</th><th>Размер</th><th>Длина</th><th>Статус</th><th></th><th></th></tr></thead>
-        <tbody id="asset-rows"><tr><td colspan="7">Пока пусто</td></tr></tbody>
-      </table>
-      <div id="player"></div>
-      <pre id="assets-error" hidden></pre>
-    </main>`
-  const rows = el.querySelector('#asset-rows') as HTMLElement
-  const progress = el.querySelector('#asset-progress') as HTMLElement
-  const player = el.querySelector('#player') as HTMLElement
-  const errorBox = el.querySelector('#assets-error') as HTMLPreElement
-  let timer: number | undefined
-  let stopped = false // панель заменена перерисовкой — старый опрос сервера дальше не идёт
-  let openId: string | null = null // id ассета, чей плеер сейчас открыт под таблицей
-
-  const showError = (e: unknown) => {
-    errorBox.hidden = false
-    errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
-  }
-
-  const refresh = async () => {
-    if (stopped) return
-    const { assets } = await api<{ assets: Asset[] }>('/api/v1/assets')
-    rows.innerHTML = assets.map(row).join('') || '<tr><td colspan="7">Пока пусто</td></tr>'
-    rows.querySelectorAll<HTMLButtonElement>('button[data-watch]').forEach(b =>
-      b.addEventListener('click', () => {
-        const id = b.dataset.watch ?? ''
-        if (openId === id) {
-          openId = null
-          player.innerHTML = ''
-          return
-        }
-        openId = id
-        player.innerHTML = playerMarkup({ proxy: b.dataset.proxy || null }, b.dataset.kind ?? '')
-      }),
-    )
-    rows.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach(b =>
-      b.addEventListener('click', async () => {
-        if (!window.confirm(`Удалить «${b.dataset.name}» без возможности восстановления?`)) return
-        try {
-          await api(`/api/v1/assets/${b.dataset.delete}`, { method: 'DELETE' })
-        } catch (e) {
-          showError(e)
-          return
-        }
-        if (b.dataset.delete === openId) {
-          openId = null
-          player.innerHTML = ''
-        }
-        onChanged?.()
-        try {
-          await refresh()
-        } catch (e) {
-          showError(e)
-        }
-      }),
-    )
-    window.clearTimeout(timer)
-    if (!stopped && needsPolling(assets)) timer = window.setTimeout(() => void refresh().catch(showError), POLL_MS)
-  }
-
-  /** Остановить опрос: вызывается перед перемонтированием панели при перерисовке настроек. */
-  const stop = () => {
-    stopped = true
-    window.clearTimeout(timer)
-  }
-
-  const input = el.querySelector('#asset-files') as HTMLInputElement
-  input.addEventListener('change', async () => {
-    const files = Array.from(input.files ?? [])
-    input.value = ''
-    for (const file of files) {
-      const line = document.createElement('div')
-      line.innerHTML = `<span>${escapeHtml(file.name)}</span><div class="progress"><i style="width:0%"></i></div>`
-      progress.appendChild(line)
-      const bar = line.querySelector('i') as HTMLElement
-      try {
-        await uploadFile(file, { onProgress: (d, t) => (bar.style.width = `${Math.round((d / t) * 100)}%`) })
-      } catch (e) {
-        line.querySelector('span')!.textContent = `${file.name}: не загружен`
-        showError(e)
-        continue
-      }
-      line.remove()
-      onChanged?.()
-      try {
-        await refresh()
-      } catch (e) {
-        showError(e)
-      }
-    }
+export function paintFrames(root: ParentNode, cache: Map<string, Promise<AssetData>>, alive: () => boolean): void {
+  root.querySelectorAll<HTMLElement>('[data-frame]').forEach(box => {
+    const id = box.dataset.frame ?? ''
+    const sprite = box.dataset.sprite ?? ''
+    void assetData(id, { peaks: null, thumbs_meta: box.dataset.meta ?? null }, cache)
+      .then(({ thumbs }) => {
+        if (!alive() || !thumbs) return
+        const raw = Math.floor(Math.max(0, Number(box.dataset.at ?? 0)) / thumbs.interval)
+        const index = Math.min(thumbs.count - 1, Math.max(0, raw))
+        const col = index % thumbs.cols
+        const row = Math.floor(index / thumbs.cols)
+        box.style.width = `${Math.round((FRAME_H * thumbs.width) / thumbs.height)}px`
+        box.style.backgroundImage = `url('${sprite}')`
+        box.style.backgroundSize = `${thumbs.cols * 100}% ${thumbs.rows * 100}%`
+        box.style.backgroundPosition = `${thumbs.cols > 1 ? (col / (thumbs.cols - 1)) * 100 : 0}%
+          ${thumbs.rows > 1 ? (row / (thumbs.rows - 1)) * 100 : 0}%`
+      })
+      .catch(() => {}) // нет раскладки — карточка живёт с пустой рамкой, это не повод шуметь
   })
+}
 
-  void refresh().catch(showError)
-  return { refresh, stop }
+/* ═══ Память о выбранной записи ═════════════════════════════════════════════ */
+
+const PICK_KEY = 'newproject:asset'
+
+/**
+ * Запомнить запись, выбранную кнопкой «В проект».
+ *
+ * Через адрес выбор не передать: `parseRoute` разбирает только путь и о параметрах не знает,
+ * а трогать маршрутизатор ради одной кнопки дороже, чем положить выбор в сессию вкладки.
+ */
+export function rememberPick(assetId: string): void {
+  try {
+    sessionStorage.setItem(PICK_KEY, assetId)
+  } catch {
+    // Приватный режим или запрет на хранилище: экран нового проекта просто спросит выбор заново.
+  }
+}
+
+/** Прочитать и забыть: выбор одноразовый, иначе он всплывёт при следующем заходе на #/new. */
+export function takePick(): string | null {
+  try {
+    const id = sessionStorage.getItem(PICK_KEY)
+    sessionStorage.removeItem(PICK_KEY)
+    return id
+  } catch {
+    return null
+  }
 }

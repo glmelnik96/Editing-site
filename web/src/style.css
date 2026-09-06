@@ -9,6 +9,7 @@
  *   6. Поверхности     — .card / .field / .pill / .screen
  *   7. Раскладка       — .stack / .row / .grid-2
  *   8. Движение        — .appear и отключение движения целиком
+ *   8а. Экраны       — записи, новый проект, проекты, настройки
  *   9. Редактор        — шапка, сцена, шкала, исходник, текст, списки, кабинет доступа
  *
  * Разделы 1–8 — новая система, раздел 9 — правила работающего редактора: они перенесены
@@ -437,6 +438,71 @@ main.card {
 .appear {
   animation: appear 0.3s var(--ease) var(--delay, 0s) backwards;
 }
+
+/* ═══ 8а. Экраны: записи, новый проект, проекты, настройки ═══════════════ */
+
+.space-between { justify-content: space-between; }
+
+/* Зона загрузки: крупная цель, в которую попадают и мышью, и перетаскиванием. */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  text-align: center;
+  padding: 40px 24px;
+  border-style: dashed;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease);
+}
+.dropzone:hover,
+.dropzone.over { border-color: var(--brand); }
+.upload-line { gap: 4px; }
+
+.asset-card,
+.token-card {
+  gap: 16px;
+  align-items: center;
+  margin: 0;
+}
+.asset-name,
+.token-name { flex: 1 1 auto; gap: 2px; min-width: 0; }
+.asset-name > span:first-child,
+.token-name > span:first-child { overflow-wrap: anywhere; }
+.asset-actions { flex: 0 0 auto; gap: 8px; margin: 0; }
+.pill-bad { color: var(--bad); border-color: var(--bad); }
+
+/* Плитки записей и карточки проектов: одна сетка на оба экрана. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.tile {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease);
+}
+.tile:hover { border-color: var(--brand-hover); }
+.tile.picked { border-color: var(--brand); }
+.tile-name { gap: 2px; min-width: 0; }
+.tile-name > span:first-child { overflow-wrap: anywhere; }
+
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.project-title { overflow-wrap: anywhere; }
+
+/* Секрет токена: показывается один раз, поэтому его видно и не спутать с остальным. */
+.secret { gap: 8px; border-color: var(--brand); }
+.secret code { overflow-wrap: anywhere; }
 
 /* ═══ 9. Редактор ════════════════════════════════════════════════════════ */
 /* Правила работающего интерфейса: перенесены из прежнего файла и перекрашены
