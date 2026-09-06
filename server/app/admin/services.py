@@ -66,12 +66,15 @@ def _read_stream(body: object) -> list[Person]:
 
 
 def remote_services(settings: Settings) -> list[RemoteService]:
-    """Порядок здесь задаёт порядок столбцов в кабинете."""
+    """Порядок здесь задаёт порядок столбцов в кабинете.
+
+    Слэш в конце адреса срезаем: иначе пути склеятся в «//api/...» и сосед ответит 404,
+    а в кабинете это выглядело бы как невнятная поломка соседа."""
     return [
         RemoteService(
             key="board",
             title="Доска",
-            base_url=settings.board_base_url,
+            base_url=settings.board_base_url.rstrip("/"),
             list_path="/api/v1/admin/whitelist",
             item_path="/api/v1/admin/whitelist/{email}",
             token=settings.board_service_token,
@@ -80,7 +83,7 @@ def remote_services(settings: Settings) -> list[RemoteService]:
         RemoteService(
             key="stream",
             title="Трансляции",
-            base_url=settings.stream_base_url,
+            base_url=settings.stream_base_url.rstrip("/"),
             list_path="/api/admin/allowed",
             item_path="/api/admin/allowed/{email}",
             token=settings.stream_service_token,

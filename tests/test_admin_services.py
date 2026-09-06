@@ -102,3 +102,16 @@ def test_garbage_body_is_bad_response():
     with pytest.raises(ServiceError) as exc:
         client.list()
     assert exc.value.kind == "bad_response"
+
+
+def test_trailing_slash_in_base_url_does_not_double(monkeypatch):
+    """Адрес соседа с завершающим слэшем не должен превращать путь в «//api/...»."""
+    svc = service("board", board_base_url="http://127.0.0.1:8020/")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(200, json=BOARD_BODY)
+
+    RemoteClient(svc, client_for(handler)).list()
+    assert seen == ["/api/v1/admin/whitelist"]
