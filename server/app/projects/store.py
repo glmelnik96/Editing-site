@@ -371,6 +371,14 @@ def _owner_of(conn: sqlite3.Connection, project_id: str) -> str:
     return row["user_id"]
 
 
+def _newer(source: Path, cached: Path) -> bool:
+    """Расшифровку могли переделать при той же версии проекта: тогда кэш устарел."""
+    try:
+        return source.stat().st_mtime > cached.stat().st_mtime
+    except OSError:
+        return True  # исходника не видно — пусть сборка разберётся и скажет внятно
+
+
 def build_project_subtitles(
     conn: sqlite3.Connection, settings: Settings, project: dict
 ) -> Path | None:
@@ -391,13 +399,16 @@ def build_project_subtitles(
     folder = subs_dir(settings, owner, project["id"])
     version = project["version"]
     srt, vtt = folder / f"{version}.srt", folder / f"{version}.vtt"
-    if srt.exists() and vtt.exists():
-        # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
-        # документа. Пересборка дала бы те же реплики и стоила бы времени на каждой сборке.
-        return srt
-
     # Ассет субтитров принадлежит владельцу проекта: документ проверялся по его же ассетам.
     asset_id = subtitles["asset_id"]
+    source = transcript_path(settings, owner, asset_id)
+    if srt.exists() and vtt.exists() and not _newer(source, srt):
+        # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
+        # документа. Но версия следит за документом, а не за расшифровкой: её могли заказать
+        # заново при той же версии, и тогда кэш пришлось бы отдавать устаревшим.
+        return srt
+
+
     try:
         transcript = json.loads(
             transcript_path(settings, owner, asset_id).read_text(encoding="utf-8")

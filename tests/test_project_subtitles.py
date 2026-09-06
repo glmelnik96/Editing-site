@@ -204,3 +204,36 @@ class TestКэш:
         vtt.unlink()
         build_project_subtitles(conn, settings, made)
         assert vtt.exists()
+
+
+class TestКэшИРасшифровка:
+    def test_новая_расшифровка_пересобирает_субтитры(self, conn, settings):
+        """Версия проекта следит за документом, но не за расшифровкой: её могли заказать заново
+        при той же версии, и кэш отдал бы старый текст к новому звуку."""
+        import os
+        import time
+
+        add_transcript(settings)
+        made = project(conn, settings)
+        srt = build_project_subtitles(conn, settings, made)
+        assert "ключи" in " ".join(cue_lines(srt))
+
+        path = add_transcript(settings, segments=[
+            {"id": 1, "start": 0.0, "end": 1.0, "text": "Совсем другой текст",
+             "words": words("Совсем другой текст")},
+        ])
+        # mtime на некоторых файловых системах идёт с крупным шагом: двигаем время явно,
+        # иначе тест проверял бы удачу, а не правило.
+        later = time.time() + 10
+        os.utime(path, (later, later))
+
+        again = build_project_subtitles(conn, settings, made)
+        text = " ".join(cue_lines(again))
+        assert "Совсем другой текст" in text and "ключи" not in text
+
+    def test_та_же_расшифровка_кэш_не_трогает(self, conn, settings):
+        add_transcript(settings)
+        made = project(conn, settings)
+        srt = build_project_subtitles(conn, settings, made)
+        stamp = srt.stat().st_mtime_ns
+        assert build_project_subtitles(conn, settings, made).stat().st_mtime_ns == stamp
