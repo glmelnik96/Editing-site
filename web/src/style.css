@@ -540,6 +540,25 @@ main.card {
   background: var(--brand);
   border-color: var(--brand);
 }
+/* Карточка реплики: время, текст как он ляжет в кадр, и подсказка, если сервер такое не примет. */
+.cue {
+  padding: 12px;
+  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+.cue.now { border-color: var(--brand); }
+.cue.bad { border-color: var(--warn); }
+.cue-times { gap: 6px; margin: 0; flex-wrap: wrap; }
+.cue-text {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.3;
+}
+.cue-trouble { color: var(--warn); }
+
 /* Точка новости: в панели появилось то, чего человек ещё не видел. */
 .tab.news::after {
   content: '';

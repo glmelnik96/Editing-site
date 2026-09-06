@@ -10,12 +10,13 @@ import type { Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
 import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
-import { createCheckpoint, createSaver, loadProject, type FieldError, type Project, type ProjectDoc } from './project'
+import { createCheckpoint, createSaver, loadProject, type Cue, type FieldError, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountRender } from './render'
 import { mountSource } from './source'
+import { mountSubtitles } from './subtitles'
 import { mountTranscript } from './transcript'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
@@ -116,6 +117,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       gotoInput.classList.remove('bad')
     }
     totalBox.textContent = project ? `из ${formatTimecode(totalDuration(project.doc.clips))}` : ''
+    // Панель субтитров подсвечивает реплику, которая сейчас в кадре: время шкалы обновляется
+    // отсюда при любом движении курсора — и при воспроизведении, и при перемотке.
+    subtitles.setTime(timelineTime)
   }
 
   const saver = createSaver({
@@ -268,11 +272,48 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     },
   })
 
+  const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
+    onChange: (cues, mode) => applySubtitles(cues, mode),
+    onProject: fresh => {
+      remember()
+      project = fresh
+      render()
+      notice('Реплики собраны')
+    },
+    onSeek: seconds => {
+      timelineTime = Math.max(0, seconds)
+      seek(timelineTime)
+      timeline.setPlayhead(timelineTime)
+      showTime()
+    },
+  })
+
+  /** Правка реплик — обычная правка документа: с откатом, точками сохранения и автосохранением. */
+  function applySubtitles(cues: Cue[], mode?: 'burn' | 'soft'): void {
+    if (!project) return
+    remember()
+    const было = project.doc.subtitles
+    const subs = {
+      source: 'cues' as const,
+      asset_id: null,
+      mode: mode ?? было?.mode ?? ('burn' as const),
+      style: было?.style ?? 'default',
+      cues,
+    }
+    project = { ...project, doc: { ...project.doc, subtitles: subs } }
+    render()
+    saver.schedule(project)
+  }
+
   // Панель текста работает с тем же файлом, что и панель исходника. О смене файла узнаём по
   // событию из самой панели: change от её списка всплывает до контейнера, и лезть внутрь чужой
   // панели за её select не приходится. Тот же файл setAsset пропускает, так что change от полей
   // таймкода панель текста не тревожит.
-  sourceBox.addEventListener('change', () => transcript.setAsset(source.current()))
+  sourceBox.addEventListener('change', () => {
+    const asset = source.current()
+    transcript.setAsset(asset)
+    subtitles.setAsset(asset?.id ?? null, Boolean(asset?.files.transcript))
+  })
   // timeupdate не всплывает — слушаем на фазе перехвата: плеер исходника панель исходника
   // пересоздаёт при каждом выборе файла, а этот слушатель переживает пересоздание.
   sourceBox.addEventListener('timeupdate', event => transcript.setTime((event.target as HTMLMediaElement).currentTime), true)
@@ -362,6 +403,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
+    subtitles.setProject(project)
     showTime()
     void ensureData(project.doc.clips)
   }
@@ -507,6 +549,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       document.removeEventListener('keydown', onKey)
       renders?.stop()
       transcript.stop()
+      subtitles.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
       // Отказ здесь гасим: экран уже разбирается, показывать ошибку некому, а необработанный
       // отказ промиса всплыл бы в консоль. О сбое уже сказал onError.

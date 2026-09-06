@@ -3,7 +3,14 @@ import type { Clip } from './timeline/model'
 
 export type Output = { aspect: '16:9' | '9:16' | '1:1'; fit: 'pad' | 'crop'; fps: number }
 export type Music = { asset_id: string; volume: number; fade_in: number; fade_out: number; loop: boolean }
-export type Subtitles = { source: 'file' | 'transcript'; asset_id: string; mode: 'burn' | 'soft'; style: string }
+export type Cue = { start: number; end: number; text: string }
+export type Subtitles = {
+  source: 'file' | 'transcript' | 'cues'
+  asset_id: string | null
+  mode: 'burn' | 'soft'
+  style: string
+  cues?: Cue[]
+}
 export type ProjectDoc = { output: Output; clips: Clip[]; music: Music | null; subtitles: Subtitles | null }
 
 export type Project = {
@@ -269,4 +276,12 @@ export function startTranscribe(assetId: string): Promise<{ job_id: string; lang
     `/api/v1/assets/${encodeURIComponent(assetId)}/transcribe`,
     { method: 'POST', body: JSON.stringify({}) },
   )
+}
+
+/** Собрать реплики из расшифровки в документ проекта: правка как правка, версия растёт. */
+export function generateSubtitles(id: string, assetId: string, mode: 'burn' | 'soft'): Promise<Project> {
+  return api<Project>(`/api/v1/projects/${encodeURIComponent(id)}/subtitles/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ asset_id: assetId, mode }),
+  })
 }
