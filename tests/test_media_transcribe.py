@@ -1,4 +1,7 @@
-"""План нарезки и аргументы ffmpeg. Последние тесты режут настоящий звук — идут пару секунд."""
+"""Чистая часть транскрипции: план нарезки, аргументы ffmpeg, разбор ответа провайдера.
+
+Тест с настоящей нарезкой звука идёт пару секунд, остальные — арифметика на фикстурах.
+"""
 import json
 import subprocess
 from itertools import pairwise
@@ -8,7 +11,17 @@ import pytest
 
 from server.app.config import Settings
 from server.media.run import MediaError
-from server.media.transcribe import MIN_CHUNK_BYTES, check_chunk_size, chunk_args, chunk_plan
+from server.media.transcribe import (
+    MIN_CHUNK_BYTES,
+    check_chunk_size,
+    chunk_args,
+    chunk_plan,
+    clamp_segments,
+    fix_seams,
+    interpolate_words,
+    mark_suspect,
+    normalize_chunk,
+)
 from tests.media_fixtures import FFMPEG, FFPROBE, HAVE_FFMPEG
 
 S = Settings(_env_file=None)
@@ -152,3 +165,100 @@ def test_real_slicing_covers_the_source(tmp_path):
 
     assert sum(p["duration"] for p in parts) == pytest.approx(total, abs=0.2)
     assert all(p["rate"] == 16000 and p["channels"] == 1 for p in parts)
+
+
+def test_normalize_adds_the_offset_once():
+    raw = {"segments": [{"start": 1.0, "end": 2.0, "text": " Привет  мир "}]}
+    out = normalize_chunk(raw, offset=600.0)
+    assert out == [{"start": 601.0, "end": 602.0, "text": "Привет мир"}]
+
+
+def test_normalize_keeps_the_quality_fields():
+    """no_speech_prob и соседей несём дальше: по ним помечаются подозрительные сегменты."""
+    raw = {"segments": [{"start": 0.0, "end": 1.0, "text": "а", "no_speech_prob": 0.7,
+                         "avg_logprob": -0.3, "compression_ratio": 1.2}]}
+    out = normalize_chunk(raw, offset=0.0)
+    assert out[0]["no_speech_prob"] == 0.7 and out[0]["avg_logprob"] == -0.3
+
+
+def test_normalize_drops_empty_and_inverted():
+    raw = {"segments": [{"start": 5.0, "end": 4.0, "text": "назад"},
+                        {"start": 1.0, "end": 2.0, "text": "  "}]}
+    assert normalize_chunk(raw, offset=0.0) == []
+
+
+def test_normalize_survives_a_response_without_segments():
+    assert normalize_chunk({}, offset=0.0) == []
+    assert normalize_chunk({"segments": None}, offset=0.0) == []
+
+
+def test_seam_segment_is_trimmed_to_the_previous_end():
+    """Фраза на границе приходит дважды: хвост в чанке N, голова в N+1."""
+    segments = [{"start": 595.0, "end": 601.2, "text": "…"}, {"start": 600.0, "end": 604.0, "text": "…"}]
+    fixed, stats = fix_seams(segments, boundaries=[600.0])
+    assert fixed[1]["start"] == 601.2 and stats["fixed"] == 1
+
+
+def test_seam_crumb_is_dropped():
+    segments = [{"start": 595.0, "end": 601.2, "text": "…"}, {"start": 600.0, "end": 601.4, "text": "…"}]
+    fixed, stats = fix_seams(segments, boundaries=[600.0])
+    assert len(fixed) == 1 and stats["dropped"] == 1
+
+
+def test_seam_far_from_the_boundary_is_left_alone():
+    """Обычный сегмент, случайно перекрывший предыдущий, — не шов: его чинит не эта функция."""
+    segments = [{"start": 100.0, "end": 110.0, "text": "…"}, {"start": 105.0, "end": 120.0, "text": "…"}]
+    fixed, stats = fix_seams(segments, boundaries=[600.0])
+    assert fixed[1]["start"] == 105.0 and stats == {"fixed": 0, "dropped": 0}
+
+
+def test_clamp_cuts_the_tail_beyond_the_audio():
+    """Whisper регулярно тянет последний сегмент за конец аудио — проверено живьём."""
+    segments = [{"start": 770.0, "end": 783.9, "text": "…"}]
+    out = clamp_segments(segments, duration=780.0)
+    assert out[0]["end"] == 780.0
+
+
+def test_clamp_drops_what_is_left_of_nothing():
+    segments = [{"start": 781.0, "end": 783.9, "text": "…"}]
+    assert clamp_segments(segments, duration=780.0) == []
+
+
+def test_suspect_is_marked_not_deleted():
+    """Помечаем, а не выбрасываем: решать человеку, а не порогу."""
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "…", "no_speech_prob": 0.9},
+        {"start": 1.0, "end": 2.0, "text": "…", "avg_logprob": -1.5},
+        {"start": 2.0, "end": 3.0, "text": "…", "compression_ratio": 3.0},
+        {"start": 3.0, "end": 4.0, "text": "…", "no_speech_prob": 0.1},
+    ]
+    out = mark_suspect(segments)
+    assert [s["suspect"] for s in out] == [True, True, True, False]
+
+
+def test_words_are_syllable_weighted_and_flagged():
+    """Слова провайдер не отдаёт: раскладываем по слогам и честно помечаем."""
+    seg = {"start": 0.0, "end": 4.0, "text": "Привет большой мир"}
+    words = interpolate_words(seg, silences=[])
+    assert [w["w"] for w in words] == ["Привет", "большой", "мир"]
+    assert all(w["interpolated"] for w in words)
+    assert words[0]["s"] == 0.0 and abs(words[-1]["e"] - 4.0) < 1e-6
+    assert (words[1]["e"] - words[1]["s"]) > (words[2]["e"] - words[2]["s"])
+
+
+def test_words_are_back_to_back():
+    seg = {"start": 10.0, "end": 14.0, "text": "раз два три"}
+    words = interpolate_words(seg, silences=[])
+    for before, after in pairwise(words):
+        assert abs(before["e"] - after["s"]) < 1e-6
+
+
+def test_words_skip_measured_silences():
+    """Слово не должно «произноситься» в тишине: пауза внутри сегмента вырезается из раскладки."""
+    seg = {"start": 0.0, "end": 6.0, "text": "раз два"}
+    words = interpolate_words(seg, silences=[{"start": 2.0, "end": 4.0}])
+    assert words[0]["e"] <= 2.0 + 1e-6 and words[1]["s"] >= 4.0 - 1e-6
+
+
+def test_words_of_an_empty_text_are_empty():
+    assert interpolate_words({"start": 0.0, "end": 1.0, "text": "   "}, silences=[]) == []
