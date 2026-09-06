@@ -335,3 +335,30 @@ def test_upload_is_refused_while_our_job_is_running(client, login_as, settings):
         json={"segments": [{"start": 0.0, "end": 1.0, "text": "мой текст"}]},
     )
     assert r.status_code == 409 and r.json()["error"]["code"] == "already_queued"
+
+
+def test_uploaded_words_are_fitted_to_their_segment(client, login_as, settings):
+    """Слова чужого транскрипта считаются настоящими и разрешёнными для резов, поэтому слово
+    за пределами своего сегмента опаснее отсутствующего: по нему молча отрежут не там."""
+    login_as()
+    ready_asset(client, settings)
+    body = {
+        "segments": [
+            {
+                "start": 1.0,
+                "end": 3.0,
+                "text": "раз два",
+                "words": [
+                    {"w": "раз", "s": 0.2, "e": 2.0},   # начало уехало до сегмента
+                    {"w": "два", "s": 2.0, "e": 9.9},   # конец уехал за сегмент
+                    {"w": "лишнее", "s": 50.0, "e": 51.0},  # целиком мимо
+                ],
+            }
+        ]
+    }
+    r = client.put(f"/api/v1/assets/{ASSET}/transcript", json=body)
+    assert r.status_code == 200, r.text
+    words = r.json()["segments"][0]["words"]
+    assert [w["w"] for w in words] == ["раз", "два"]
+    assert words[0]["s"] == 1.0 and words[-1]["e"] == 3.0
+    assert all("interpolated" not in w for w in words), "чужие слова не наши, помечать их нельзя"

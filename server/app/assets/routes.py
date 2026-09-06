@@ -219,6 +219,21 @@ def _pause_maps(folder: Path) -> dict[str, list]:
     return maps
 
 
+def _fit_words(words: list[dict], start: float, end: float) -> list[dict]:
+    """Слова чужого транскрипта прижимаются к своему сегменту.
+
+    Именно эти слова считаются настоящими и разрешёнными для резов, поэтому слово со временем
+    за пределами сегмента опаснее отсутствующего: по нему молча отрежут не там."""
+    out = []
+    for word in words:
+        s = max(start, min(float(word.get("s", start)), end))
+        e = max(s, min(float(word.get("e", end)), end))
+        if e <= s:
+            continue  # слово целиком вне сегмента: выкинуть честнее, чем растянуть в точку
+        out.append({**word, "s": round(s, 3), "e": round(e, 3)})
+    return out
+
+
 def _uploaded_segments(items: list[TranscriptSegment]) -> list[dict]:
     """Сегменты запроса в наш формат, по возрастанию времени.
 
@@ -239,7 +254,7 @@ def _uploaded_segments(items: list[TranscriptSegment]) -> list[dict]:
             "start_verified": False, "end_verified": False, "suspect": False,
         }
         if item.words is not None:
-            segment["words"] = item.words
+            segment["words"] = _fit_words(item.words, segment["start"], segment["end"])
         out.append(segment)
     out.sort(key=lambda one: (one["start"], one["end"]))
     return out
@@ -337,7 +352,6 @@ def put_transcript(
     проверка формата и клэмп к длительности ассета — субтитр не должен пережить сам клип.
     """
     asset = _owned(conn, user, asset_id)
-    _refuse_while_transcribing(conn, asset_id)
     settings = request.app.state.settings
     duration = float(asset["duration"] or 0)
     if duration <= 0:
@@ -362,20 +376,24 @@ def put_transcript(
         **_pause_maps(folder),
         "stats": stats,
     }
+    # Проверка и запись под одной блокировкой, как у POST: иначе задание, поставленное между
+    # проверкой и записью, доедет и молча перезапишет только что загруженный файл.
     # Сначала файл, потом строка — как в воркере: строка без файла врёт, файл без строки переживается.
     folder.mkdir(parents=True, exist_ok=True)
-    _write_json(folder / TRANSCRIPT_NAME, data)
-    conn.execute(
-        "INSERT INTO transcripts (asset_id, user_id, provider, model, language, duration, segments, "
-        "stats, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(asset_id) DO UPDATE SET provider = excluded.provider, model = excluded.model, "
-        "language = excluded.language, duration = excluded.duration, segments = excluded.segments, "
-        "stats = excluded.stats, created_at = excluded.created_at",
-        (
-            asset_id, user.id, UPLOADED, "", language, round(duration, 3), len(segments),
-            json.dumps(stats, ensure_ascii=False), now_iso(),
-        ),
-    )
+    with transaction(conn):
+        _refuse_while_transcribing(conn, asset_id)
+        _write_json(folder / TRANSCRIPT_NAME, data)
+        conn.execute(
+            "INSERT INTO transcripts (asset_id, user_id, provider, model, language, duration, segments, "
+            "stats, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(asset_id) DO UPDATE SET provider = excluded.provider, model = excluded.model, "
+            "language = excluded.language, duration = excluded.duration, segments = excluded.segments, "
+            "stats = excluded.stats, created_at = excluded.created_at",
+            (
+                asset_id, user.id, UPLOADED, "", language, round(duration, 3), len(segments),
+                json.dumps(stats, ensure_ascii=False), now_iso(),
+            ),
+        )
     return data
 
 
