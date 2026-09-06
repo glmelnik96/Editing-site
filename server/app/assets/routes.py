@@ -276,13 +276,7 @@ def transcribe(
             raise ApiError(
                 409, "transcript_exists", "Транскрипт уже есть, удалите его перед новой расшифровкой"
             )
-        queued = conn.execute(
-            "SELECT 1 FROM jobs WHERE target_id = ? AND type = 'transcribe' "
-            "AND status IN ('queued', 'running')",
-            (asset_id,),
-        ).fetchone()
-        if queued is not None:
-            raise ApiError(409, "already_queued", "Расшифровка этого ассета уже идёт")
+        _refuse_while_transcribing(conn, asset_id)
         job_id = enqueue_job(
             conn, user_id=user.id, type_="transcribe", target_id=asset_id,
             params={"language": language},
@@ -315,6 +309,20 @@ def transcript(
     )
 
 
+def _refuse_while_transcribing(conn: sqlite3.Connection, asset_id: str) -> None:
+    """Пока задание в очереди или выполняется, транскрипт трогать нельзя.
+
+    Второй запуск — это лишний счёт провайдеру, а загрузка своего транскрипта поверх идущего
+    задания молча пропала бы: доехавший воркер перезаписал бы файл, и человек об этом не узнал.
+    """
+    queued = conn.execute(
+        "SELECT 1 FROM jobs WHERE target_id = ? AND type = 'transcribe' AND status IN ('queued', 'running')",
+        (asset_id,),
+    ).fetchone()
+    if queued is not None:
+        raise ApiError(409, "already_queued", "Расшифровка этого ассета уже идёт")
+
+
 @router.put("/{asset_id}/transcript")
 def put_transcript(
     asset_id: str,
@@ -329,6 +337,7 @@ def put_transcript(
     проверка формата и клэмп к длительности ассета — субтитр не должен пережить сам клип.
     """
     asset = _owned(conn, user, asset_id)
+    _refuse_while_transcribing(conn, asset_id)
     settings = request.app.state.settings
     duration = float(asset["duration"] or 0)
     if duration <= 0:

@@ -308,15 +308,30 @@ def test_foreign_asset_is_404_everywhere(client, login_as, settings):
 
 
 def test_agent_works_with_a_token(bearer_client, settings):
-    """Сценарий агента: расшифровать, положить свой транскрипт, забрать субтитры, убрать за собой."""
+    """Сценарий агента: положить свой транскрипт, забрать субтитры, убрать за собой и заказать наш.
+
+    Свой транскрипт и наша расшифровка — две ветки одного сценария, а не шаги подряд: пока задание
+    в очереди, загрузка отбивается, иначе доехавший воркер молча перезаписал бы чужой файл."""
     ready_asset(bearer_client, settings)
-    assert bearer_client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 202
     assert put(bearer_client).status_code == 200
     r = bearer_client.get(f"/api/v1/assets/{ASSET}/transcript", params={"format": "srt"})
     assert r.status_code == 200 and r.text.startswith("1\n")
     assert bearer_client.delete(f"/api/v1/assets/{ASSET}/transcript").status_code == 204
+    assert bearer_client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 202
 
 
 def test_transcript_requires_auth(client):
     assert client.get(f"/api/v1/assets/{ASSET}/transcript").status_code == 401
     assert client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 401
+
+
+def test_upload_is_refused_while_our_job_is_running(client, login_as, settings):
+    """Загрузка поверх идущего задания пропала бы молча: доехавший воркер перезаписал бы файл."""
+    login_as()
+    ready_asset(client, settings)
+    assert client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 202
+    r = client.put(
+        f"/api/v1/assets/{ASSET}/transcript",
+        json={"segments": [{"start": 0.0, "end": 1.0, "text": "мой текст"}]},
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "already_queued"
