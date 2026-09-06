@@ -4,6 +4,7 @@ import { mountEditor } from './editor'
 import { loginErrorText } from './errors'
 import { escapeHtml } from './html'
 import { fmtSize, mountAssets } from './assets'
+import { mountCabinet } from './cabinet'
 import { mountProjects } from './projects'
 
 type Me = {
@@ -83,7 +84,8 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
       <pre id="secret" hidden></pre>
       <pre id="tokens-error" hidden></pre>
     </main>
-    <section id="admin"></section>`
+    <section id="admin"></section>
+    <section id="cabinet"></section>`
 
   assetsPanel?.stop()
   assetsPanel = mountAssets(document.getElementById('assets') as HTMLElement, updateQuota)
@@ -149,6 +151,9 @@ async function renderSettings(me: Me, secretNote = ''): Promise<void> {
     } catch (e) {
       showError('tokens-error', e)
     }
+    // Кабинет отдельно от «Разрешённых адресов»: тот список про наш сервис и работает,
+    // даже когда соседи не отвечают.
+    mountCabinet(document.getElementById('cabinet') as HTMLElement)
   }
 }
 

@@ -77,3 +77,10 @@ select { padding: 6px 8px; width: 100%; }
 .drop-ghost { position: absolute; top: 2px; height: 72px; z-index: 2; pointer-events: none;
   border: 2px dashed #7fd1ab; border-radius: 5px; background: #7fd1ab22; }
 .block.dragging { opacity: .55; }
+
+/* Кабинет: галочка доступа стоит по центру своей клетки, иначе столбец читается вкось. */
+th.access, td.access { text-align: center; }
+/* Состояние недоступного сервиса — подписью под названием столбца, а не вместо него. */
+th.access .muted { display: block; font-weight: normal; font-size: 12px; }
+/* В строке формы галочка не растягивается на всю ширину, как поле адреса. */
+input[type="checkbox"] { flex: 0 0 auto; }
