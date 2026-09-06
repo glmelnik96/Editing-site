@@ -6,11 +6,15 @@ from starlette.testclient import TestClient
 from server.app.config import Settings
 from server.app.main import create_app
 
+# Служебные секреты соседей названы без префикса (так они лежат на ВМ), поэтому одной проверки
+# по VIDEO_ мало: настоящий токен из окружения разработчика не должен просачиваться в тесты.
+UNPREFIXED = ("STREAM_SERVICE_TOKEN", "BOARD_SERVICE_TOKEN")
+
 
 @pytest.fixture(autouse=True)
 def _clean_video_env(monkeypatch):
     for key in list(os.environ):
-        if key.startswith("VIDEO_"):
+        if key.startswith("VIDEO_") or key in UNPREFIXED:
             monkeypatch.delenv(key)
 
 

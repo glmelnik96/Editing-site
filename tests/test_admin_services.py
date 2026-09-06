@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -115,3 +117,38 @@ def test_trailing_slash_in_base_url_does_not_double(monkeypatch):
 
     RemoteClient(svc, client_for(handler)).list()
     assert seen == ["/api/v1/admin/whitelist"]
+
+
+GARBAGE = [{"emails": "нет"}, {"emails": [{"note": "без адреса"}]}, {"emails": [5]}, []]
+
+
+@pytest.mark.parametrize("body", GARBAGE)
+def test_garbage_shape_is_not_an_empty_list(body):
+    """Непонятный ответ нельзя читать как «доступа нет у всех»: сосед мог переименовать поле,
+    и пустой столбец в кабинете стал бы прямой неправдой."""
+    client = RemoteClient(service("board"), client_for(lambda r: httpx.Response(200, json=body)))
+    with pytest.raises(ServiceError) as exc:
+        client.list()
+    assert exc.value.kind == "bad_response"
+
+
+def test_broken_base_url_is_unavailable_not_a_crash():
+    """Опечатка в адресе соседа даёт ValueError мимо httpx.HTTPError. Без ветки на это
+    чужая опечатка уносила бы всю страницу кабинета, а не один столбец."""
+    svc = service("board", board_base_url="127.0.0.1:8020")
+    client = RemoteClient(svc, client_for(lambda r: httpx.Response(200, json=BOARD_BODY)))
+    with pytest.raises(ServiceError) as exc:
+        client.list()
+    assert exc.value.kind == "unavailable"
+
+
+def test_add_sends_the_email_in_the_body():
+    """Единственное, что мы обещаем соседу на записи."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json={})
+
+    RemoteClient(service("board"), client_for(handler)).add("Some.One@X.ru")
+    assert seen == [{"email": "Some.One@X.ru"}]

@@ -80,9 +80,8 @@ export function mountCabinet(el: HTMLElement): void {
     // «Не знаем» и «нет доступа» — разные вещи: у недоступного сервиса пустая галочка соврала бы,
     // будто человека там нет. Точка честнее.
     if (value === null) return '<td class="access muted">·</td>'
-    const off = s.state === 'ok' ? '' : ' disabled'
     return `<td class="access"><input type="checkbox" data-email="${escapeHtml(p.email)}"
-      data-service="${escapeHtml(s.key)}"${value ? ' checked' : ''}${off} /></td>`
+      data-service="${escapeHtml(s.key)}"${value ? ' checked' : ''} /></td>`
   }
 
   function row(p: Person): string {
@@ -133,12 +132,29 @@ export function mountCabinet(el: HTMLElement): void {
     await refresh().catch(showError)
   }
 
+  /** Один текст на оба способа снять доступ: обещание про обрыв сессий должно звучать одинаково. */
+  function dropWarning(email: string, keys: string[]): string {
+    return (
+      `Убрать ${email} из сервисов: ${keys.map(titleOf).join(', ')}?
+
+` +
+      'Доступ снимется сразу: открытые сессии оборвутся, и человека выкинет прямо посреди работы.'
+    )
+  }
+
   function wire(): void {
     body.querySelectorAll<HTMLInputElement>('input[data-service]').forEach(box =>
       box.addEventListener('change', () => {
         const key = box.dataset.service ?? ''
+        const email = box.dataset.email ?? ''
+        // Снятие спрашивает подтверждение, выдача — нет: галочка вниз обрывает живые сессии,
+        // и промах мышью по чужой строке выкинул бы человека посреди работы.
+        if (!box.checked && !window.confirm(dropWarning(email, [key]))) {
+          box.checked = true
+          return
+        }
         box.disabled = true // второй щелчок отправил бы правку поверх неотвеченной
-        void send(box.dataset.email ?? '', box.checked ? [key] : [], box.checked ? [] : [key])
+        void send(email, box.checked ? [key] : [], box.checked ? [] : [key])
       }),
     )
 
@@ -147,14 +163,7 @@ export function mountCabinet(el: HTMLElement): void {
         const email = b.dataset.drop ?? ''
         const keys = (b.dataset.keys ?? '').split(',').filter(Boolean)
         if (keys.length === 0) return
-        const names = keys.map(titleOf).join(', ')
-        if (
-          !window.confirm(
-            `Убрать ${email} из сервисов: ${names}?\n\n` +
-              'Доступ снимется сразу: открытые сессии оборвутся, и человека выкинет прямо посреди работы.',
-          )
-        )
-          return
+        if (!window.confirm(dropWarning(email, keys))) return
         b.disabled = true
         void send(email, [], keys)
       }),

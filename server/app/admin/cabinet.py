@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -17,6 +18,8 @@ from server.app.errors import ApiError
 
 OWN_KEY = "video"
 OWN_TITLE = "Видео"
+
+log = logging.getLogger("video.cabinet")
 
 
 class CabinetError(Exception):
@@ -72,6 +75,17 @@ def collect(conn: sqlite3.Connection, settings: Settings, clients: list[RemoteCl
             services.append(
                 ServiceState(client.service.key, client.service.title, exc.kind, str(exc))
             )
+        except Exception:
+            # Сосед не должен уносить с собой всю страницу: пусть пропадёт один его столбец,
+            # а остальные два останутся рабочими (спека §7).
+            log.exception("кабинет: сосед %s ответил неожиданным сбоем", client.service.key)
+            lists[client.service.key] = None
+            services.append(
+                ServiceState(
+                    client.service.key, client.service.title, "bad_response",
+                    f"{client.service.title}: неожиданный сбой, подробности в журнале",
+                )
+            )
 
     emails: set[str] = set()
     for people in lists.values():
@@ -105,6 +119,10 @@ def apply(
 ) -> list[ChangeResult]:
     """Применяет правки по сервисам и возвращает результат по каждому."""
     normalized = store.valid_email(email)
+    # Повторы схлопываем, порядок сохраняем: список приходит снаружи, и «board» пять тысяч раз
+    # означал бы пять тысяч запросов к соседу.
+    grant = list(dict.fromkeys(grant))
+    revoke = list(dict.fromkeys(revoke))
     known = {OWN_KEY} | {c.service.key for c in clients}
     unknown = (set(grant) | set(revoke)) - known
     if unknown:
@@ -146,6 +164,11 @@ def _one(
     except (ServiceError, ApiError) as exc:
         message = exc.message if isinstance(exc, ApiError) else str(exc)
         return ChangeResult(service=key, action=action, ok=False, error=message)
+    except Exception:
+        # Неожиданный сбой на одном сервисе не должен превращать ответ в 500: часть правок
+        # уже применена, и администратор обязан увидеть, что именно ему досталось.
+        log.exception("кабинет: правка %s у %s сорвалась", action, key)
+        return ChangeResult(service=key, action=action, ok=False, error=f"{key}: неожиданный сбой")
     return ChangeResult(service=key, action=action, ok=True)
 
 

@@ -191,3 +191,77 @@ def test_cabinet_is_admin_and_browser_only(client, login_as, bearer_client, monk
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@x.ru"}).status_code == 201
     login_as("other@x.ru", "Другой")
     assert client.get("/api/v1/admin/cabinet").status_code == 403
+
+
+def test_unexpected_failure_costs_only_its_column(conn, monkeypatch):
+    """Сбой мимо ServiceError не должен уносить страницу: столбец соседа помечен, остальные живут."""
+    s = make_settings()
+    cs = clients(both_ok, s)
+
+    def boom():
+        raise RuntimeError("что-то совсем неожиданное")
+
+    monkeypatch.setattr(cs[0], "list", boom)
+    view = cabinet.collect(conn, s, cs)
+    states = {svc.key: svc.state for svc in view.services}
+    assert states == {"video": "ok", "board": "bad_response", "stream": "ok"}
+    assert any(p.email == "stream-only@x.ru" for p in view.people)
+
+
+def test_unexpected_failure_on_write_is_reported_not_thrown(conn, monkeypatch):
+    """Часть правок уже применена — администратор обязан увидеть, что именно ему досталось,
+    а не «внутреннюю ошибку» вместо всего ответа."""
+    s = make_settings()
+    cs = clients(both_ok, s)
+
+    def boom(email):
+        raise RuntimeError("сосед сломался неожиданно")
+
+    monkeypatch.setattr(cs[0], "add", boom)
+    results = cabinet.apply(conn, s, cs, email="new@x.ru", grant=["video", "board"], revoke=[],
+                            added_by=ADMIN)
+    assert {r.service: r.ok for r in results} == {"video": True, "board": False}
+    assert conn.execute("SELECT count(*) FROM whitelist WHERE email = 'new@x.ru'").fetchone()[0] == 1
+
+
+def test_repeated_services_are_collapsed(conn):
+    """Список приходит снаружи: «board» пять раз не должен слать пять запросов соседу."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(201, json={})
+
+    s = make_settings()
+    results = cabinet.apply(conn, s, clients(handler, s), email="new@x.ru",
+                            grant=["board", "board", "board"], revoke=[], added_by=ADMIN)
+    assert len(results) == 1 and len(calls) == 1
+
+
+def test_cabinet_write_is_admin_and_browser_only(client, login_as, bearer_client, monkeypatch):
+    """Опасна именно запись: чтение кабинета закрыто тем же условием, но проверять надо оба."""
+    patch_neighbours(monkeypatch, both_ok)
+    body = {"email": "victim@x.ru", "grant": ["video"]}
+    assert bearer_client.post("/api/v1/admin/cabinet/access", json=body).status_code == 403
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@x.ru"}).status_code == 201
+    login_as("other@x.ru", "Другой")
+    assert client.post("/api/v1/admin/cabinet/access", json=body).status_code == 403
+
+
+def test_revoking_through_the_cabinet_kills_sessions(client, login_as, monkeypatch, settings):
+    """Снятие доступа выкидывает человека сразу — на этом обещании построено подтверждение в UI."""
+    patch_neighbours(monkeypatch, both_ok)
+    login_as()
+    assert client.post("/api/v1/admin/whitelist", json={"email": "gone@x.ru"}).status_code == 201
+    login_as("gone@x.ru", "Уходящий")
+    assert client.get("/api/v1/me").status_code == 200
+    victim_cookies = dict(client.cookies)
+
+    login_as()  # обратно администратором
+    r = client.post("/api/v1/admin/cabinet/access", json={"email": "gone@x.ru", "revoke": ["video"]})
+    assert r.status_code == 200 and r.json()["results"][0]["ok"] is True
+
+    from starlette.testclient import TestClient
+
+    with TestClient(client.app, cookies=victim_cookies) as victim:
+        assert victim.get("/api/v1/me").status_code == 401

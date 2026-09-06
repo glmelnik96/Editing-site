@@ -45,23 +45,32 @@ class RemoteService:
     read_list: Callable[[object], list[Person]]
 
 
+def _rows(rows: object) -> list[dict]:
+    """Строки списка или ValueError.
+
+    Непонятный ответ нельзя молча читать как пустой список: пустой столбец в кабинете значит
+    «доступа нет у всех», а мы в этот момент просто не разобрали ответ. Сосед мог выкатить
+    версию с переименованным полем — это должно быть видно как «ответил не тем»."""
+    if not isinstance(rows, list):
+        raise TypeError("ожидали список записей")
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("email"), str) or not row["email"]:
+            raise ValueError("в списке запись без адреса")
+    return rows
+
+
 def _read_board(body: object) -> list[Person]:
     """У VideoBoard список лежит в поле emails, заметок у него нет."""
-    rows = body.get("emails", []) if isinstance(body, dict) else []
-    return [
-        Person(email=r["email"], added_by=r.get("added_by") or "")
-        for r in rows
-        if isinstance(r, dict) and r.get("email")
-    ]
+    if not isinstance(body, dict):
+        raise TypeError("ожидали объект с полем emails")
+    return [Person(email=r["email"], added_by=r.get("added_by") or "") for r in _rows(body.get("emails"))]
 
 
 def _read_stream(body: object) -> list[Person]:
     """У Presentation Remote список приходит голым массивом и с заметкой."""
-    rows = body if isinstance(body, list) else []
     return [
         Person(email=r["email"], note=r.get("note") or "", added_by=r.get("added_by") or "")
-        for r in rows
-        if isinstance(r, dict) and r.get("email")
+        for r in _rows(body)
     ]
 
 
@@ -118,6 +127,10 @@ class RemoteClient:
             )
         except httpx.HTTPError as exc:
             raise ServiceError("unavailable", f"{self.service.title}: не отвечает") from exc
+        except Exception as exc:
+            # Кривой адрес в конфиге даёт ValueError мимо httpx.HTTPError, и без этой ветки
+            # чужая опечатка уносила бы всю страницу кабинета, а не один столбец.
+            raise ServiceError("unavailable", f"{self.service.title}: запрос не удался") from exc
         # 401 и 403 у соседей значат одно и то же — «токен не принят»; различие в кодах у них
         # историческое, и тащить его в интерфейс незачем.
         if resp.status_code in (401, 403):
@@ -134,7 +147,10 @@ class RemoteClient:
             body = resp.json()
         except ValueError as exc:
             raise ServiceError("bad_response", f"{self.service.title}: ответ не разобрать") from exc
-        return self.service.read_list(body)
+        try:
+            return self.service.read_list(body)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise ServiceError("bad_response", f"{self.service.title}: список пришёл не в том виде") from exc
 
     def add(self, email: str) -> None:
         self._request("POST", self.service.list_path, json={"email": email})
