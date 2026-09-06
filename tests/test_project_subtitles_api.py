@@ -234,6 +234,24 @@ def test_both_formats_are_served(client, login_as, settings):
     assert vtt.text.startswith("WEBVTT") and "Мы поехали" in vtt.text
 
 
+def test_edited_cues_reach_the_file_that_goes_into_the_roll(client, login_as, settings):
+    """Ради этого реплики и живут в документе: правка человека доезжает до вжигания."""
+    login_as()
+    project = with_transcript(client, settings)
+    saved = generate(client, project).json()
+    doc = saved["doc"]
+    doc["subtitles"]["cues"] = [{"start": 0.0, "end": 2.0, "text": "Правленый текст"}]
+    edited = client.put(
+        f"/api/v1/projects/{project['id']}",
+        json={"name": saved["name"], "version": saved["version"], "doc": doc},
+    )
+    assert edited.status_code == 200, edited.text
+
+    r = subtitles(client, edited.json())
+    assert r.status_code == 200, r.text
+    assert "Правленый текст" in r.text and "Мы поехали" not in r.text
+
+
 def test_default_format_is_srt(client, login_as, settings):
     login_as()
     project = ready_project(client, settings)

@@ -206,6 +206,67 @@ class TestКэш:
         assert vtt.exists()
 
 
+EDITED_CUES = [{"start": 0.0, "end": 1.5, "text": "Правленый текст"},
+               {"start": 1.5, "end": 3.0, "text": "и вторая\nреплика"}]
+
+
+class TestРепликиИзДокумента:
+    """source=cues: реплики уже вычитаны человеком и лежат в документе."""
+
+    def with_cues(self, conn, settings, cues=None):
+        raw = {
+            "output": {"aspect": "16:9", "fit": "pad", "fps": 30},
+            "clips": [{"asset_id": ASSET, "in": 0.0, "out": 10.0}],
+            "subtitles": {"source": "cues", "mode": "burn", "style": "default",
+                          "cues": cues or EDITED_CUES},
+        }
+        return create_project(conn, settings, USER, name="Вычитанные", raw_doc=raw)
+
+    def test_ролик_собирается_из_вычитанных_реплик(self, conn, settings):
+        made = self.with_cues(conn, settings)
+        srt = build_project_subtitles(conn, settings, made)
+        assert cue_lines(srt) == ["Правленый текст", "и вторая", "реплика"]
+        assert srt.with_suffix(".vtt").read_text(encoding="utf-8").startswith("WEBVTT")
+
+    def test_правка_текста_меняет_файл(self, conn, settings):
+        """Человек правил реплику как раз потому, что расшифровка ошиблась: молча пересобрать
+        её значит вернуть ошибку в кадр."""
+        made = self.with_cues(conn, settings)
+        build_project_subtitles(conn, settings, made)
+        saved = save_project(
+            conn, settings, USER, made["id"], name=made["name"], version=made["version"],
+            raw_doc={**made["doc"], "subtitles": {**made["doc"]["subtitles"],
+                                                  "cues": [{"start": 0.0, "end": 1.5,
+                                                            "text": "Совсем другое"}]}},
+        )
+        again = build_project_subtitles(conn, settings, saved)
+        assert cue_lines(again) == ["Совсем другое"]
+
+    def test_расшифровка_не_нужна_вовсе(self, conn, settings):
+        """Расшифровку можно удалить: реплики самодостаточны, и сборка ролика от неё не зависит."""
+        add_transcript(settings)
+        made = self.with_cues(conn, settings)
+        transcript_path(settings, USER, ASSET).unlink()
+        assert cue_lines(build_project_subtitles(conn, settings, made)) == [
+            "Правленый текст", "и вторая", "реплика"
+        ]
+
+    def test_расшифровка_новее_кэша_ничего_не_меняет(self, conn, settings):
+        """Версия следит за документом, а реплики в нём и лежат: пересобирать не с чего."""
+        import os
+        import time
+
+        made = self.with_cues(conn, settings)
+        srt = build_project_subtitles(conn, settings, made)
+        path = add_transcript(settings)
+        later = time.time() + 10
+        os.utime(path, (later, later))
+
+        srt.write_text("ЯКОРЬ", encoding="utf-8")  # якорь: пересобранный файл его не переживёт
+        assert build_project_subtitles(conn, settings, made) == srt
+        assert srt.read_text(encoding="utf-8") == "ЯКОРЬ"
+
+
 class TestКэшИРасшифровка:
     def test_новая_расшифровка_пересобирает_субтитры(self, conn, settings):
         """Версия проекта следит за документом, но не за расшифровкой: её могли заказать заново

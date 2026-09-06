@@ -219,6 +219,13 @@ class TestСубтитрыИзТранскрипта:
         chain = filter_of(self.build(self.subs_doc(), path=Path(r"C:\d\it's\subs\3.srt")))
         assert r"\:" in chain and r"\'" in chain
 
+    def test_вычитанные_реплики_идут_тем_же_путём(self):
+        """У source=cues ассета нет вовсе: файл собран из документа и пришёл путём."""
+        chain = filter_of(self.build(doc(subtitles={"source": "cues", "asset_id": None,
+                                                    "mode": "burn", "style": "default",
+                                                    "cues": [{"start": 0, "end": 1, "text": "х"}]})))
+        assert "subs/3.srt" in chain
+
     def test_путь_не_подменяет_загруженный_файл(self):
         """У source=file субтитры лежат рядом с ассетом: путь кэша тут ни при чём."""
         args = self.build(doc(subtitles={"source": "file", "asset_id": "ast_s", "mode": "soft",

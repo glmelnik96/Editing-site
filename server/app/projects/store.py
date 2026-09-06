@@ -484,28 +484,37 @@ def build_project_subtitles(
     None — субтитров в документе нет или они из загруженного файла: тот уже лежит рядом с ассетом,
     собирать нечего.
 
-    Реплики режутся из слов, пересчитанных через клипы: транскрипт живёт во времени исходника, а в
-    ролике от исходника остались только выбранные куски и стоят они в другом порядке. Возьми слова
-    как есть — и субтитры разъедутся с картинкой.
+    Реплики берутся из документа (`source == "cues"`) или режутся из слов, пересчитанных через
+    клипы (`source == "transcript"`). Вычитанный человеком текст пересобирать нельзя: он правил
+    реплики как раз потому, что расшифровка ошиблась.
     """
     doc = project.get("doc") or {}
-    subtitles = doc.get("subtitles")
-    if not subtitles or subtitles.get("source") != "transcript":
+    subtitles = doc.get("subtitles") or {}
+    source = subtitles.get("source")
+    if source not in ("cues", "transcript"):
         return None
     owner = _owner_of(conn, project["id"])
     folder = subs_dir(settings, owner, project["id"])
     version = project["version"]
     srt, vtt = folder / f"{version}.srt", folder / f"{version}.vtt"
-    # Ассет субтитров принадлежит владельцу проекта: документ проверялся по его же ассетам.
-    asset_id = subtitles["asset_id"]
-    source = transcript_path(settings, owner, asset_id)
-    if srt.exists() and vtt.exists() and not _newer(source, srt):
-        # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
-        # документа. Но версия следит за документом, а не за расшифровкой: её могли заказать
-        # заново при той же версии, и тогда кэш пришлось бы отдавать устаревшим.
-        return srt
+    cached = srt.exists() and vtt.exists()
 
-    cues = cues_from_transcript(settings, doc, owner=owner, asset_id=asset_id)
+    if source == "cues":
+        if cached:
+            # Реплики живут в документе, а версия растёт с каждой его правкой: файл этой версии
+            # собран из этих же реплик, сверять его больше не с чем — расшифровка тут ни при чём.
+            return srt
+        cues = subtitles.get("cues") or []
+    else:
+        # Ассет субтитров принадлежит владельцу проекта: документ проверялся по его же ассетам.
+        asset_id = subtitles["asset_id"]
+        if cached and not _newer(transcript_path(settings, owner, asset_id), srt):
+            # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
+            # документа. Но версия следит за документом, а не за расшифровкой: её могли заказать
+            # заново при той же версии, и тогда кэш пришлось бы отдавать устаревшим.
+            return srt
+        cues = cues_from_transcript(settings, doc, owner=owner, asset_id=asset_id)
+
     folder.mkdir(parents=True, exist_ok=True)
     _write_atomic(srt, cues_to_srt(cues))
     _write_atomic(vtt, cues_to_vtt(cues))
