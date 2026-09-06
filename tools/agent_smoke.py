@@ -3,9 +3,12 @@
 Запуск: python tools/agent_smoke.py <base_url> <token> <файл.mp4>
 
 Проходит весь путь из раздела 5 спеки одним запуском: загрузка по частям, ожидание анализа
-и прокси, чтение карты пауз, проект из двух клипов, черновой рендер, скачивание готового
-файла, завершение проекта. Каждый шаг печатается со временем от старта; при отказе видно
-код и тело ответа, а код возврата — ненулевой.
+и прокси, чтение карты пауз, расшифровка речи, проект из двух клипов, черновой рендер,
+скачивание готового файла, завершение проекта. Каждый шаг печатается со временем от старта;
+при отказе видно код и тело ответа, а код возврата — ненулевой.
+
+Выключенная транскрипция (ключ провайдера на сервере не задан) прогон не роняет: её шаг
+говорит об этом и пропускается. Остальной путь агента от неё не зависит.
 
 Это же регламентная проверка после каждой выкатки: путь агента и путь браузера — один и тот же
 API, и если тут всё прошло, значит наружу сервис работает.
@@ -27,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.upload_file import call, upload
 
 ASSET_WAIT_SEC = 900
-RENDER_WAIT_SEC = 3600
+# Одно терпение на сборку и на расшифровку: обе ждут по часу — одна процессор, другая сеть.
+JOB_WAIT_SEC = 3600
 POLL_SEC = 3
 CLIP_SEC = 3.0
 
@@ -67,7 +71,7 @@ def wait_asset(base: str, token: str, asset_id: str) -> dict:
         asset = call(base, token, "GET", f"/api/v1/assets/{asset_id}")
         if asset["status"] != seen:
             seen = asset["status"]
-            say("2/7", f"статус файла: {seen}")
+            say("2/8", f"статус файла: {seen}")
         if seen == "proxy_ready":
             return asset
         if seen == "failed":
@@ -77,23 +81,83 @@ def wait_asset(base: str, token: str, asset_id: str) -> dict:
     raise AssertionError("недостижимо")
 
 
-def wait_job(base: str, token: str, job_id: str) -> dict:
-    """Ждём задание рендера, печатая прогресс по мере роста."""
-    deadline = time.monotonic() + RENDER_WAIT_SEC
+def wait_job(base: str, token: str, job_id: str, *, step: str, what: str) -> dict:
+    """Ждём задание, печатая прогресс по мере роста. what — чем занят сервер, для строк отчёта."""
+    deadline = time.monotonic() + JOB_WAIT_SEC
     shown = -1
     while time.monotonic() < deadline:
         job = call(base, token, "GET", f"/api/v1/jobs/{job_id}")
         percent = int(job["progress"] * 100)
         if job["status"] == "running" and percent >= shown + 10:
             shown = percent
-            say("5/7", f"собираю: {percent} %")
+            say(step, f"{what}: {percent} %")
         if job["status"] == "done":
             return job
         if job["status"] in ("failed", "canceled"):
-            fail(f"сборка завершилась статусом {job['status']}: {job.get('error')}")
+            fail(f"{what}: задание завершилось статусом {job['status']}: {job.get('error')}")
         time.sleep(POLL_SEC)
-    fail(f"сборка не закончилась за {RENDER_WAIT_SEC} с")
+    fail(f"{what} не закончилась за {JOB_WAIT_SEC} с")
     raise AssertionError("недостижимо")
+
+
+def error_code(detail: str) -> str:
+    """Код из тела ошибки {"error": {"code": ...}}; тело не разобралось — пустая строка."""
+    try:
+        return str(json.loads(detail)["error"]["code"])
+    except (ValueError, TypeError, KeyError):
+        return ""
+
+
+def start_transcribe(base: str, token: str, asset_id: str) -> dict | None:
+    """Заказ расшифровки; None — транскрипция на сервере выключена.
+
+    Свой запрос, а не call(): тот на любой отказ кончает прогон, а `503 transcription_unavailable`
+    отказом прогона не является — на машине без ключа провайдера сервис просто без этой функции.
+    """
+    path = f"/api/v1/assets/{asset_id}/transcribe"
+    req = urllib.request.Request(base + path, data=b"{}", method="POST")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 503 and error_code(detail) == "transcription_unavailable":
+            return None
+        fail(f"POST {path}: HTTP {exc.code} {detail}")
+    except urllib.error.URLError as exc:
+        fail(f"POST {path}: не удалось соединиться ({exc.reason})")
+    raise AssertionError("недостижимо")
+
+
+def transcribe(base: str, token: str, asset_id: str, step: str) -> None:
+    """Расшифровка речи: заказ, ожидание задания, транскрипт и он же в SRT.
+
+    Печатаем сводку сверки границ по паузам: по интерполированным словам резать нельзя, а вот
+    доля подтверждённых границ показывает, насколько транскрипту можно верить во времени.
+    """
+    queued = start_transcribe(base, token, asset_id)
+    if queued is None:
+        say(step, "расшифровка выключена (ключ провайдера не настроен), шаг пропущен")
+        return
+    wait_job(base, token, queued["job_id"], step=step, what="расшифровка")
+    doc = call(base, token, "GET", f"/api/v1/assets/{asset_id}/transcript")
+    stats = doc.get("stats") or {}
+    say(step, f"транскрипт готов: сегментов {len(doc['segments'])}, язык {doc['language']}, "
+              f"границ подтверждено {stats.get('verified_pct', 0)} %, "
+              f"сегментов сдвинуто {stats.get('adjusted', 0)}, "
+              f"наибольший сдвиг {stats.get('max_drift', 0)} с")
+
+    _, raw = fetch_file(base, token, f"/api/v1/assets/{asset_id}/transcript?format=srt")
+    srt = raw.decode("utf-8", errors="replace")
+    if not srt.strip():
+        fail("SRT пришёл пустым: реплик в транскрипте нет")
+    # Первая строка SRT — номер первой реплики. Пустой файл и заголовок вместо номера значат,
+    # что сборка субтитров сломалась, а не что речи не нашлось.
+    if srt.splitlines()[0].strip() != "1":
+        fail(f"SRT начинается не с номера реплики: {srt[:40]!r}")
+    say(step, f"SRT получен: {len(raw)} байт, реплик {srt.count('-->')}")
 
 
 def build_clips(duration: float, silences: list[dict]) -> list[dict]:
@@ -124,20 +188,22 @@ def verified(clips: list[dict]) -> str:
 
 def smoke(base: str, token: str, file: Path) -> int:
     me = call(base, token, "GET", "/api/v1/me")
-    say("0/7", f"вход выполнен: {me['email']}, занято {me['quota']['used_bytes'] / 2**30:.2f} ГБ")
+    say("0/8", f"вход выполнен: {me['email']}, занято {me['quota']['used_bytes'] / 2**30:.2f} ГБ")
 
     done = upload(base, token, file, None)
     asset_id = done["asset_id"]
-    say("1/7", f"файл загружен: asset_id={asset_id}")
+    say("1/8", f"файл загружен: asset_id={asset_id}")
 
     asset = wait_asset(base, token, asset_id)
     duration = float(asset["duration"])
-    say("2/7", f"файл готов: {duration:.1f} с, прокси {asset['files']['proxy']}")
+    say("2/8", f"файл готов: {duration:.1f} с, прокси {asset['files']['proxy']}")
 
     _, raw = fetch_file(base, token, asset["files"]["analysis"])
     analysis = json.loads(raw)
     silences = analysis["silences"]
-    say("3/7", f"пауз найдено: {len(silences)}, порог {analysis['threshold_db']} дБ")
+    say("3/8", f"пауз найдено: {len(silences)}, порог {analysis['threshold_db']} дБ")
+
+    transcribe(base, token, asset_id, "4/8")
 
     project = call(
         base, token, "POST", "/api/v1/projects",
@@ -152,19 +218,19 @@ def smoke(base: str, token: str, file: Path) -> int:
         json.dumps({"name": project["name"], "version": project["version"], "doc": doc}).encode(),
         "application/json",
     )
-    say("4/7", f"проект {saved['id']}: клипов {len(saved['doc']['clips'])}, "
+    say("5/8", f"проект {saved['id']}: клипов {len(saved['doc']['clips'])}, "
                f"версия {saved['version']}, {verified(saved['doc']['clips'])}")
 
     queued = call(
         base, token, "POST", f"/api/v1/projects/{saved['id']}/render",
         json.dumps({"quality": "draft"}).encode(), "application/json",
     )
-    wait_job(base, token, queued["job_id"])
+    wait_job(base, token, queued["job_id"], step="6/8", what="сборка")
     renders = call(base, token, "GET", f"/api/v1/projects/{saved['id']}/renders")["renders"]
     render = renders[0] if renders else None  # список идёт от свежих: наш ролик первый
     if render is None:
         fail("задание завершилось, а готового ролика в списке нет")
-    say("5/7", f"ролик собран: {render['id']}, {render['duration']:.1f} с, "
+    say("6/8", f"ролик собран: {render['id']}, {render['duration']:.1f} с, "
                f"{render['size'] / 2**20:.1f} МБ")
 
     headers, body = fetch_file(base, token, render["download"])
@@ -172,7 +238,7 @@ def smoke(base: str, token: str, file: Path) -> int:
         fail(f"скачано {len(body)} байт, а в карточке {render['size']}")
     if "attachment" not in headers.get("content-disposition", ""):
         fail(f"файл отдан без вложения: Content-Disposition={headers.get('content-disposition')!r}")
-    say("6/7", f"файл скачан: {len(body)} байт, {headers.get('content-disposition')}")
+    say("7/8", f"файл скачан: {len(body)} байт, {headers.get('content-disposition')}")
 
     finished = call(base, token, "POST", f"/api/v1/projects/{saved['id']}/finish")
     if finished["status"] != "finished":
@@ -180,7 +246,7 @@ def smoke(base: str, token: str, file: Path) -> int:
     left = call(base, token, "GET", f"/api/v1/projects/{saved['id']}/renders")["renders"]
     if left:
         fail(f"после завершения проекта осталось роликов: {len(left)}")
-    say("7/7", "проект завершён, ролики убраны")
+    say("8/8", "проект завершён, ролики убраны")
     say("ИТОГ", "весь путь агента пройден")
     return 0
 
