@@ -186,6 +186,18 @@ def verified(clips: list[dict]) -> str:
     return f"{ok} из {2 * len(clips)} границ подтверждены паузами"
 
 
+def fetch_text(base: str, token: str, path: str) -> str:
+    """Текстовый ответ (SRT, VTT): call() ждёт JSON и на субтитрах споткнулся бы."""
+    _, body = fetch_file(base, token, path)
+    return body.decode("utf-8", errors="replace")
+
+
+def has_transcript(base: str, token: str, asset_id: str) -> bool:
+    """Расшифровка могла не состояться — ключ провайдера настроен не везде, и смоук это переживает."""
+    asset = call(base, token, "GET", f"/api/v1/assets/{asset_id}")
+    return bool((asset.get("files") or {}).get("transcript"))
+
+
 def smoke(base: str, token: str, file: Path) -> int:
     me = call(base, token, "GET", "/api/v1/me")
     say("0/8", f"вход выполнен: {me['email']}, занято {me['quota']['used_bytes'] / 2**30:.2f} ГБ")
@@ -213,13 +225,24 @@ def smoke(base: str, token: str, file: Path) -> int:
     for clip in clips:
         clip["asset_id"] = asset_id
     doc = {"output": {"aspect": "16:9", "fit": "pad", "fps": 30}, "clips": clips}
+    if has_transcript(base, token, asset_id):
+        # Субтитры из расшифровки: слова исходника пересчитываются через клипы, поэтому проверять
+        # их надо на смонтированном ролике, а не на исходнике.
+        doc["subtitles"] = {"source": "transcript", "asset_id": asset_id, "mode": "burn"}
     saved = call(
         base, token, "PUT", f"/api/v1/projects/{project['id']}",
         json.dumps({"name": project["name"], "version": project["version"], "doc": doc}).encode(),
         "application/json",
     )
+    subs = " с субтитрами из расшифровки" if doc.get("subtitles") else " без субтитров"
     say("5/8", f"проект {saved['id']}: клипов {len(saved['doc']['clips'])}, "
-               f"версия {saved['version']}, {verified(saved['doc']['clips'])}")
+               f"версия {saved['version']}, {verified(saved['doc']['clips'])}{subs}")
+    if doc.get("subtitles"):
+        srt = fetch_text(base, token, f"/api/v1/projects/{saved['id']}/subtitles?format=srt")
+        cues = srt.count("-->")
+        if cues == 0:
+            fail("субтитры проекта пусты")
+        say("5/8", f"субтитры собраны: реплик {cues}, первая строка «{srt.splitlines()[2]}»")
 
     queued = call(
         base, token, "POST", f"/api/v1/projects/{saved['id']}/render",
