@@ -12,6 +12,7 @@ from server.app.errors import ApiError
 from server.app.jobs import enqueue_job
 from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
+    NoCues,
     ProjectConflict,
     ProjectLimit,
     SubtitlesUnavailable,
@@ -21,6 +22,7 @@ from server.app.projects.store import (
     create_project,
     delete_project,
     finish_project,
+    generate_project_cues,
     get_project,
     list_projects,
     list_renders,
@@ -304,6 +306,53 @@ def renders(
 ) -> RenderList:
     _owned(conn, user, project_id)
     return RenderList(renders=[RenderView(**r) for r in list_renders(conn, user.id, project_id)])
+
+
+class SubtitlesGenerate(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=64)
+    mode: Literal["burn", "soft"] = "burn"
+    # Версия необязательна: реплики собираются из документа, который лежит на сервере, и свежую
+    # копию для этого держать не нужно. Но если клиент её прислал — правило то же, что у PUT:
+    # поверх чужой правки не сохраняем.
+    version: int | None = Field(default=None, ge=1)
+
+
+@router.post("/{project_id}/subtitles/generate", response_model=ProjectView)
+def generate_subtitles(
+    project_id: str,
+    body: SubtitlesGenerate,
+    request: Request,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> ProjectView:
+    """Собирает реплики из расшифровки и кладёт их в документ проекта обычным сохранением.
+
+    Дальше ролик собирается из этих реплик, а не из расшифровки заново: человек их вычитывает и
+    правит карточками, и его правка обязана дожить до вжигания.
+    """
+    project = _owned(conn, user, project_id)
+    if not project["doc"].get("clips"):
+        raise ApiError(422, "empty_project", "В проекте нет клипов")
+    try:
+        saved = generate_project_cues(
+            conn, request.app.state.settings, user.id, project,
+            asset_id=body.asset_id, mode=body.mode,
+            version=project["version"] if body.version is None else body.version,
+        )
+    except SubtitlesUnavailable as exc:
+        # Текст берём у сборки: вторая формулировка здесь разошлась бы с той, что видно в ответе
+        # ручки субтитров и в карточке упавшего задания.
+        raise ApiError(422, "no_transcript", str(exc)) from exc
+    except NoCues as exc:
+        raise ApiError(422, "no_cues", str(exc)) from exc
+    except ProjectInvalid as exc:
+        raise invalid(exc) from exc
+    except ProjectConflict as exc:
+        raise conflict(exc) from exc
+    except KeyError as exc:
+        # Проект удалили между проверкой владения и записью: для клиента это «не найден».
+        raise ApiError(404, "not_found", "Проект не найден") from exc
+    return ProjectView(**saved)
 
 
 @router.get("/{project_id}/subtitles")

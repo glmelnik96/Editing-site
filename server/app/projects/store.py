@@ -363,6 +363,14 @@ class SubtitlesUnavailable(Exception):
     """
 
 
+class NoCues(Exception):
+    """Расшифровка есть, а реплик из неё не вышло: в выбранные куски не попало ни одного слова.
+
+    Честнее, чем положить в документ пустой список: пустые субтитры человек заметил бы только
+    на собранном ролике.
+    """
+
+
 def _write_atomic(path: Path, text: str) -> None:
     """Через временный файл: ffmpeg не должен открыть половину субтитров.
 
@@ -388,6 +396,84 @@ def _newer(source: Path, cached: Path) -> bool:
         return source.stat().st_mtime > cached.stat().st_mtime
     except OSError:
         return True  # исходника не видно — пусть сборка разберётся и скажет внятно
+
+
+def _read_transcript(settings: Settings, owner: str, asset_id: str) -> dict:
+    """Расшифровка ассета или отказ.
+
+    Пустой путь до ffmpeg доводить нельзя: он упал бы на открытии файла, и в карточке задания
+    оказалась бы ругань кодека вместо понятного «закажите расшифровку». Неизвестный ассет — тот же
+    отказ: путь к нему не строится, и расшифровки по нему всё равно нет.
+    """
+    try:
+        return json.loads(transcript_path(settings, owner, asset_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SubtitlesUnavailable(
+            "у файла нет расшифровки: закажите её и соберите проект заново"
+        ) from exc
+
+
+def cues_from_transcript(settings: Settings, doc: dict, *, owner: str, asset_id: str) -> list[dict]:
+    """Реплики расшифровки в шкале ролика: слова пересчитываются через клипы, текст режется по
+    ширине строки.
+
+    Транскрипт живёт во времени исходника, а в ролике от исходника остались только выбранные куски
+    и стоят они в другом порядке. Возьми слова как есть — и субтитры разъедутся с картинкой.
+    """
+    transcript = _read_transcript(settings, owner, asset_id)
+    aspect = (doc.get("output") or {}).get("aspect")
+    return build_cues(
+        words_through_clips(transcript, doc.get("clips") or [], asset_id=asset_id),
+        # Пропорция проверена при сохранении; запасное значение — на испорченный документ.
+        max_chars=SUB_CHARS_BY_ASPECT.get(aspect, SUB_CHARS_BY_ASPECT["16:9"]),
+        max_lines=SUB_LINES,
+        max_dur=SUB_MAX_DUR,
+    )
+
+
+def _cues_for_document(cues: list[dict]) -> list[dict]:
+    """Реплики сборщика → реплики документа: только время и текст.
+
+    Слова остаются за бортом: в карточке их не показывают, а документ они раздули бы вдесятеро.
+    Начало подтягивается к концу предыдущей реплики: во временах загруженной расшифровки никто не
+    обещал, что слова не наложатся, а наложение документ не примет — и человек увидел бы отказ
+    вместо реплик, которые сам не писал.
+    """
+    out: list[dict] = []
+    previous = 0.0
+    for cue in cues:
+        start = max(round(float(cue["start"]), 3), previous)
+        end = round(float(cue["end"]), 3)
+        if end <= start:
+            continue  # реплика утонула в предыдущей: показывать её нечем
+        out.append({"start": start, "end": end, "text": cue["text"]})
+        previous = end
+    return out
+
+
+def generate_project_cues(
+    conn: sqlite3.Connection, settings: Settings, user_id: str, project: dict, *,
+    asset_id: str, mode: str, version: int,
+) -> dict:
+    """Реплики из расшифровки — в документ проекта, обычным сохранением.
+
+    Сохранение, а не отдельный файл: версия растёт, и на реплики распространяются откат, точки
+    сохранения и защита от одновременной правки. Прежний блок субтитров заменяется целиком —
+    «собрать заново» и означает отказ от прежних правок.
+    """
+    doc = project["doc"]
+    cues = _cues_for_document(
+        cues_from_transcript(settings, doc, owner=user_id, asset_id=asset_id)
+    )
+    if not cues:
+        raise NoCues("В выбранные куски не попало ни одного слова расшифровки")
+    return save_project(
+        conn, settings, user_id, project["id"], name=project["name"], version=version,
+        raw_doc={
+            **doc,
+            "subtitles": {"source": "cues", "mode": mode, "style": "default", "cues": cues},
+        },
+    )
 
 
 def build_project_subtitles(
@@ -419,26 +505,7 @@ def build_project_subtitles(
         # заново при той же версии, и тогда кэш пришлось бы отдавать устаревшим.
         return srt
 
-
-    try:
-        transcript = json.loads(
-            transcript_path(settings, owner, asset_id).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError) as exc:
-        # Пустой путь до ffmpeg доводить нельзя: он упал бы на открытии файла, и в карточке
-        # задания оказалась бы ругань кодека вместо понятного «закажите расшифровку».
-        raise SubtitlesUnavailable(
-            "у файла нет расшифровки: закажите её и соберите проект заново"
-        ) from exc
-
-    aspect = (doc.get("output") or {}).get("aspect")
-    cues = build_cues(
-        words_through_clips(transcript, doc.get("clips") or [], asset_id=asset_id),
-        # Пропорция проверена при сохранении; запасное значение — на испорченный документ.
-        max_chars=SUB_CHARS_BY_ASPECT.get(aspect, SUB_CHARS_BY_ASPECT["16:9"]),
-        max_lines=SUB_LINES,
-        max_dur=SUB_MAX_DUR,
-    )
+    cues = cues_from_transcript(settings, doc, owner=owner, asset_id=asset_id)
     folder.mkdir(parents=True, exist_ok=True)
     _write_atomic(srt, cues_to_srt(cues))
     _write_atomic(vtt, cues_to_vtt(cues))

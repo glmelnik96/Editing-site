@@ -1,7 +1,7 @@
-"""Ручка субтитров проекта: GET /api/v1/projects/{id}/subtitles в srt и vtt.
+"""Ручки субтитров проекта: сборка реплик в документ и отдача файла в srt и vtt.
 
-Нарезка реплик и кэш разобраны в tests/test_project_subtitles.py; здесь — только ответы ручки:
-формат, коды отказов и то, кому она вообще доступна.
+Нарезка реплик и кэш разобраны в tests/test_project_subtitles.py; здесь — только ответы ручек:
+формат, коды отказов и то, кому они вообще доступны.
 """
 import sqlite3
 
@@ -41,10 +41,10 @@ def add_transcript(client, asset_id=VIDEO):
     assert r.status_code == 200, r.text
 
 
-def make_project(client, *, subtitles="transcript", asset=VIDEO):
+def make_project(client, *, subtitles="transcript", asset=VIDEO, aspect="16:9", clips=None):
     doc = {
-        "output": {"aspect": "16:9", "fit": "pad", "fps": 30},
-        "clips": [{"asset_id": VIDEO, "in": 0.0, "out": 10.0}],
+        "output": {"aspect": aspect, "fit": "pad", "fps": 30},
+        "clips": clips or [{"asset_id": VIDEO, "in": 0.0, "out": 10.0}],
     }
     if subtitles:
         doc["subtitles"] = {"source": subtitles, "asset_id": asset, "mode": "burn", "style": "default"}
@@ -66,6 +66,154 @@ def ready_project(client, settings):
 
 def subtitles(client, project, **params):
     return client.get(f"/api/v1/projects/{project['id']}/subtitles", params=params)
+
+
+def generate(client, project, **body):
+    return client.post(
+        f"/api/v1/projects/{project['id']}/subtitles/generate", json={"asset_id": VIDEO, **body}
+    )
+
+
+def with_transcript(client, settings, **over):
+    """Проект без субтитров и готовая расшифровка исходника: точка, с которой человек жмёт «Собрать»."""
+    seed_asset(settings, me(client))
+    add_transcript(client)
+    return make_project(client, subtitles=None, **over)
+
+
+def cues_of(response) -> list[dict]:
+    assert response.status_code == 200, response.text
+    return response.json()["doc"]["subtitles"]["cues"]
+
+
+def lines_of(cues) -> list[str]:
+    return [line for cue in cues for line in cue["text"].split("\n")]
+
+
+# ── Сборка реплик в документ ───────────────────────────────────────────────────────────────────
+
+
+def test_cues_land_in_the_document(client, login_as, settings):
+    """Реплики ложатся в документ обычным сохранением: версия растёт, значит работают откат,
+    точки сохранения и защита от одновременной правки."""
+    login_as()
+    project = with_transcript(client, settings)
+
+    r = generate(client, project)
+    assert r.status_code == 200, r.text
+    subs = r.json()["doc"]["subtitles"]
+    assert subs["source"] == "cues" and subs["mode"] == "burn" and subs["style"] == "default"
+    assert " ".join(lines_of(subs["cues"])).startswith("Мы поехали")
+    assert r.json()["version"] == project["version"] + 1
+    # Это состояние проекта, а не ответ на один запрос: следующий читатель видит те же реплики.
+    assert client.get(f"/api/v1/projects/{project['id']}").json()["doc"]["subtitles"] == subs
+
+
+def test_cue_times_follow_the_roll_not_the_source(client, login_as, settings):
+    """Клип начинается со 2-й секунды исходника: реплики приезжают к началу ролика."""
+    login_as()
+    project = with_transcript(client, settings, clips=[{"asset_id": VIDEO, "in": 2.0, "out": 10.0}])
+    cues = cues_of(generate(client, project))
+    assert cues[0]["start"] == 0.0
+    assert "Мы поехали" not in " ".join(lines_of(cues))  # эти слова вырезаны вместе с началом
+
+
+def test_mode_comes_from_the_request(client, login_as, settings):
+    login_as()
+    project = with_transcript(client, settings)
+    r = generate(client, project, mode="soft")
+    assert r.json()["doc"]["subtitles"]["mode"] == "soft"
+
+
+def test_line_width_follows_the_aspect(client, login_as, settings):
+    """Ширина строки — по пропорции проекта: в вертикальном кадре длинная строка уезжает за край."""
+    login_as()
+    seed_asset(settings, me(client))
+    add_transcript(client)
+    wide = cues_of(generate(client, make_project(client, subtitles=None)))
+    tall = cues_of(generate(client, make_project(client, subtitles=None, aspect="9:16")))
+
+    assert max(len(line) for line in lines_of(tall)) <= 24
+    assert len(tall) > len(wide)  # та же фраза распадается на большее число реплик
+
+
+def test_second_generation_replaces_the_edited_cues(client, login_as, settings):
+    """«Собрать заново» — это отказ от прежних правок, и предупреждает о нём интерфейс."""
+    login_as()
+    project = with_transcript(client, settings)
+    saved = generate(client, project).json()
+    doc = saved["doc"]
+    doc["subtitles"]["cues"][0]["text"] = "Я поправил руками"
+    edited = client.put(
+        f"/api/v1/projects/{project['id']}",
+        json={"name": saved["name"], "version": saved["version"], "doc": doc},
+    )
+    assert edited.status_code == 200, edited.text
+
+    again = generate(client, project)
+    assert "Я поправил руками" not in " ".join(lines_of(cues_of(again)))
+    assert again.json()["version"] == edited.json()["version"] + 1
+
+
+# ── Отказы сборки ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_generate_without_transcript_is_422(client, login_as, settings):
+    login_as()
+    seed_asset(settings, me(client))
+    project = make_project(client, subtitles=None)
+    r = generate(client, project)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "no_transcript"
+    assert "расшифров" in r.json()["error"]["message"].lower()
+
+
+def test_generate_for_an_empty_project_is_422(client, login_as, settings):
+    """В пустом проекте нет клипов: слова расшифровки не через что пересчитывать."""
+    login_as()
+    seed_asset(settings, me(client))
+    add_transcript(client)
+    empty = client.post("/api/v1/projects", json={"name": "Пустой"}).json()
+    r = generate(client, empty)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "empty_project"
+
+
+def test_no_words_in_the_chosen_pieces_is_422(client, login_as, settings):
+    """Пустой список реплик человек заметил бы только на собранном ролике — отказываем сразу."""
+    login_as()
+    project = with_transcript(client, settings, clips=[{"asset_id": VIDEO, "in": 30.0, "out": 40.0}])
+    r = generate(client, project)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "no_cues"
+    assert client.get(f"/api/v1/projects/{project['id']}").json()["doc"]["subtitles"] is None
+
+
+def test_stale_version_is_a_conflict(client, login_as, settings):
+    """Версию присылать необязательно, но присланная работает как у обычного сохранения."""
+    login_as()
+    project = with_transcript(client, settings)
+    assert generate(client, project).status_code == 200
+    r = generate(client, project, version=project["version"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "version_conflict"
+    assert r.json()["error"]["details"]["project"]["version"] == project["version"] + 1
+
+
+def test_generate_on_a_foreign_project_is_404(client, login_as, settings):
+    login_as()
+    project = with_transcript(client, settings)
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    assert generate(client, project).status_code == 404
+
+
+def test_agent_generates_cues_with_a_token(bearer_client, settings):
+    """Путь агента: тем же токеном собрал реплики — и правит их без карточек."""
+    project = with_transcript(bearer_client, settings)
+    assert cues_of(generate(bearer_client, project))
+
+
+def test_generate_requires_auth(client):
+    r = client.post("/api/v1/projects/prj_000000000001/subtitles/generate",
+                    json={"asset_id": VIDEO})
+    assert r.status_code == 401
 
 
 # ── Отдача ─────────────────────────────────────────────────────────────────────────────────────
