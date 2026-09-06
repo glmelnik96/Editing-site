@@ -144,3 +144,18 @@ def test_service_tokens_default_to_empty(monkeypatch):
     assert s.stream_service_token == "" and s.board_service_token == ""
     assert s.board_base_url == "http://127.0.0.1:8020"
     assert s.stream_base_url == "http://127.0.0.1:8014"
+
+
+def test_transcription_is_off_until_a_key_is_configured(monkeypatch):
+    """Пустой ключ выключает транскрипцию целиком: запуск отвечает отказом, а не идёт в сеть."""
+    monkeypatch.delenv("VIDEO_TRANSCRIBE_API_KEY", raising=False)
+    s = Settings(_env_file=None)
+    assert s.transcribe_api_key == ""
+    assert s.transcribe_model == "openai/whisper-large-v3"
+    assert s.transcribe_language == "ru"
+    assert s.transcribe_chunk_sec == 600 and s.transcribe_chunk_window_sec == 60
+    assert s.transcribe_concurrency == 4 and s.transcribe_retries == 3
+
+
+def test_worker_serves_both_lanes_by_default():
+    assert Settings(_env_file=None).worker_lanes == "cpu,net"

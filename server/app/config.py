@@ -74,6 +74,21 @@ class Settings(BaseSettings):
     # разложены в /opt/editing-site/.env (спека §4). validation_alias отменяет env_prefix
     # только для этих двух полей, остальные читаются как раньше. Ровно на этом споткнулся сосед:
     # переменную положили как SERVICE_TOKEN, а настройки искали BOARD_SERVICE_TOKEN.
+    # Транскрипция (раздел 10 спеки). Пустой ключ запрещает запуск, а не пытается ходить в сеть.
+    transcribe_base_url: str = "https://foundation-models.api.cloud.ru/v1"
+    transcribe_api_key: str = ""
+    transcribe_model: str = "openai/whisper-large-v3"
+    transcribe_language: str = "ru"
+    transcribe_chunk_sec: int = Field(default=600, ge=30, le=1800)
+    transcribe_chunk_window_sec: int = Field(default=60, ge=0, le=300)
+    transcribe_concurrency: int = Field(default=4, ge=1, le=20)
+    transcribe_timeout_sec: int = Field(default=600, ge=30)
+    transcribe_max_upload_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    transcribe_retries: int = Field(default=3, ge=1, le=10)
+    # Полосы, которые разбирает воркер. Транскрипция ждёт сеть десятками минут, и держать за ней
+    # очередь рендеров нельзя: полосы работают параллельно, каждая своим потоком.
+    worker_lanes: str = "cpu,net"
+
     stream_service_token: str = Field(default="", validation_alias=AliasChoices("STREAM_SERVICE_TOKEN"))
     board_service_token: str = Field(default="", validation_alias=AliasChoices("BOARD_SERVICE_TOKEN"))
     # Ходим на loopback: три сервиса на одной машине, Caddy и интернет тут не при чём.

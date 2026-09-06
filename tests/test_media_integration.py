@@ -54,7 +54,7 @@ def add_asset(conn, settings, source_maker, *, asset_id, kind, ext):
 def drain(conn, settings, limit=4):
     """Прокрутить очередь: analyze ставит proxy, поэтому кругов больше одного."""
     for _ in range(limit):
-        if not worker_main.run_once(conn, settings):
+        if not worker_main.run_once(conn, settings, "cpu"):
             return
 
 
@@ -131,9 +131,9 @@ def test_broken_file_fails_with_a_readable_reason(conn, settings):
 
 def test_proxy_of_a_deleted_asset_does_nothing(conn, settings):
     add_asset(conn, settings, make_video, asset_id="ast_000000000005", kind="video", ext="mp4")
-    worker_main.run_once(conn, settings)  # analyze
+    worker_main.run_once(conn, settings, "cpu")  # analyze
     conn.execute("DELETE FROM assets WHERE id = 'ast_000000000005'")
-    assert worker_main.run_once(conn, settings) is True  # proxy взято и мирно завершилось
+    assert worker_main.run_once(conn, settings, "cpu") is True  # proxy взято и мирно завершилось
     assert conn.execute("SELECT status FROM jobs WHERE type = 'proxy'").fetchone()[0] == "done"
 
 
