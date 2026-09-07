@@ -6,7 +6,7 @@
  */
 import { escapeHtml } from '../html'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
-import { clipDuration, dropTarget, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, type Clip } from './model'
+import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, type Clip } from './model'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -123,10 +123,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     blocks.forEach((block, index) => {
       const clip = current.clips[index]
       const node = document.createElement('div')
-      node.className = `block${clip.id === selected ? ' selected' : ''}`
+      const fade = fadeInto(clip, index)
+      node.className = `block${clip.id === selected ? ' selected' : ''}${fade > 0 ? ' has-fade' : ''}`
       node.style.left = `${block.left}px`
       node.style.width = `${block.width}px`
       node.style.height = `${TRACK_HEIGHT}px`
+      node.style.zIndex = clip.id === selected ? '20' : String(index + 1)
+      if (fade > 0) node.style.setProperty('--fade-px', `${Math.max(6, ms(fade * current.pxPerSec))}px`)
       node.dataset.id = clip.id
       node.dataset.index = String(index)
       node.innerHTML = blockHtml(clip, block.width)

@@ -12,7 +12,7 @@ import {
   type ProjectDoc,
   type RenderCard,
 } from './project'
-import { totalDuration } from './timeline/model'
+import { fadeInto, totalDuration } from './timeline/model'
 
 const POLL_MS = 2000
 const DRAFT_K = 1.36
@@ -40,6 +40,12 @@ function fitWord(fit: string): string {
   return fit === 'crop' ? 'обрезка' : 'поля'
 }
 
+function fadeLine(doc: ProjectDoc): string | null {
+  const n = doc.clips.filter((clip, index) => fadeInto(clip, index) > 0).length
+  if (!n) return null
+  return n === 1 ? 'Переход между клипами.' : 'Переходы между клипами.'
+}
+
 function musicLine(doc: ProjectDoc): string | null {
   if (!doc.music) return null
   return doc.music.duck ? 'Музыка с приглушением под речь.' : 'Музыка.'
@@ -59,6 +65,8 @@ export function renderSummary(doc: ProjectDoc, quality: 'draft' | 'final', durat
   const parts = [`${head}${extra}`]
   const music = musicLine(doc)
   if (music) parts.push(music)
+  const fades = fadeLine(doc)
+  if (fades) parts.push(fades)
   const subs = subsLine(doc)
   if (subs) parts.push(subs)
   parts.push(`Около ${estimateRenderMinutes(durationSec, quality)} мин, если воркер свободен.`)

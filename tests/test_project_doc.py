@@ -351,3 +351,71 @@ def test_clip_id_length_is_capped():
     assert errors_of(doc(clips=[clip(id="и" * 65)])) == ["clips[0].id"]
     out = validate_doc(doc(clips=[clip(id="и" * 64)]), assets=ASSETS, settings=S)
     assert out["clips"][0]["id"] == "и" * 64
+
+
+def test_transition_into_second_clip_is_kept():
+    out = validate_doc(
+        doc(clips=[
+            clip(id="a"),
+            clip(id="b", **{"in": 10, "out": 12, "transition": {"kind": "fade", "duration": 0.5}}),
+        ]),
+        assets=ASSETS, settings=S,
+    )
+    assert "transition" not in out["clips"][0]
+    assert out["clips"][1]["transition"] == {"kind": "fade", "duration": 0.5}
+    assert out["clips"][0]["volume"] == 1.0 and out["clips"][1]["volume"] == 1.0
+
+
+def test_zero_transition_is_a_cut():
+    out = validate_doc(
+        doc(clips=[
+            clip(id="a"),
+            clip(id="b", **{"in": 10, "out": 12, "transition": {"kind": "fade", "duration": 0}}),
+        ]),
+        assets=ASSETS, settings=S,
+    )
+    assert "transition" not in out["clips"][1]
+
+
+def test_first_clip_transition_is_stripped():
+    """Переход «в» первый клип не из чего делать — как присланные флаги подтверждения."""
+    out = validate_doc(
+        doc(clips=[clip(transition={"kind": "fade", "duration": 0.5})]),
+        assets=ASSETS, settings=S,
+    )
+    assert "transition" not in out["clips"][0]
+
+
+def test_transition_must_be_shorter_than_both_clips():
+    assert errors_of(doc(clips=[
+        clip(id="a", **{"in": 0, "out": 1}),
+        clip(id="b", **{"in": 10, "out": 12, "transition": {"kind": "fade", "duration": 1}}),
+    ])) == ["clips[1].transition.duration"]
+    assert errors_of(doc(clips=[
+        clip(id="a"),
+        clip(id="b", **{"in": 10, "out": 12, "transition": {"kind": "wipe", "duration": 0.3}}),
+    ])) == ["clips[1].transition.kind"]
+    assert errors_of(doc(clips=[
+        clip(id="a"),
+        clip(id="b", **{"in": 10, "out": 12, "transition": {"kind": "fade", "duration": -1}}),
+    ])) == ["clips[1].transition.duration"]
+
+
+def test_transition_does_not_drop_music_fields_from_a():
+    out = validate_doc(
+        doc(
+            clips=[
+                clip(id="a", volume=0.8),
+                clip(id="b", **{"in": 10, "out": 12, "volume": 1.2,
+                                "transition": {"kind": "fade", "duration": 0.4}}),
+            ],
+            music={"asset_id": "ast_000000000003", "duck": True, "speech_volume": 0.6, "volume": 0.2},
+        ),
+        assets=ASSETS, settings=S,
+    )
+    assert out["music"]["duck"] is True
+    assert out["music"]["speech_volume"] == 0.6
+    assert out["music"]["volume"] == 0.2
+    assert out["clips"][0]["volume"] == 0.8
+    assert out["clips"][1]["volume"] == 1.2
+    assert out["clips"][1]["transition"]["duration"] == 0.4

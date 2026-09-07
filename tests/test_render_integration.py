@@ -142,3 +142,23 @@ def test_cues_stay_inside_the_render(conn, settings):
     assert stamps and all(end <= "00:00:04,000" for _, end in stamps)
     # Кусок 4–6 с исходника звучит во второй половине ролика, а не в конце шестисекундной шкалы.
     assert stamps[-1][1] > "00:00:02,000"
+
+
+def test_fade_shortens_the_rendered_file(conn, settings):
+    """Два клипа по 2 с с полусекундным fade дают ролик 3.5 с, не 4."""
+    project = create_project(conn, settings, USER, name="С переходом", raw_doc={
+        "output": {"aspect": "16:9", "fit": "pad", "fps": 25},
+        "clips": [
+            {"asset_id": ASSET, "in": 0.0, "out": 2.0},
+            {"asset_id": ASSET, "in": 4.0, "out": 6.0,
+             "transition": {"kind": "fade", "duration": 0.5}},
+        ],
+    })
+    enqueue_job(conn, user_id=USER, type_="render", target_id=project["id"],
+                params={"quality": "draft"})
+    handlers.handle_render(conn, settings, claim_job(conn, lane="cpu", pid=1))
+    row = conn.execute(
+        "SELECT * FROM renders WHERE project_id = ?", (project["id"],)
+    ).fetchone()
+    assert row["duration"] == 3.5
+    assert probe_file(settings, row["path"]).duration == pytest.approx(3.5, abs=0.3)
