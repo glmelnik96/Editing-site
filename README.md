@@ -73,13 +73,13 @@ cd web && npm test
 
 ### Рендер (M3)
 
-- `POST /api/v1/projects/{id}/render` `{quality: "draft" | "final"}` → `202` и `job_id`. Ход виден в `GET /api/v1/jobs/{job_id}` (`progress` от 0 до 1), отмена — `POST /api/v1/jobs/{job_id}/cancel`.
+- `POST /api/v1/projects/{id}/render` `{quality: "draft" | "final"}` → `202` и `job_id`. Ход одного задания — `GET /api/v1/jobs/{job_id}` (`progress` от 0 до 1), отмена — `POST /api/v1/jobs/{job_id}/cancel`. `GET /api/v1/jobs` — список своих заданий в `queued`/`running` и закончившихся за последние 30 с; у строки есть `label`, `cancelable`, у сборки `quality`.
 - `GET /api/v1/projects/{id}/renders` — готовые ролики со ссылкой `download`; `GET|DELETE /api/v1/renders/{id}` — карточка и удаление.
 - Черновик: короткая сторона 720, пресет `ultrafast`, CRF 26, звук 128 кбит. Финал: 1080, `veryfast`, CRF 20, 160 кбит. Разрешение выводится из пропорции проекта.
 - Готовый файл живёт сутки и скачивается по `/files/{user}/projects/{project}/renders/{id}.mp4` с `Content-Disposition: attachment`.
 - Один выполняющийся рендер и два в очереди на человека. Перед запуском воркер проверяет, что файлы на месте и не ниже `ready`, а на диске есть место под результат.
 - Завершение проекта удаляет его рендеры вместе с файлами.
-- В редакторе вкладка «Рендер»: две кнопки, полоса прогресса с отменой и список готовых роликов со скачиванием.
+- В редакторе вкладка «Рендер»: две кнопки, отмена на панели, список готовых роликов со скачиванием. Ход всех заданий и загрузок — список под шапкой сайта.
 - Сквозной прогон сценария агента: `python tools/agent_smoke.py https://video.cloudrudesign.ru $TOKEN clip.mp4`.
 
 ### Транскрипция (M4a)
