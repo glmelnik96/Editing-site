@@ -156,14 +156,20 @@ def _validate_clip(
         errors.add(f"{where}.asset_id", "у ассета неизвестна длительность")
         asset = None
 
+    volume = _number(raw.get("volume", 1))
+    if volume is None or not 0.0 <= volume <= 2.0:
+        errors.add(f"{where}.volume", "volume от 0 до 2")
+        volume = None
+
     start, end = _validate_clip_time(where, raw, asset, settings, errors)
-    if start is None or end is None or asset is None:
+    if start is None or end is None or asset is None or volume is None:
         return None
     return {
         "id": clip_id,
         "asset_id": asset_id,
         "in": _round(start),
         "out": _round(end),
+        "volume": round(volume, 3),
         "snap_to_pauses": bool(raw.get("snap_to_pauses", False)),
         # Флаги подтверждения выставляет только сервер: присланные значения игнорируются.
         "in_verified": False,
@@ -193,12 +199,22 @@ def _validate_music(raw: object, assets: dict[str, AssetInfo], errors: _Errors) 
             errors.add(f"music.{key}", f"{key} не может быть отрицательным")
             return None
         fades[key] = _round(value)
+    duck = raw.get("duck", False)
+    if not isinstance(duck, bool):
+        errors.add("music.duck", "duck должен быть true или false")
+        return None
+    speech = _number(raw.get("speech_volume", 1))
+    if speech is None or not 0.0 <= speech <= 1.0:
+        errors.add("music.speech_volume", "speech_volume от 0 до 1")
+        return None
     return {
         "asset_id": asset_id,
         "volume": round(volume, 3),
         "fade_in": fades["fade_in"],
         "fade_out": fades["fade_out"],
         "loop": bool(raw.get("loop", True)),
+        "duck": duck,
+        "speech_volume": round(speech, 3),
     }
 
 

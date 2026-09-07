@@ -743,8 +743,15 @@ main.card {
   max-width: none;
 }
 /* Выбор исходника — во всю ширину панели, а не по длине самого длинного имени файла. */
-#src-pick {
+#src-pick,
+#mus-pick {
   width: 100%;
+}
+
+#ed-source {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* --- Сцена и плеер --- */
@@ -946,6 +953,28 @@ main.card {
   width: 2px;
   background: var(--bad);
   pointer-events: none;
+}
+
+.music-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.music-row input[type='range'] {
+  flex: 1;
+}
+.clip-vol {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.clip-vol input[type='range'] {
+  width: 88px;
+}
+#rnd-summary p {
+  margin: 0 0 8px;
 }
 /* Поле таймкода: узкое, цифры не пляшут при перемотке. Ширина считается с полями
  * (border-box), поэтому её больше, чем было: внутрь должно влезать «1:32.4». */

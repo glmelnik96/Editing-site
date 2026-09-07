@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './timeline/model'
-import { aspectRatio, musicVolume, nextClip, seekPlan, stepPlan } from './playback'
+import { aspectRatio, musicVolume, nextClip, previewClipVolume, seekPlan, stepPlan } from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
-  return { id, asset_id: asset, in: inS, out: outS, snap_to_pauses: false, in_verified: false, out_verified: false }
+  return {
+    id,
+    asset_id: asset,
+    in: inS,
+    out: outS,
+    volume: 1,
+    snap_to_pauses: false,
+    in_verified: false,
+    out_verified: false,
+  }
 }
 
 const clips = [clip('c1', 0, 4), clip('c2', 10, 12, 'ast_2'), clip('c3', 1, 4.5)]
@@ -68,6 +77,35 @@ describe('музыка', () => {
     expect(middle).toBeGreaterThan(0)
     expect(middle).toBeLessThanOrEqual(1)
   })
+
+  it('в речи приглушает музыку, в паузе оставляет', () => {
+    const music = { volume: 1, fade_in: 0, fade_out: 0, duck: true }
+    const silences = [{ start: 2, end: 4 }]
+    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences })).toBeCloseTo(0.3)
+    expect(musicVolume(music, 3, 10, { sourceTime: 3, silences })).toBeCloseTo(1)
+  })
+
+  it('без карты пауз дакинг не трогает громкость', () => {
+    const music = { volume: 0.5, fade_in: 0, fade_out: 0, duck: true }
+    expect(musicVolume(music, 1, 10)).toBe(0.5)
+    expect(musicVolume(music, 1, 10, null)).toBe(0.5)
+  })
+
+  it('пустая карта пауз — вся речь, множитель 0.3', () => {
+    const music = { volume: 1, fade_in: 0, fade_out: 0, duck: true }
+    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences: [] })).toBeCloseTo(0.3)
+  })
+
+  it('дакинг умножает уже посчитанный fade', () => {
+    const music = { volume: 0.8, fade_in: 2, fade_out: 0, duck: true }
+    // на 1 с из 2 с затухания gain = 0.4, речь → 0.12
+    expect(musicVolume(music, 1, 10, { sourceTime: 0.5, silences: [] })).toBeCloseTo(0.12)
+  })
+
+  it('без флага duck карта пауз не действует', () => {
+    const music = { volume: 0.5, fade_in: 0, fade_out: 0, duck: false }
+    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences: [] })).toBe(0.5)
+  })
 })
 
 describe('кадр вывода', () => {
@@ -76,5 +114,14 @@ describe('кадр вывода', () => {
     expect(aspectRatio('9:16')).toBeCloseTo(9 / 16)
     expect(aspectRatio('1:1')).toBe(1)
     expect(aspectRatio('что-то')).toBeCloseTo(16 / 9)
+  })
+})
+
+describe('громкость клипа в превью', () => {
+  it('усиливает только до 1', () => {
+    expect(previewClipVolume(0)).toBe(0)
+    expect(previewClipVolume(0.4)).toBe(0.4)
+    expect(previewClipVolume(1)).toBe(1)
+    expect(previewClipVolume(1.7)).toBe(1)
   })
 })

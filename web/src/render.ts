@@ -9,10 +9,16 @@ import {
   loadJob,
   startRender,
   type JobView,
+  type ProjectDoc,
   type RenderCard,
 } from './project'
+import { totalDuration } from './timeline/model'
 
 const POLL_MS = 2000
+const DRAFT_K = 1.36
+const FINAL_K = 1.04
+const DRAFT_SHORT = 720
+const FINAL_SHORT = 1080
 
 const QUALITY: Record<string, string> = { draft: 'черновик', final: 'финал' }
 const JOB_TEXT: Record<string, string> = {
@@ -23,6 +29,41 @@ const JOB_TEXT: Record<string, string> = {
   canceled: 'отменено',
 }
 const RUNNING = new Set(['queued', 'running'])
+
+/** Минуты сборки при свободном воркере: ceil(длительность / k), не меньше 1. */
+export function estimateRenderMinutes(durationSec: number, quality: 'draft' | 'final'): number {
+  const k = quality === 'draft' ? DRAFT_K : FINAL_K
+  return Math.max(1, Math.ceil(durationSec / k / 60))
+}
+
+function fitWord(fit: string): string {
+  return fit === 'crop' ? 'обрезка' : 'поля'
+}
+
+function musicLine(doc: ProjectDoc): string | null {
+  if (!doc.music) return null
+  return doc.music.duck ? 'Музыка с приглушением под речь.' : 'Музыка.'
+}
+
+function subsLine(doc: ProjectDoc): string | null {
+  const subs = doc.subtitles
+  if (!subs || subs.enabled === false) return null
+  return subs.mode === 'soft' ? 'Субтитры отдельной дорожкой.' : 'Субтитры вжжены.'
+}
+
+export function renderSummary(doc: ProjectDoc, quality: 'draft' | 'final', durationSec: number): string {
+  const p = quality === 'final' ? FINAL_SHORT : DRAFT_SHORT
+  const name = quality === 'final' ? 'Финал' : 'Черновик'
+  const head = `${name}: ${p}p, ${doc.output.aspect}, ${fitWord(doc.output.fit)}, ${doc.output.fps} к/с`
+  const extra = quality === 'draft' ? ', пресет быстрее.' : '.'
+  const parts = [`${head}${extra}`]
+  const music = musicLine(doc)
+  if (music) parts.push(music)
+  const subs = subsLine(doc)
+  if (subs) parts.push(subs)
+  parts.push(`Около ${estimateRenderMinutes(durationSec, quality)} мин, если воркер свободен.`)
+  return parts.join(' ')
+}
 
 /** Дата и время без секунд: у готового ролика важен день, до которого он доживёт. */
 function whenFull(iso: string): string {
@@ -42,6 +83,7 @@ export function mountRender(
   el.innerHTML = `
     <main class="card">
       <h3>Сборка</h3>
+      <div class="muted stack" id="rnd-summary"></div>
       <div class="row">
         <button id="rnd-draft" type="button">Собрать черновик</button>
         <button id="rnd-final" type="button">Собрать финал</button>
@@ -54,6 +96,7 @@ export function mountRender(
       <ul id="rnd-list" class="versions"><li class="muted">Пока нет</li></ul>
       <pre id="rnd-error" hidden></pre>
     </main>`
+  const summaryBox = el.querySelector('#rnd-summary') as HTMLElement
   const draftButton = el.querySelector('#rnd-draft') as HTMLButtonElement
   const finalButton = el.querySelector('#rnd-final') as HTMLButtonElement
   const jobBox = el.querySelector('#rnd-job') as HTMLElement
@@ -207,6 +250,11 @@ export function mountRender(
   void refresh().catch(showError)
 
   return {
+    setDoc(doc: ProjectDoc): void {
+      const duration = totalDuration(doc.clips)
+      summaryBox.innerHTML = `<p>${escapeHtml(renderSummary(doc, 'draft', duration))}</p>
+        <p>${escapeHtml(renderSummary(doc, 'final', duration))}</p>`
+    },
     /** Остановить опрос: редактор зовёт при уходе с экрана. */
     stop(): void {
       stopped = true

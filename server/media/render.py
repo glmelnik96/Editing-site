@@ -162,7 +162,9 @@ def build_render_command(
             audio_input = index
             index += 1
         filters.append(f"[{video_input}:v]{video_chain}[v{number}]")
-        filters.append(f"[{audio_input}:a]{AUDIO_CHAIN}[a{number}]")
+        volume = float(clip.get("volume", 1))
+        audio_chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
+        filters.append(f"[{audio_input}:a]{audio_chain}[a{number}]")
         concat_labels.append(f"[v{number}][a{number}]")
 
     music = doc.get("music")
@@ -182,8 +184,19 @@ def build_render_command(
         args += ["-i", source.path]
         music_input = index
         index += 1
+        speech = audio_out
+        speech_volume = float(music.get("speech_volume", 1))
+        if speech_volume != 1:
+            filters.append(f"{speech}volume={speech_volume}[speech]")
+            speech = "[speech]"
         filters.append(f"[{music_input}:a]{_music_chain(music, total)}[music]")
-        filters.append(f"{audio_out}[music]amix=inputs=2:duration=first:normalize=0[amixed]")
+        if music.get("duck"):
+            filters.append(
+                f"[music]{speech}sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]"
+            )
+            filters.append(f"{speech}[duck]amix=inputs=2:duration=first:normalize=0[amixed]")
+        else:
+            filters.append(f"{speech}[music]amix=inputs=2:duration=first:normalize=0[amixed]")
         audio_out = "[amixed]"
 
     subtitle_input: int | None = None

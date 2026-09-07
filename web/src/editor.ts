@@ -9,11 +9,12 @@ import { ApiError } from './api'
 import { POLL_MS, listAssets, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
-import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
-import { createSaver, loadProject, type Cue, type FieldError, type Project, type ProjectDoc } from './project'
+import { aspectRatio, musicVolume, previewClipVolume, seekPlan, stepPlan } from './playback'
+import { createSaver, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
-import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { clipAt, insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { mountMusic } from './music'
 import { mountRender } from './render'
 import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
@@ -48,7 +49,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
           <button type="button" class="tab" data-tab="renders">Рендер</button>
         </nav>
-        <div id="ed-source" data-panel="source"></div>
+        <div id="ed-source" data-panel="source">
+          <div id="ed-source-main"></div>
+          <div id="ed-music"></div>
+        </div>
         <div id="ed-subtitles" data-panel="subtitles" hidden></div>
         <section id="ed-renders" data-panel="renders" hidden></section>
       </section>
@@ -68,6 +72,20 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <select id="ed-aspect">
             <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
           </select>
+          <select id="ed-fit" title="Вписывание">
+            <option value="pad">поля</option>
+            <option value="crop">обрезка</option>
+          </select>
+          <select id="ed-fps" title="Кадры в секунду">
+            <option value="25">25 к/с</option>
+            <option value="30">30 к/с</option>
+            <option value="50">50 к/с</option>
+            <option value="60">60 к/с</option>
+          </select>
+          <label class="clip-vol">Громкость
+            <input id="ed-volume" type="range" min="0" max="2" step="0.01" disabled />
+            <span id="ed-vol-note" class="muted" hidden>в сборке громче превью</span>
+          </label>
           <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
           <span class="muted" id="ed-total"></span>
         </div>
@@ -83,6 +101,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const totalBox = el.querySelector('#ed-total') as HTMLElement
   const errorBox = el.querySelector('#ed-error') as HTMLPreElement
   const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
+  const fitPick = el.querySelector('#ed-fit') as HTMLSelectElement
+  const fpsPick = el.querySelector('#ed-fps') as HTMLSelectElement
+  const volumeInput = el.querySelector('#ed-volume') as HTMLInputElement
+  const volumeNote = el.querySelector('#ed-vol-note') as HTMLElement
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
@@ -101,8 +123,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let timelineTime = 0
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
-  let renders: { stop: () => void } | null = null
+  let renders: { stop: () => void; setDoc: (doc: ProjectDoc) => void } | null = null
   let assetTimer = 0
+  const analysisCache = new Map<string, { start: number; end: number }[] | null>()
+  const analysisPending = new Set<string>()
 
   function markNews(name: string): void {
     if (tab === name) return
@@ -114,6 +138,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     assetList = list
     assets = new Map(list.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
     source.setAssets(list)
+    musicPanel.setAssets(list)
     const current = source.current()
     if (current) {
       const fresh = list.find(a => a.id === current.id) ?? current
@@ -246,6 +271,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timeline.setPlayhead(timelineTime)
     showTime()
     prepareNext(plan.index)
+    applyPreviewVolumes()
   }
 
   // Слушатель общий для обоих элементов video: после свопа активным становится другой элемент,
@@ -278,9 +304,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       active.pause()
       music.pause()
     }
-    if (project.doc.music) {
-      music.volume = musicVolume(project.doc.music, timelineTime, totalDuration(project.doc.clips))
-    }
+    applyPreviewVolumes()
   }
   videoA.addEventListener('timeupdate', onTimeUpdate)
   videoB.addEventListener('timeupdate', onTimeUpdate)
@@ -288,7 +312,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const timeline = mountTimeline(el.querySelector('#ed-timeline') as HTMLElement, {
     onChange: applyClips,
     onSeek: seek,
-    onSelect: () => {},
+    onSelect: () => syncClipVolume(),
   })
 
   /** Кусок исходника в конец шкалы: приходит и от полосы файла, и от выделения в тексте. */
@@ -299,6 +323,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       asset_id: assetId,
       in: ms(from),
       out: ms(to),
+      volume: 1,
       snap_to_pauses: snap,
       in_verified: false,
       out_verified: false,
@@ -306,9 +331,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     applyClips(insertClip(clips, clip))
   }
 
-  const sourceBox = el.querySelector('#ed-source') as HTMLElement
-  const source = mountSource(sourceBox, {
+  const sourceMain = el.querySelector('#ed-source-main') as HTMLElement
+  const source = mountSource(sourceMain, {
     onAdd: (asset, range) => addClip(asset.id, range.from, range.to, false),
+  })
+  const musicPanel = mountMusic(el.querySelector('#ed-music') as HTMLElement, {
+    onChange: applyMusic,
   })
 
   const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
@@ -373,7 +401,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   // О смене файла узнаём по событию из самой панели: change от её списка всплывает до контейнера,
   // и лезть внутрь чужой панели за её select не приходится. Тот же файл setAsset пропускает,
   // так что change от полей таймкода панель субтитров не тревожит.
-  sourceBox.addEventListener('change', () => {
+  sourceMain.addEventListener('change', () => {
     const asset = source.current()
     subtitles.setAsset(asset?.id ?? null, Boolean(asset?.files.transcript))
   })
@@ -403,6 +431,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         },
         () => markNews('renders'),
       )
+      if (project) renders.setDoc(project.doc)
     }
   }
 
@@ -472,6 +501,91 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (playing) seek(Math.min(timelineTime, totalDuration(clips)))
   }
 
+  function applyMusic(next: Music | null): void {
+    if (!project) return
+    remember()
+    project = { ...project, doc: { ...project.doc, music: next } }
+    if (next) {
+      const asset = assetList.find(a => a.id === next.asset_id)
+      if (asset?.files.proxy) music.src = asset.files.proxy
+    } else {
+      music.pause()
+      music.removeAttribute('src')
+    }
+    applyPreviewVolumes()
+    saver.schedule(project)
+    renders?.setDoc(project.doc)
+  }
+
+  function parseSilences(data: unknown): { start: number; end: number }[] {
+    if (!data || typeof data !== 'object' || !('silences' in data)) return []
+    const raw = (data as { silences: unknown }).silences
+    if (!Array.isArray(raw)) return []
+    const out: { start: number; end: number }[] = []
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue
+      const start = (item as { start?: unknown }).start
+      const end = (item as { end?: unknown }).end
+      if (typeof start === 'number' && typeof end === 'number') out.push({ start, end })
+    }
+    return out
+  }
+
+  async function ensureAnalysis(assetId: string): Promise<void> {
+    if (analysisCache.has(assetId) || analysisPending.has(assetId)) return
+    const url = assetList.find(a => a.id === assetId)?.files.analysis
+    if (!url) {
+      analysisCache.set(assetId, null)
+      return
+    }
+    analysisPending.add(assetId)
+    try {
+      const response = await fetch(url)
+      if (!response.ok) {
+        analysisCache.set(assetId, null)
+        return
+      }
+      analysisCache.set(assetId, parseSilences(await response.json()))
+      if (!stopped) applyPreviewVolumes()
+    } catch {
+      analysisCache.set(assetId, null)
+    } finally {
+      analysisPending.delete(assetId)
+    }
+  }
+
+  function applyPreviewVolumes(): void {
+    if (!project) return
+    const clips = project.doc.clips
+    const found = clipAt(clips, timelineTime)
+    const next = clips[playIndex + 1]
+    const hidden = active === videoA ? videoB : videoA
+    active.volume = previewClipVolume(found?.clip.volume ?? 1)
+    hidden.volume = previewClipVolume(next?.volume ?? 1)
+    const musicDoc = project.doc.music
+    if (!musicDoc) {
+      music.volume = 0
+      return
+    }
+    let ducking: { sourceTime: number; silences: { start: number; end: number }[] } | null = null
+    if (musicDoc.duck && found) {
+      const map = analysisCache.get(found.clip.asset_id)
+      if (map === undefined) void ensureAnalysis(found.clip.asset_id)
+      else if (map !== null) {
+        ducking = { sourceTime: found.clip.in + found.offset, silences: map }
+      }
+    }
+    music.volume = musicVolume(musicDoc, timelineTime, totalDuration(clips), ducking)
+  }
+
+  function syncClipVolume(): void {
+    const id = timeline.selected()
+    const clip = project?.doc.clips.find(c => c.id === id)
+    volumeInput.disabled = !clip
+    if (clip) volumeInput.value = String(clip.volume)
+    volumeNote.hidden = !clip || clip.volume <= 1
+  }
+
   async function ensureData(clips: Clip[]): Promise<void> {
     const ids = new Set(clips.map(c => c.asset_id))
     await Promise.all(
@@ -491,6 +605,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!project) return
     nameBox.textContent = project.name
     aspectPick.value = project.doc.output.aspect
+    fitPick.value = project.doc.output.fit
+    fpsPick.value = String(project.doc.output.fps)
     const ratio = aspectRatio(project.doc.output.aspect)
     stage.style.aspectRatio = String(ratio)
     stage.style.maxWidth = `calc(${ratio} * var(--stage-h))`
@@ -498,8 +614,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
     subtitles.setProject(project)
+    musicPanel.setMusic(project.doc.music)
     syncBurn()
+    syncClipVolume()
     showTime()
+    applyPreviewVolumes()
+    renders?.setDoc(project.doc)
     void ensureData(project.doc.clips)
   }
 
@@ -510,6 +630,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (!active.src) seek(timelineTime)
       void active.play().catch(showError)
       if (project.doc.music) void music.play().catch(() => {})
+      applyPreviewVolumes()
     } else {
       active.pause()
       music.pause()
@@ -532,13 +653,46 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   el.querySelector('#ed-zoom-in')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() * 1.5))
   el.querySelector('#ed-zoom-out')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() / 1.5))
 
-  aspectPick.addEventListener('change', () => {
+  function applyOutput(patch: Partial<ProjectDoc['output']>): void {
     if (!project) return
     remember()
-    const aspect = aspectPick.value as '16:9' | '9:16' | '1:1'
-    project = { ...project, doc: { ...project.doc, output: { ...project.doc.output, aspect } } }
+    project = { ...project, doc: { ...project.doc, output: { ...project.doc.output, ...patch } } }
     render()
     saver.schedule(project)
+  }
+
+  aspectPick.addEventListener('change', () => {
+    applyOutput({ aspect: aspectPick.value as '16:9' | '9:16' | '1:1' })
+  })
+  fitPick.addEventListener('change', () => {
+    applyOutput({ fit: fitPick.value as 'pad' | 'crop' })
+  })
+  fpsPick.addEventListener('change', () => {
+    applyOutput({ fps: Number(fpsPick.value) })
+  })
+
+  let volumeRemembered = false
+  volumeInput.addEventListener('input', () => {
+    const id = timeline.selected()
+    if (!project || !id) return
+    if (!volumeRemembered) {
+      remember()
+      volumeRemembered = true
+    }
+    const volume = Math.round(Number(volumeInput.value) * 1000) / 1000
+    project = {
+      ...project,
+      doc: {
+        ...project.doc,
+        clips: project.doc.clips.map(clip => (clip.id === id ? { ...clip, volume } : clip)),
+      },
+    }
+    volumeNote.hidden = volume <= 1
+    applyPreviewVolumes()
+    saver.schedule(project)
+  })
+  volumeInput.addEventListener('change', () => {
+    volumeRemembered = false
   })
 
   function undo(): void {

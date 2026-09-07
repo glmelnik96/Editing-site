@@ -89,6 +89,7 @@ export function mountNewProject(el: HTMLElement) {
             snap_to_pauses: false,
             in_verified: false,
             out_verified: false,
+            volume: 1,
           },
         ],
       }

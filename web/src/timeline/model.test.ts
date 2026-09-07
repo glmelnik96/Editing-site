@@ -17,7 +17,7 @@ import {
 } from './model'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
-  return { id, asset_id: asset, in: inS, out: outS, snap_to_pauses: false, in_verified: false, out_verified: false }
+  return { id, asset_id: asset, in: inS, out: outS, volume: 1, snap_to_pauses: false, in_verified: false, out_verified: false }
 }
 
 const three = [clip('c1', 0, 4), clip('c2', 10, 12), clip('c3', 1, 4.5)]

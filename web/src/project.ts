@@ -2,7 +2,15 @@ import { api, ApiError } from './api'
 import type { Clip } from './timeline/model'
 
 export type Output = { aspect: '16:9' | '9:16' | '1:1'; fit: 'pad' | 'crop'; fps: number }
-export type Music = { asset_id: string; volume: number; fade_in: number; fade_out: number; loop: boolean }
+export type Music = {
+  asset_id: string
+  volume: number
+  fade_in: number
+  fade_out: number
+  loop: boolean
+  duck: boolean
+  speech_volume: number
+}
 export type Cue = { start: number; end: number; text: string }
 export type Subtitles = {
   source: 'file' | 'transcript' | 'cues'
@@ -227,6 +235,23 @@ export function startRender(id: string, quality: 'draft' | 'final'): Promise<{ j
 
 export function listRenders(id: string): Promise<{ renders: RenderCard[] }> {
   return api<{ renders: RenderCard[] }>(`/api/v1/projects/${encodeURIComponent(id)}/renders`)
+}
+
+export type JobListItem = {
+  id: string
+  type: 'analyze' | 'proxy' | 'transcribe' | 'render'
+  status: JobView['status']
+  progress: number
+  error: string | null
+  created_at: string
+  finished_at: string | null
+  label: string
+  cancelable: boolean
+  quality: 'draft' | 'final' | null
+}
+
+export function listJobs(): Promise<{ jobs: JobListItem[] }> {
+  return api('/api/v1/jobs')
 }
 
 export function loadJob(jobId: string): Promise<JobView> {

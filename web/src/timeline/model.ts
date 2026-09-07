@@ -10,6 +10,7 @@ export type Clip = {
   asset_id: string
   in: number
   out: number
+  volume: number
   snap_to_pauses: boolean
   in_verified: boolean
   out_verified: boolean

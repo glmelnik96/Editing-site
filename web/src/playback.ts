@@ -47,10 +47,16 @@ export function stepPlan(clips: Clip[], at: { index: number; sourceTime: number 
 }
 
 /** Громкость музыки в момент ролика с учётом затуханий. Затухания не перекрывают друг друга. */
+export type Silence = { start: number; end: number }
+export type Ducking = { sourceTime: number; silences: Silence[] }
+
+const DUCK_SPEECH_GAIN = 0.3
+
 export function musicVolume(
-  music: { volume: number; fade_in: number; fade_out: number } | null,
+  music: { volume: number; fade_in: number; fade_out: number; duck?: boolean } | null,
   timelineTime: number,
   total: number,
+  ducking?: Ducking | null,
 ): number {
   if (!music) return 0
   const half = total / 2
@@ -60,7 +66,18 @@ export function musicVolume(
   if (fadeIn > 0 && timelineTime < fadeIn) gain *= timelineTime / fadeIn
   const fromEnd = total - timelineTime
   if (fadeOut > 0 && fromEnd < fadeOut) gain *= Math.max(0, fromEnd) / fadeOut
+  if (music.duck && ducking) {
+    const pause = ducking.silences.some(
+      s => ducking.sourceTime >= s.start && ducking.sourceTime < s.end,
+    )
+    if (!pause) gain *= DUCK_SPEECH_GAIN
+  }
   return Math.max(0, Math.min(1, gain))
+}
+
+/** HTML video.volume принимает 0…1: усиление выше 1 слышно только в сборке. */
+export function previewClipVolume(volume: number): number {
+  return Math.max(0, Math.min(1, volume))
 }
 
 const ASPECTS: Record<string, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 }

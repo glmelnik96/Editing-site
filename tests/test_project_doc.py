@@ -35,6 +35,7 @@ def test_minimal_document_gets_defaults():
     assert c["id"] == "c1" and c["snap_to_pauses"] is False
     assert c["in_verified"] is False and c["out_verified"] is False
     assert c["in"] == 1.0 and c["out"] == 5.0
+    assert c["volume"] == 1.0
 
 
 def test_times_are_rounded_to_milliseconds():
@@ -102,10 +103,81 @@ def test_music_rules():
     )
     assert out["music"] == {
         "asset_id": "ast_000000000003", "volume": 0.25, "fade_in": 1.0, "fade_out": 2.0, "loop": True,
+        "duck": False, "speech_volume": 1.0,
     }
     assert errors_of(doc(music={"asset_id": "ast_000000000004"})) == ["music.asset_id"]
     assert errors_of(doc(music={"asset_id": "ast_000000000003", "volume": 2})) == ["music.volume"]
     assert errors_of(doc(music={"asset_id": "ast_000000000003", "fade_in": -1})) == ["music.fade_in"]
+
+
+def test_music_duck_and_speech_volume_defaults():
+    """Нет ключей — старый проект звучит как сейчас: без дакинга, речь на 1."""
+    out = validate_doc(
+        doc(music={"asset_id": "ast_000000000003"}),
+        assets=ASSETS, settings=S,
+    )
+    assert out["music"]["duck"] is False
+    assert out["music"]["speech_volume"] == 1.0
+
+
+def test_music_duck_and_speech_volume_are_kept():
+    out = validate_doc(
+        doc(music={"asset_id": "ast_000000000003", "duck": True, "speech_volume": 0.4}),
+        assets=ASSETS, settings=S,
+    )
+    assert out["music"]["duck"] is True
+    assert out["music"]["speech_volume"] == 0.4
+
+
+def test_music_speech_volume_is_rounded_and_bounded():
+    out = validate_doc(
+        doc(music={"asset_id": "ast_000000000003", "speech_volume": 0.1234}),
+        assets=ASSETS, settings=S,
+    )
+    assert out["music"]["speech_volume"] == 0.123
+    assert errors_of(doc(music={"asset_id": "ast_000000000003", "speech_volume": 1.1})) == [
+        "music.speech_volume"
+    ]
+    assert errors_of(doc(music={"asset_id": "ast_000000000003", "speech_volume": -0.01})) == [
+        "music.speech_volume"
+    ]
+
+
+def test_music_duck_must_be_bool():
+    assert errors_of(doc(music={"asset_id": "ast_000000000003", "duck": "да"})) == ["music.duck"]
+    assert errors_of(doc(music={"asset_id": "ast_000000000003", "duck": 1})) == ["music.duck"]
+
+
+def test_clip_volume_defaults_to_one_and_always_present():
+    out = validate_doc(doc(clips=[clip(), clip(**{"in": 10, "out": 12})]), assets=ASSETS, settings=S)
+    assert [c["volume"] for c in out["clips"]] == [1.0, 1.0]
+
+
+def test_clip_volume_is_rounded_and_bounded():
+    out = validate_doc(doc(clips=[clip(volume=1.2344)]), assets=ASSETS, settings=S)
+    assert out["clips"][0]["volume"] == 1.234
+    loud = validate_doc(doc(clips=[clip(volume=2)]), assets=ASSETS, settings=S)
+    assert loud["clips"][0]["volume"] == 2.0
+    silent = validate_doc(doc(clips=[clip(volume=0)]), assets=ASSETS, settings=S)
+    assert silent["clips"][0]["volume"] == 0.0
+    assert errors_of(doc(clips=[clip(volume=2.001)])) == ["clips[0].volume"]
+    assert errors_of(doc(clips=[clip(volume=-0.1)])) == ["clips[0].volume"]
+    assert errors_of(doc(clips=[clip(volume="громко")])) == ["clips[0].volume"]
+
+
+def test_clip_volume_garbage_is_not_kept():
+    out = validate_doc(doc(clips=[clip(volume=0.5, gain=9)]), assets=ASSETS, settings=S)
+    assert out["clips"][0]["volume"] == 0.5
+    assert "gain" not in out["clips"][0]
+
+
+def test_music_unknown_keys_are_dropped():
+    out = validate_doc(
+        doc(music={"asset_id": "ast_000000000003", "duck": True, "sidechain": 0.05}),
+        assets=ASSETS, settings=S,
+    )
+    assert "sidechain" not in out["music"]
+    assert out["music"]["duck"] is True
 
 
 def test_subtitles_rules():

@@ -160,6 +160,57 @@ class TestМузыка:
     def test_громкость_попадает_в_цепочку(self):
         assert "volume=0.25" in filter_of(build(self.music_doc()))
 
+    def test_громкость_речи_после_склейки_если_есть_музыка(self):
+        chain = filter_of(build(self.music_doc(speech_volume=0.5)))
+        before, after = chain.split("concat", 1)
+        assert "volume=0.5" in after
+        assert "volume=0.5" not in before
+        assert "amix=inputs=2:duration=first:normalize=0" in after
+
+    def test_громкость_речи_1_не_добавляет_фильтр(self):
+        chain = filter_of(build(self.music_doc(speech_volume=1)))
+        # Остаётся только громкость самой музыки
+        assert chain.count("volume=") == 1
+        assert "volume=0.25" in chain
+
+    def test_без_музыки_громкость_речи_не_применяется(self):
+        chain = filter_of(build(doc(clips=[clip()], music=None)))
+        assert "volume=" not in chain
+        assert "sidechaincompress" not in chain
+        assert "amix=" not in chain
+
+    def test_дакинг_сжимает_музыку_речью(self):
+        chain = filter_of(build(self.music_doc(duck=True)))
+        assert "[music][a]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+        assert "[a][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
+        assert "[a][music]amix=" not in chain
+
+    def test_дакинг_с_громкостью_речи_берёт_подписанную_речь(self):
+        chain = filter_of(build(self.music_doc(duck=True, speech_volume=0.7)))
+        assert "[a]volume=0.7[speech]" in chain
+        assert "[music][speech]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+        assert "[speech][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
+
+
+class TestГромкостьКлипа:
+    def test_громкость_клипа_до_склейки(self):
+        chain = filter_of(build(doc(clips=[clip(volume=1.5), clip(start=10, end=12, volume=0.4)])))
+        before = chain.split("concat")[0]
+        after = chain.split("concat")[1]
+        assert "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.5[a0]" in before
+        assert "[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.4[a1]" in before
+        assert "volume=1.5" not in after
+        assert "volume=0.4" not in after
+
+    def test_громкость_клипа_1_не_добавляет_фильтр(self):
+        chain = filter_of(build(doc(clips=[clip(volume=1)])))
+        assert "volume=" not in chain
+        assert "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0]" in chain
+
+    def test_нет_ключа_volume_как_единица(self):
+        chain = filter_of(build(doc(clips=[clip()])))
+        assert "volume=" not in chain
+
 
 class TestСубтитры:
     def subs_doc(self, **over):
