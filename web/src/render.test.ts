@@ -55,4 +55,23 @@ describe('сводка вкладки Рендер', () => {
     expect(text).not.toContain('приглушением')
     expect(text).toContain('Субтитры отдельной дорожкой')
   })
+
+  it('называет переходы, если они есть', () => {
+    const withFade = {
+      ...doc,
+      clips: [
+        {
+          id: 'c1', asset_id: 'a', in: 0, out: 4, volume: 1,
+          snap_to_pauses: false, in_verified: false, out_verified: false,
+        },
+        {
+          id: 'c2', asset_id: 'a', in: 10, out: 12, volume: 1,
+          snap_to_pauses: false, in_verified: false, out_verified: false,
+          transition: { kind: 'fade' as const, duration: 0.5 },
+        },
+      ],
+    }
+    const text = renderSummary(withFade, 'draft', 5.5)
+    expect(text).toContain('Переход между клипами')
+  })
 })

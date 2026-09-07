@@ -21,7 +21,7 @@ from server.app.util import new_id, now_iso
 from server.db.core import transaction
 from server.media.cues import build_cues
 from server.media.subs import cues_to_srt, cues_to_vtt
-from server.media.timeline import words_through_clips
+from server.media.timeline import clips_duration, words_through_clips
 
 log = logging.getLogger("video.projects")
 
@@ -149,7 +149,7 @@ def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:
             "created_at": row["created_at"], "updated_at": row["updated_at"],
             "finished_at": row["finished_at"],
             "clips_count": len(clips),
-            "duration": round(sum(c["out"] - c["in"] for c in clips), 3),
+            "duration": clips_duration(clips),
         })
     return out
 
@@ -289,7 +289,7 @@ def _version_row(row: sqlite3.Row) -> dict:
         "name": row["name"],
         "created_at": row["created_at"],
         "clips_count": len(clips),
-        "duration": round(sum(c["out"] - c["in"] for c in clips), 3),
+        "duration": clips_duration(clips),
     }
 
 
@@ -325,7 +325,7 @@ def create_checkpoint(
     return {
         "id": row_id, "version": project["version"], "label": label, "name": project["name"],
         "created_at": now, "clips_count": len(project["doc"].get("clips") or []),
-        "duration": round(sum(c["out"] - c["in"] for c in project["doc"].get("clips") or []), 3),
+        "duration": clips_duration(project["doc"].get("clips") or []),
     }
 
 

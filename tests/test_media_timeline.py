@@ -72,3 +72,15 @@ def test_order_follows_the_timeline_not_the_source():
     out = words_through_clips(TRANSCRIPT, clips, asset_id="ast_1")
     assert [x["w"] for x in out] == ["три", "раз"]
     assert out[0]["s"] < out[1]["s"]
+
+
+def test_fade_shifts_words_after_the_overlap():
+    """Переход укорачивает шкалу: слово во втором клипе начинается раньше на длину fade."""
+    clips = [
+        {"asset_id": "ast_1", "in": 0.0, "out": 3.0},
+        {"asset_id": "ast_1", "in": 7.0, "out": 10.0, "transition": {"kind": "fade", "duration": 0.5}},
+    ]
+    out = words_through_clips(TRANSCRIPT, clips, asset_id="ast_1")
+    assert [x["w"] for x in out] == ["раз", "три"]
+    assert out[1]["s"] == 2.5 + (8.0 - 7.0)
+    assert out[1]["e"] == 2.5 + (9.0 - 7.0)

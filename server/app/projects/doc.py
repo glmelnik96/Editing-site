@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from server.app.config import Settings
+from server.media.timeline import clips_duration
 
 ASPECTS = ("16:9", "9:16", "1:1")
 FITS = ("pad", "crop")
@@ -19,6 +20,7 @@ SUB_SOURCES = ("file", "transcript", "cues")
 SUB_MODES = ("burn", "soft")
 SUB_STYLES = ("default",)
 CLIP_READY_STATUSES = ("ready", "proxy_ready")
+TRANSITION_KINDS = ("fade",)
 TIME_DIGITS = 3
 MAX_CLIP_ID = 64  # идентификатор клипа хранится в документе: без предела клиент раздует его сотней клипов
 MAX_CUE_TEXT = 200  # реплика длиннее не влезет в кадр ни при какой пропорции — это уже не субтитр
@@ -124,6 +126,48 @@ def _validate_clip_time(
     return (start, end) if start_ok and end_ok else (None, None)
 
 
+def _validate_transition(raw: object, where: str, errors: _Errors) -> tuple[dict | None, bool]:
+    """Переход «в» этот клип из предыдущего. Ноль и отсутствие — стык, как раньше.
+
+    Возвращает (значение или None, ок ли разбор). None при ок — поля в документе не будет.
+    """
+    if raw is None:
+        return None, True
+    if not isinstance(raw, dict):
+        errors.add(f"{where}.transition", "transition должен быть объектом")
+        return None, False
+    kind = raw.get("kind")
+    if kind not in TRANSITION_KINDS:
+        errors.add(f"{where}.transition.kind", "kind: fade")
+        return None, False
+    duration = _number(raw.get("duration"))
+    if duration is None or duration < 0:
+        errors.add(f"{where}.transition.duration", "duration не может быть отрицательным")
+        return None, False
+    duration = _round(duration)
+    if duration == 0:
+        return None, True
+    return {"kind": kind, "duration": duration}, True
+
+
+def _reject_overlong_fades(clips: list[dict], errors: _Errors) -> None:
+    """xfade требует, чтобы переход был короче обоих соседних клипов: иначе offset уйдёт в минус."""
+    for index, clip in enumerate(clips):
+        transition = clip.get("transition")
+        if not isinstance(transition, dict):
+            continue
+        if index == 0:
+            continue
+        prev_len = clips[index - 1]["out"] - clips[index - 1]["in"]
+        this_len = clip["out"] - clip["in"]
+        cap = min(prev_len, this_len)
+        if transition["duration"] >= cap:
+            errors.add(
+                f"clips[{index}].transition.duration",
+                "переход должен быть короче обоих соседних клипов",
+            )
+
+
 def _validate_clip(
     raw: object, index: int, seen_ids: set[str], assets: dict[str, AssetInfo], settings: Settings,
     errors: _Errors,
@@ -161,10 +205,15 @@ def _validate_clip(
         errors.add(f"{where}.volume", "volume от 0 до 2")
         volume = None
 
+    transition, transition_ok = _validate_transition(raw.get("transition"), where, errors)
+    # У первого клипа не из чего переходить: поле игнорируем, как присланные флаги подтверждения.
+    if index == 0:
+        transition = None
+
     start, end = _validate_clip_time(where, raw, asset, settings, errors)
-    if start is None or end is None or asset is None or volume is None:
+    if start is None or end is None or asset is None or volume is None or not transition_ok:
         return None
-    return {
+    out = {
         "id": clip_id,
         "asset_id": asset_id,
         "in": _round(start),
@@ -175,6 +224,9 @@ def _validate_clip(
         "in_verified": False,
         "out_verified": False,
     }
+    if transition is not None:
+        out["transition"] = transition
+    return out
 
 
 def _validate_music(raw: object, assets: dict[str, AssetInfo], errors: _Errors) -> dict | None:
@@ -351,9 +403,10 @@ def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Setting
             clip = _validate_clip(item, index, seen, assets, settings, errors)
             if clip is not None:
                 clips.append(clip)
-        total = sum(c["out"] - c["in"] for c in clips)
-        if total > settings.max_total_duration_sec:
-            errors.add("clips", f"ролик длиннее {settings.max_total_duration_sec} с")
+        if len(clips) == len(raw_clips):
+            _reject_overlong_fades(clips, errors)
+            if clips_duration(clips) > settings.max_total_duration_sec:
+                errors.add("clips", f"ролик длиннее {settings.max_total_duration_sec} с")
 
     music = _validate_music(raw.get("music"), assets, errors)
     subtitles = _validate_subtitles(raw.get("subtitles"), assets, settings, errors)

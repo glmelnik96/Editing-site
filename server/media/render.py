@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.app.config import Settings
+from server.media.timeline import clip_length, clips_duration, fade_into
 
 ASPECT_RATIOS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
 AUDIO_CHAIN = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
@@ -62,7 +63,8 @@ def output_size(aspect: str, short_side: int) -> tuple[int, int]:
 def total_duration(doc: dict) -> float:
     # Начальное значение 0.0 держит сумму float: клипы могут прийти с целыми секундами (int),
     # а склейка ниже форматирует длительности строго как "10.0", а не "10".
-    return round(sum((c["out"] - c["in"] for c in doc.get("clips") or []), 0.0), 3)
+    # Переход «в» клип укорачивает ролик: xfade перекрывает хвост предыдущего и голову следующего.
+    return clips_duration(doc.get("clips") or [])
 
 
 def _video_chain(width: int, height: int, fit: str, fps: int) -> str:
@@ -91,6 +93,45 @@ def _music_chain(music: dict, total: float) -> str:
         parts.append(f"afade=t=out:st={round(total - fade_out, 3)}:d={fade_out}")
     parts.append(f"volume={music['volume']}")
     return ",".join(parts)
+
+
+def _join_clips(clips: list[dict], video_out: str, audio_out: str) -> list[str]:
+    """Склеить сегменты: concat встык, xfade+acrossfade на переходах.
+
+    Без переходов остаётся одна склейка concat — так же, как до пакета B, чтобы команда
+    и тесты микса не менялись. Смешанный список (стык и fade) собирается попарно по порядку.
+    """
+    count = len(clips)
+    if not any(fade_into(clip, index) > 0 for index, clip in enumerate(clips)):
+        labels = "".join(f"[v{index}][a{index}]" for index in range(count))
+        return [f"{labels}concat=n={count}:v=1:a=1{video_out}{audio_out}"]
+
+    filters: list[str] = []
+    video_acc = "[v0]"
+    audio_acc = "[a0]"
+    acc_len = clip_length(clips[0])
+    last = count - 1
+    for index in range(1, count):
+        fade = fade_into(clips[index], index)
+        is_last = index == last
+        video_next = video_out if is_last else f"[vx{index}]"
+        audio_next = audio_out if is_last else f"[ax{index}]"
+        length = clip_length(clips[index])
+        if fade > 0:
+            offset = round(acc_len - fade, 3)
+            filters.append(
+                f"{video_acc}[v{index}]xfade=transition=fade:duration={fade}:offset={offset}{video_next}"
+            )
+            filters.append(f"{audio_acc}[a{index}]acrossfade=d={fade}{audio_next}")
+            acc_len = round(acc_len + length - fade, 3)
+        else:
+            filters.append(
+                f"{video_acc}{audio_acc}[v{index}][a{index}]concat=n=2:v=1:a=1{video_next}{audio_next}"
+            )
+            acc_len = round(acc_len + length, 3)
+        video_acc = video_next
+        audio_acc = audio_next
+    return filters
 
 
 def _subtitles_file(
@@ -140,7 +181,6 @@ def build_render_command(
 
     args: list[str] = [settings.ffmpeg_path, "-v", "error", "-y", "-progress", "pipe:1", "-nostats"]
     filters: list[str] = []
-    concat_labels: list[str] = []
     index = 0
 
     for number, clip in enumerate(clips):
@@ -165,7 +205,6 @@ def build_render_command(
         volume = float(clip.get("volume", 1))
         audio_chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
         filters.append(f"[{audio_input}:a]{audio_chain}[a{number}]")
-        concat_labels.append(f"[v{number}][a{number}]")
 
     music = doc.get("music")
     subtitles = doc.get("subtitles")
@@ -173,7 +212,7 @@ def build_render_command(
         subtitles = None
 
     video_out, audio_out = "[v]", "[a]"
-    filters.append(f"{''.join(concat_labels)}concat=n={len(clips)}:v=1:a=1{video_out}{audio_out}")
+    filters.extend(_join_clips(clips, video_out, audio_out))
 
     if music:
         source = sources.get(music["asset_id"])

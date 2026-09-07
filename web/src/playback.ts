@@ -4,11 +4,12 @@
  * Здесь нет DOM: функции решают, что делать, а драйвер в редакторе двигает элементы video и audio.
  * Так логика шва проверяется тестами, а не глазами.
  */
-import { clipAt, clipDuration, ms, timelineStart, totalDuration, type Clip } from './timeline/model'
+import { clipAt, clipDuration, fadeInto, ms, timelineStart, totalDuration, type Clip } from './timeline/model'
 
-export type SeekPlan = { index: number; assetId: string; time: number; timelineTime: number }
+export type SeekPlan = { index: number; assetId: string; time: number; timelineTime: number; incoming?: Incoming }
+export type Incoming = { index: number; assetId: string; time: number; mix: number }
 export type StepPlan =
-  | { kind: 'playing'; timelineTime: number }
+  | { kind: 'playing'; timelineTime: number; incoming?: Incoming }
   | { kind: 'advance'; index: number; assetId: string; time: number; timelineTime: number }
   | { kind: 'end'; timelineTime: number }
 
@@ -23,11 +24,34 @@ export function nextClip(clips: Clip[], index: number): { index: number; assetId
 export function seekPlan(clips: Clip[], timelineTime: number): SeekPlan | null {
   const found = clipAt(clips, timelineTime)
   if (found === null) return null
-  return {
+  const plan: SeekPlan = {
     index: found.index,
     assetId: found.clip.asset_id,
     time: ms(found.clip.in + found.offset),
     timelineTime: ms(timelineTime),
+  }
+  const incoming = incomingAt(clips, timelineTime)
+  if (incoming) plan.incoming = incoming
+  return plan
+}
+
+/** Вторая картинка во время перехода: mix 0 — ещё предыдущий клип, 1 — уже следующий. */
+export function incomingAt(clips: Clip[], timelineTime: number): Incoming | undefined {
+  const found = clipAt(clips, timelineTime)
+  if (found === null) return undefined
+  const nextIndex = found.index + 1
+  const next = clips[nextIndex]
+  if (!next) return undefined
+  const fade = fadeInto(next, nextIndex)
+  if (fade <= 0) return undefined
+  const start = timelineStart(clips, nextIndex)
+  if (timelineTime < start) return undefined
+  const mix = Math.min(1, Math.max(0, (timelineTime - start) / fade))
+  return {
+    index: nextIndex,
+    assetId: next.asset_id,
+    time: ms(next.in + (timelineTime - start)),
+    mix: ms(mix),
   }
 }
 
@@ -40,10 +64,20 @@ export function stepPlan(clips: Clip[], at: { index: number; sourceTime: number 
   if (!current) return { kind: 'end', timelineTime: totalDuration(clips) }
   const played = Math.min(clipDuration(current), Math.max(0, at.sourceTime - current.in))
   const timelineTime = ms(timelineStart(clips, at.index) + played)
-  if (at.sourceTime < current.out) return { kind: 'playing', timelineTime }
+  if (at.sourceTime < current.out) {
+    const incoming = incomingAt(clips, timelineTime)
+    return incoming ? { kind: 'playing', timelineTime, incoming } : { kind: 'playing', timelineTime }
+  }
   const next = nextClip(clips, at.index)
   if (next === null) return { kind: 'end', timelineTime: totalDuration(clips) }
-  return { kind: 'advance', index: next.index, assetId: next.assetId, time: next.at, timelineTime }
+  const fade = fadeInto(clips[next.index], next.index)
+  return {
+    kind: 'advance',
+    index: next.index,
+    assetId: next.assetId,
+    time: ms(next.at + fade),
+    timelineTime,
+  }
 }
 
 /** Громкость музыки в момент ролика с учётом затуханий. Затухания не перекрывают друг друга. */

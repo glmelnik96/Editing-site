@@ -5,6 +5,8 @@
  * новый массив, исходный не меняется — так проще откатывать и сравнивать состояния.
  */
 
+export type Transition = { kind: 'fade'; duration: number }
+
 export type Clip = {
   id: string
   asset_id: string
@@ -14,6 +16,7 @@ export type Clip = {
   snap_to_pauses: boolean
   in_verified: boolean
   out_verified: boolean
+  transition?: Transition
 }
 
 export const MIN_CLIP = 0.1 // минимальная длина клипа, как на сервере
@@ -28,13 +31,24 @@ export function clipDuration(clip: Clip): number {
   return clip.out - clip.in
 }
 
+/** Длительность перехода «в» этот клип. У первого и при стыке — ноль. */
+export function fadeInto(clip: Clip, index: number): number {
+  if (index <= 0 || clip.transition?.kind !== 'fade') return 0
+  const duration = clip.transition.duration
+  return duration > 0 ? ms(duration) : 0
+}
+
 export function totalDuration(clips: Clip[]): number {
-  return ms(clips.reduce((sum, c) => sum + clipDuration(c), 0))
+  return ms(clips.reduce((sum, clip, index) => sum + clipDuration(clip) - fadeInto(clip, index), 0))
 }
 
 /** Время начала клипа с этим номером на шкале. Номер за пределами списка даёт конец шкалы. */
 export function timelineStart(clips: Clip[], index: number): number {
-  return ms(clips.slice(0, index).reduce((sum, c) => sum + clipDuration(c), 0))
+  const capped = Math.max(0, Math.min(index, clips.length))
+  let start = 0
+  for (let i = 0; i < capped; i++) start += clipDuration(clips[i]) - fadeInto(clips[i], i)
+  if (capped < clips.length) start -= fadeInto(clips[capped], capped)
+  return ms(start)
 }
 
 /** Клип под курсором шкалы: номер, сам клип и смещение внутри него. */
@@ -42,6 +56,7 @@ export function clipAt(clips: Clip[], time: number): { index: number; clip: Clip
   if (time < 0) return null
   let start = 0
   for (let index = 0; index < clips.length; index++) {
+    start -= fadeInto(clips[index], index)
     const duration = clipDuration(clips[index])
     if (time < start + duration) return { index, clip: clips[index], offset: ms(time - start) }
     start += duration
@@ -78,11 +93,11 @@ export function newClipId(clips: Clip[]): string {
 export function insertClip(clips: Clip[], clip: Clip, at?: number): Clip[] {
   const copy = clips.slice()
   copy.splice(at === undefined ? copy.length : Math.max(0, Math.min(at, copy.length)), 0, clip)
-  return copy
+  return clampTransitions(copy)
 }
 
 export function removeClip(clips: Clip[], id: string): Clip[] {
-  return clips.filter(c => c.id !== id)
+  return clampTransitions(clips.filter(c => c.id !== id))
 }
 
 export function moveClip(clips: Clip[], from: number, to: number): Clip[] {
@@ -90,7 +105,7 @@ export function moveClip(clips: Clip[], from: number, to: number): Clip[] {
   const copy = clips.slice()
   const [moved] = copy.splice(from, 1)
   copy.splice(Math.max(0, Math.min(to, copy.length)), 0, moved)
-  return copy
+  return clampTransitions(copy)
 }
 
 /**
@@ -103,10 +118,10 @@ export function splitAt(clips: Clip[], time: number): Clip[] {
   const cut = ms(found.clip.in + found.offset)
   if (cut - found.clip.in < MIN_CLIP || found.clip.out - cut < MIN_CLIP) return clips
   const left: Clip = { ...found.clip, out: cut, out_verified: false }
-  const right: Clip = { ...found.clip, id: newClipId(clips), in: cut, in_verified: false }
+  const right = withoutTransition({ ...found.clip, id: newClipId(clips), in: cut, in_verified: false })
   const copy = clips.slice()
   copy.splice(found.index, 1, left, right)
-  return copy
+  return clampTransitions(copy)
 }
 
 /**
@@ -119,28 +134,30 @@ export function trimClip(
   edges: { in?: number; out?: number },
   limits: { duration?: number } = {},
 ): Clip[] {
-  return clips.map(clip => {
+  const next = clips.map(clip => {
     if (clip.id !== id) return clip
-    const next = { ...clip }
+    const patched = { ...clip }
     if (edges.in !== undefined) {
-      next.in = ms(Math.max(0, Math.min(edges.in, clip.out - MIN_CLIP)))
-      next.in_verified = false
+      patched.in = ms(Math.max(0, Math.min(edges.in, clip.out - MIN_CLIP)))
+      patched.in_verified = false
     }
     if (edges.out !== undefined) {
       const top = limits.duration ?? Number.POSITIVE_INFINITY
-      next.out = ms(Math.min(top, Math.max(edges.out, next.in + MIN_CLIP)))
-      next.out_verified = false
+      patched.out = ms(Math.min(top, Math.max(edges.out, patched.in + MIN_CLIP)))
+      patched.out_verified = false
     }
-    return next
+    return patched
   })
+  return clampTransitions(next)
 }
 
 export type Block = { id: string; left: number; width: number; start: number; duration: number }
 
-/** Раскладка блоков в пикселях при заданном масштабе. */
+/** Раскладка блоков в пикселях при заданном масштабе. Переходы дают видимое перекрытие. */
 export function layout(clips: Clip[], pxPerSec: number): Block[] {
   let start = 0
-  return clips.map(clip => {
+  return clips.map((clip, index) => {
+    start -= fadeInto(clip, index)
     const duration = clipDuration(clip)
     const block: Block = {
       id: clip.id,
@@ -151,6 +168,31 @@ export function layout(clips: Clip[], pxPerSec: number): Block[] {
     }
     start += duration
     return block
+  })
+}
+
+/** Максимальная длительность перехода «в» клип: строго короче обоих соседей. */
+export function maxFade(prev: Clip, clip: Clip): number {
+  const cap = Math.min(clipDuration(prev), clipDuration(clip))
+  return ms(Math.max(0, cap - 0.001))
+}
+
+function withoutTransition(clip: Clip): Clip {
+  const next = { ...clip }
+  delete next.transition
+  return next
+}
+
+/** Убрать невозможные переходы: у первого клипа, нулевые и длиннее соседа. */
+export function clampTransitions(clips: Clip[]): Clip[] {
+  return clips.map((clip, index) => {
+    if (index === 0) return clip.transition ? withoutTransition(clip) : clip
+    const fade = fadeInto(clip, index)
+    if (fade <= 0) return clip.transition ? withoutTransition(clip) : clip
+    const cap = maxFade(clips[index - 1], clip)
+    if (fade <= cap) return clip
+    if (cap <= 0) return withoutTransition(clip)
+    return { ...clip, transition: { kind: 'fade', duration: cap } }
   })
 }
 

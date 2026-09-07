@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './timeline/model'
-import { aspectRatio, musicVolume, nextClip, previewClipVolume, seekPlan, stepPlan } from './playback'
+import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, seekPlan, stepPlan } from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
   return {
@@ -53,6 +53,28 @@ describe('переходы между клипами', () => {
 
   it('исчезнувший клип не роняет плеер', () => {
     expect(stepPlan(clips, { index: 9, sourceTime: 1 })).toEqual({ kind: 'end', timelineTime: 9.5 })
+  })
+
+  it('во время fade держит оба клипа и mix', () => {
+    const faded = [
+      clip('c1', 0, 4),
+      { ...clip('c2', 10, 12, 'ast_2'), transition: { kind: 'fade' as const, duration: 0.5 } },
+    ]
+    expect(incomingAt(faded, 3.5)?.mix).toBe(0)
+    expect(incomingAt(faded, 3.75)?.mix).toBe(0.5)
+    expect(incomingAt(faded, 3.75)?.time).toBe(10.25)
+    expect(seekPlan(faded, 3.75)?.incoming?.assetId).toBe('ast_2')
+    expect(stepPlan(faded, { index: 0, sourceTime: 3.75 })).toMatchObject({
+      kind: 'playing',
+      incoming: { mix: 0.5, assetId: 'ast_2' },
+    })
+    expect(stepPlan(faded, { index: 0, sourceTime: 4 })).toEqual({
+      kind: 'advance',
+      index: 1,
+      assetId: 'ast_2',
+      time: 10.5,
+      timelineTime: 4,
+    })
   })
 })
 

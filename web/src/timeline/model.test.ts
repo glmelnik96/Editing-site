@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './model'
 import {
+  clampTransitions,
   clipAt,
   dropTarget,
+  fadeInto,
   insertClip,
   layout,
   moveClip,
@@ -28,6 +30,14 @@ describe('время шкалы', () => {
     expect(totalDuration([])).toBe(0)
   })
 
+  it('вычитает переходы из длины ролика', () => {
+    const faded = [clip('c1', 0, 4), { ...clip('c2', 10, 12), transition: { kind: 'fade' as const, duration: 0.5 } }]
+    expect(totalDuration(faded)).toBe(5.5)
+    expect(timelineStart(faded, 0)).toBe(0)
+    expect(timelineStart(faded, 1)).toBe(3.5)
+    expect(timelineStart(faded, 2)).toBe(5.5)
+  })
+
   it('знает, где начинается каждый клип', () => {
     expect(timelineStart(three, 0)).toBe(0)
     expect(timelineStart(three, 1)).toBe(4)
@@ -43,6 +53,14 @@ describe('время шкалы', () => {
     expect(clipAt(three, 9.5)).toBeNull()
     expect(clipAt(three, -1)).toBeNull()
     expect(clipAt([], 0)).toBeNull()
+  })
+
+  it('во время перехода ещё держит предыдущий клип', () => {
+    const faded = [clip('c1', 0, 4), { ...clip('c2', 10, 12), transition: { kind: 'fade' as const, duration: 0.5 } }]
+    expect(clipAt(faded, 3.7)?.index).toBe(0)
+    expect(clipAt(faded, 4)?.index).toBe(1)
+    expect(clipAt(faded, 4)?.offset).toBe(0.5)
+    expect(sourceTime(faded, 4)).toEqual({ index: 1, assetId: 'ast_1', time: 10.5 })
   })
 
   it('переводит время шкалы во время исходника', () => {
@@ -161,6 +179,14 @@ describe('раскладка в пиксели', () => {
     ])
   })
 
+  it('сдвигает следующий блок на длину перехода', () => {
+    const faded = [clip('c1', 0, 4), { ...clip('c2', 10, 12), transition: { kind: 'fade' as const, duration: 0.5 } }]
+    expect(layout(faded, 10)).toEqual([
+      { id: 'c1', left: 0, width: 40, start: 0, duration: 4 },
+      { id: 'c2', left: 35, width: 20, start: 3.5, duration: 2 },
+    ])
+  })
+
   it('не даёт блоку схлопнуться в невидимую полоску', () => {
     const tiny = layout([clip('c1', 0, 0.1)], 10)
     expect(tiny[0].width).toBeGreaterThanOrEqual(8)
@@ -180,5 +206,40 @@ describe('sameOrder', () => {
     expect(sameOrder([c('c1'), c('c2')], [c('c2'), c('c1')])).toBe(false)
     expect(sameOrder([c('c1')], [c('c1'), c('c2')])).toBe(false)
     expect(sameOrder([c('c1')], [c('c9')])).toBe(false)
+  })
+})
+
+describe('переходы', () => {
+  const faded = (): Clip[] => [
+    clip('c1', 0, 4),
+    { ...clip('c2', 10, 12), transition: { kind: 'fade', duration: 0.5 } },
+  ]
+
+  it('у первого клипа перехода нет', () => {
+    const out = clampTransitions([
+      { ...clip('c1', 0, 4), transition: { kind: 'fade', duration: 0.5 } },
+      clip('c2', 10, 12),
+    ])
+    expect(out[0].transition).toBeUndefined()
+    expect(fadeInto(out[0], 0)).toBe(0)
+  })
+
+  it('укорачивает переход, если клип стал короче', () => {
+    const short = trimClip(faded(), 'c2', { out: 10.2 })
+    expect(short[1].transition?.duration).toBeLessThan(0.2)
+    expect(short[1].transition?.duration).toBeGreaterThan(0)
+  })
+
+  it('перенос в начало снимает переход', () => {
+    const moved = moveClip(faded(), 1, 0)
+    expect(moved[0].id).toBe('c2')
+    expect(moved[0].transition).toBeUndefined()
+  })
+
+  it('разрез не копирует переход на правый кусок', () => {
+    const cut = splitAt(faded(), 2)
+    expect(cut[0].transition).toBeUndefined()
+    expect(cut[1].transition).toBeUndefined()
+    expect(cut[2].transition).toEqual({ kind: 'fade', duration: 0.5 })
   })
 })

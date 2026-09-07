@@ -63,6 +63,13 @@ class TestОбщее:
         two = doc(clips=[clip(start=1, end=5), clip(start=10, end=12.5)])
         assert total_duration(two) == 6.5
 
+    def test_переход_укорачивает_ролик(self):
+        two = doc(clips=[
+            clip(start=0, end=4),
+            clip(start=10, end=12, transition={"kind": "fade", "duration": 0.5}),
+        ])
+        assert total_duration(two) == 5.5
+
     def test_экранирование_пути(self):
         assert escape_for_filter("/d/subs.vtt") == "/d/subs.vtt"
         assert escape_for_filter(r"C:\d\subs.vtt") == r"C\:/d/subs.vtt"
@@ -124,6 +131,67 @@ class TestФильтры:
     def test_сегменты_сшиваются_одной_склейкой(self):
         chain = filter_of(build(doc(clips=[clip(), clip(start=10, end=12), clip(start=20, end=21)])))
         assert "concat=n=3:v=1:a=1" in chain
+
+
+class TestПереходы:
+    def faded(self):
+        return doc(clips=[
+            clip(start=0, end=4),
+            clip(start=10, end=12, transition={"kind": "fade", "duration": 0.5}),
+        ])
+
+    def test_xfade_вместо_одной_склейки(self):
+        chain = filter_of(build(self.faded()))
+        assert "xfade=transition=fade:duration=0.5:offset=3.5" in chain
+        assert "acrossfade=d=0.5" in chain
+        assert "concat=n=2:v=1:a=1" not in chain
+
+    def test_без_перехода_по_прежнему_concat(self):
+        chain = filter_of(build(doc(clips=[clip(start=0, end=4), clip(start=10, end=12)])))
+        assert "concat=n=2:v=1:a=1" in chain
+        assert "xfade" not in chain
+        assert "acrossfade" not in chain
+
+    def test_смешанный_стык_и_fade(self):
+        chain = filter_of(build(doc(clips=[
+            clip(start=0, end=4),
+            clip(start=10, end=12, transition={"kind": "fade", "duration": 0.5}),
+            clip(start=20, end=23),
+        ])))
+        assert "xfade=transition=fade:duration=0.5:offset=3.5" in chain
+        assert "acrossfade=d=0.5" in chain
+        assert "concat=n=2:v=1:a=1" in chain
+
+    def test_громкость_клипа_до_перехода(self):
+        chain = filter_of(build(doc(clips=[
+            clip(start=0, end=4),
+            clip(start=10, end=12, volume=0.4, transition={"kind": "fade", "duration": 0.5}),
+        ])))
+        before = chain.split("xfade")[0]
+        assert "volume=0.4" in before
+        assert "volume=0.4" not in chain.split("xfade")[1]
+
+    def test_дакинг_после_перехода(self):
+        chain = filter_of(build(doc(
+            clips=[
+                clip(start=0, end=4),
+                clip(start=10, end=12, transition={"kind": "fade", "duration": 0.5}),
+            ],
+            music={"asset_id": "ast_m", "volume": 0.25, "fade_in": 0, "fade_out": 0,
+                   "loop": True, "duck": True, "speech_volume": 1},
+        )))
+        assert chain.index("xfade=") < chain.index("sidechaincompress")
+        assert "[music][a]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+
+    def test_музыка_режется_по_укороченной_длине(self):
+        chain = filter_of(build(doc(
+            clips=[
+                clip(start=0, end=4),
+                clip(start=10, end=12, transition={"kind": "fade", "duration": 0.5}),
+            ],
+            music={"asset_id": "ast_m", "volume": 0.25, "fade_in": 0, "fade_out": 0, "loop": True},
+        )))
+        assert "atrim=0:5.5" in chain
 
 
 class TestМузыка:

@@ -9,11 +9,11 @@ import { ApiError } from './api'
 import { POLL_MS, listAssets, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
-import { aspectRatio, musicVolume, previewClipVolume, seekPlan, stepPlan } from './playback'
+import { aspectRatio, incomingAt, musicVolume, previewClipVolume, seekPlan, stepPlan, type Incoming } from './playback'
 import { createSaver, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
-import { clipAt, insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { clampTransitions, clipAt, fadeInto, insertClip, maxFade, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountMusic } from './music'
 import { mountRender } from './render'
 import { mountSource } from './source'
@@ -86,6 +86,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
             <input id="ed-volume" type="range" min="0" max="2" step="0.01" disabled />
             <span id="ed-vol-note" class="muted" hidden>в сборке громче превью</span>
           </label>
+          <label class="clip-fade">Переход
+            <input id="ed-fade" class="tc" type="number" min="0" step="0.1" disabled title="В этот клип из предыдущего. Ноль — стык." />
+          </label>
           <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
           <span class="muted" id="ed-total"></span>
         </div>
@@ -105,6 +108,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const fpsPick = el.querySelector('#ed-fps') as HTMLSelectElement
   const volumeInput = el.querySelector('#ed-volume') as HTMLInputElement
   const volumeNote = el.querySelector('#ed-vol-note') as HTMLElement
+  const fadeInput = el.querySelector('#ed-fade') as HTMLInputElement
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
@@ -240,7 +244,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const hidden = active === videoA ? videoB : videoA
     active.pause()
     active.style.display = 'none'
+    active.style.opacity = '1'
     hidden.style.display = ''
+    hidden.style.opacity = '1'
     active = hidden
   }
 
@@ -253,6 +259,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!src) return
     if (!hidden.src.endsWith(src)) hidden.src = src
     hidden.currentTime = next.in
+  }
+
+  function applyIncoming(incoming?: Incoming, fromTick = false): void {
+    const hidden = active === videoA ? videoB : videoA
+    if (!incoming) {
+      active.style.opacity = '1'
+      hidden.style.display = 'none'
+      hidden.style.opacity = '0'
+      if (!hidden.paused) hidden.pause()
+      return
+    }
+    const src = proxyOf(incoming.assetId)
+    if (src && !hidden.src.endsWith(src)) hidden.src = src
+    hidden.style.display = ''
+    active.style.opacity = String(1 - incoming.mix)
+    hidden.style.opacity = String(incoming.mix)
+    if (!fromTick) hidden.currentTime = incoming.time
+    if (playing && hidden.paused) void hidden.play().catch(() => {})
   }
 
   function seek(time: number): void {
@@ -271,6 +295,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timeline.setPlayhead(timelineTime)
     showTime()
     prepareNext(plan.index)
+    applyIncoming(plan.incoming)
     applyPreviewVolumes()
   }
 
@@ -285,6 +310,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timelineTime = plan.timelineTime
     timeline.setPlayhead(timelineTime)
     showTime()
+    if (plan.kind === 'playing') applyIncoming(plan.incoming, true)
     if (plan.kind === 'advance') {
       if (!proxyOf(plan.assetId)) {
         // У следующего клипа ещё нет прокси: показывать пустой кадр хуже, чем честно встать.
@@ -302,6 +328,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     } else if (plan.kind === 'end') {
       playing = false
       active.pause()
+      applyIncoming()
       music.pause()
     }
     applyPreviewVolumes()
@@ -312,7 +339,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const timeline = mountTimeline(el.querySelector('#ed-timeline') as HTMLElement, {
     onChange: applyClips,
     onSeek: seek,
-    onSelect: () => syncClipVolume(),
+    onSelect: () => {
+      syncClipVolume()
+      syncClipFade()
+    },
   })
 
   /** Кусок исходника в конец шкалы: приходит и от полосы файла, и от выделения в тексте. */
@@ -493,7 +523,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function applyClips(clips: Clip[]): void {
     if (!project) return
     remember()
-    project = { ...project, doc: { ...project.doc, clips } }
+    project = { ...project, doc: { ...project.doc, clips: clampTransitions(clips) } }
     render()
     saver.schedule(project)
     // Список изменился под играющим клипом: номер клипа больше ничего не значит, встаём заново
@@ -558,10 +588,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!project) return
     const clips = project.doc.clips
     const found = clipAt(clips, timelineTime)
-    const next = clips[playIndex + 1]
     const hidden = active === videoA ? videoB : videoA
-    active.volume = previewClipVolume(found?.clip.volume ?? 1)
-    hidden.volume = previewClipVolume(next?.volume ?? 1)
+    const incoming = incomingAt(clips, timelineTime)
+    const mix = incoming?.mix ?? 0
+    active.volume = previewClipVolume(found?.clip.volume ?? 1) * (1 - mix)
+    const incomingClip = incoming ? clips[incoming.index] : clips[playIndex + 1]
+    hidden.volume = previewClipVolume(incomingClip?.volume ?? 1) * (incoming ? mix : 1)
     const musicDoc = project.doc.music
     if (!musicDoc) {
       music.volume = 0
@@ -584,6 +616,21 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     volumeInput.disabled = !clip
     if (clip) volumeInput.value = String(clip.volume)
     volumeNote.hidden = !clip || clip.volume <= 1
+  }
+
+  function syncClipFade(): void {
+    const id = timeline.selected()
+    const clips = project?.doc.clips ?? []
+    const index = clips.findIndex(c => c.id === id)
+    const clip = index >= 0 ? clips[index] : undefined
+    const canFade = index > 0 && clip !== undefined
+    fadeInput.disabled = !canFade
+    if (!clip) {
+      fadeInput.value = ''
+      return
+    }
+    fadeInput.value = String(canFade ? fadeInto(clip, index) : 0)
+    if (canFade) fadeInput.max = String(maxFade(clips[index - 1], clip))
   }
 
   async function ensureData(clips: Clip[]): Promise<void> {
@@ -617,6 +664,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     musicPanel.setMusic(project.doc.music)
     syncBurn()
     syncClipVolume()
+    syncClipFade()
     showTime()
     applyPreviewVolumes()
     renders?.setDoc(project.doc)
@@ -630,9 +678,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (!active.src) seek(timelineTime)
       void active.play().catch(showError)
       if (project.doc.music) void music.play().catch(() => {})
+      applyIncoming(incomingAt(project.doc.clips, timelineTime), true)
       applyPreviewVolumes()
     } else {
       active.pause()
+      const hidden = active === videoA ? videoB : videoA
+      hidden.pause()
       music.pause()
     }
   })
@@ -693,6 +744,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   })
   volumeInput.addEventListener('change', () => {
     volumeRemembered = false
+  })
+
+  fadeInput.addEventListener('change', () => {
+    const id = timeline.selected()
+    if (!project || !id) return
+    const clips = project.doc.clips
+    const index = clips.findIndex(c => c.id === id)
+    if (index <= 0) return
+    const duration = Math.max(0, ms(Number(fadeInput.value) || 0))
+    applyClips(clips.map((clip, i) => {
+      if (i !== index) return clip
+      if (duration <= 0) {
+        const cleared = { ...clip }
+        delete cleared.transition
+        return cleared
+      }
+      return { ...clip, transition: { kind: 'fade', duration } }
+    }))
   })
 
   function undo(): void {
