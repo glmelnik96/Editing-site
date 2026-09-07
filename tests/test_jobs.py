@@ -1,8 +1,7 @@
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
-from datetime import UTC, datetime, timedelta
 
 from server.app.jobs import (
     LANES,
@@ -117,7 +116,8 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
     now = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
     uid = "usr_000000000001"
     conn.execute(
-        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, last_access_at) "
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, "
+        "created_at, last_access_at) "
         "VALUES ('ast_list1', ?, 'video', 'Нарезка.mp4', 'mp4', 1, 'proxy_ready', ?, ?)",
         (uid, now_iso(), now_iso()),
     )
