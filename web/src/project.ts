@@ -229,6 +229,23 @@ export function listRenders(id: string): Promise<{ renders: RenderCard[] }> {
   return api<{ renders: RenderCard[] }>(`/api/v1/projects/${encodeURIComponent(id)}/renders`)
 }
 
+export type JobListItem = {
+  id: string
+  type: 'analyze' | 'proxy' | 'transcribe' | 'render'
+  status: JobView['status']
+  progress: number
+  error: string | null
+  created_at: string
+  finished_at: string | null
+  label: string
+  cancelable: boolean
+  quality: 'draft' | 'final' | null
+}
+
+export function listJobs(): Promise<{ jobs: JobListItem[] }> {
+  return api('/api/v1/jobs')
+}
+
 export function loadJob(jobId: string): Promise<JobView> {
   return api<JobView>(`/api/v1/jobs/${encodeURIComponent(jobId)}`)
 }
