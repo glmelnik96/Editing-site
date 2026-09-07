@@ -27,7 +27,7 @@
 
 **Files:** `server/app/projects/store.py`, `server/app/projects/routes.py`, `tests/test_project_store.py`, `tests/test_projects_api.py`
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```python
 def test_delete_cancels_the_render_in_flight(conn, settings, project):
@@ -52,7 +52,7 @@ def test_render_of_a_finished_project_is_refused(client, token, finished_project
     assert r.json()["error"] == "project_finished"
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 - `delete_project` и `finish_project` вызывают `cancel_jobs_for_target(conn, project_id)` **внутри** той же транзакции, что меняет запись: отдельная транзакция оставила бы окно, в котором проекта уже нет, а задание ещё живо.
 - `POST /projects/{id}/render` отказывает завершённому проекту: `422 project_finished`.
@@ -67,7 +67,7 @@ git commit -m "fix(projects): delete and finish stop the render in flight"
 
 **Files:** `server/app/renders/routes.py`, `server/janitor/rules.py`, `tests/test_renders_api.py`, `tests/test_janitor.py`
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```python
 def test_analyze_cannot_be_canceled(client, token, analyze_job):
@@ -96,7 +96,7 @@ def test_janitor_leaves_an_asset_whose_analyze_is_alive(conn, settings):
     assert asset_status(conn, asset_id) == "analyzing"
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 - Маршрут отмены смотрит тип задания: `analyze` → `422 cannot_cancel`. Остальные как раньше.
 - Правило janitor расширяется: запись в `analyzing`, у которой нет задания `analyze` в статусе `queued` или `running`, переводится в `failed` с причиной «анализ не завершился». Существующее правило про протухшее `running` остаётся — оно ловит другой случай и срабатывает раньше.
@@ -111,7 +111,7 @@ git commit -m "fix(jobs): analysis is not cancelable, janitor frees assets stuck
 
 **Files:** `server/app/health.py`, `tests/test_health.py`
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```python
 def test_health_without_any_heartbeat_is_degraded(client, conn):
@@ -127,7 +127,7 @@ def test_health_disk_threshold_comes_from_settings(client, settings, monkeypatch
     """Порог был зашитой десяткой и расходился с настройкой отказа в загрузке."""
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 - Отсутствие записи пульса делает здоровье `degraded`: `worker_seen_sec_ago` остаётся `null`, признак «воркер жив» становится ложью.
 - Порог свободного места берётся из `settings.disk_low_pct`, а не из константы в модуле.
@@ -143,7 +143,7 @@ git commit -m "fix(health): no worker heartbeat is degraded, not ok"
 
 **Files:** `server/app/assets/routes.py`, `tests/test_transcript_api.py`
 
-- [ ] **Step 1: Тест**
+- [x] **Step 1: Тест**
 
 ```python
 def test_delete_is_refused_while_transcribing(client, token, asset_with_running_transcribe):
@@ -153,7 +153,7 @@ def test_delete_is_refused_while_transcribing(client, token, asset_with_running_
     assert r.json()["error"] == "already_queued"
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 `delete_transcript` вызывает `_refuse_while_transcribing`, как `transcribe` и `put_transcript`.
 
@@ -167,9 +167,9 @@ git commit -m "fix(transcript): delete waits for the running job like put does"
 
 **Files:** `tests/test_worker_handlers.py`, `tests/test_worker_render.py`, `tests/test_worker_transcribe.py`
 
-- [ ] Тест `test_analyze_of_a_missing_asset_is_not_an_error` получает утверждения: задание закончилось без ошибки, запись не появилась, задание `proxy` не поставлено.
-- [ ] Тест отмены рендера проверяет **поведение**, а не наличие аргумента: после отмены переданный `should_stop()` возвращает истину.
-- [ ] Новый тест: нехватка места при расшифровке даёт `disk_low`, по образцу `test_worker_render.py:212`.
+- [x] Тест `test_analyze_of_a_missing_asset_is_not_an_error` получает утверждения: задание закончилось без ошибки, запись не появилась, задание `proxy` не поставлено.
+- [x] Тест отмены рендера проверяет **поведение**, а не наличие аргумента: после отмены переданный `should_stop()` возвращает истину.
+- [x] Новый тест: нехватка места при расшифровке даёт `disk_low`, по образцу `test_worker_render.py:212`.
 
 ```bash
 git commit -m "test(worker): assertions where there were none"
@@ -181,7 +181,7 @@ git commit -m "test(worker): assertions where there were none"
 
 **Files:** `web/src/project.ts`, `web/src/editor.ts`, `web/src/project.test.ts`
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```ts
 it('не отдаёт наверх ответ, пока в очереди лежит более новая правка', async () => {
@@ -193,7 +193,7 @@ it('после отказа проверки состояние — failed, а �
 })
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 - `run` зовёт `onSaved` только когда `queued` пуст. Иначе наверх уходит одна версия — очередь и так подставляет её в следующую отправку.
 - `422` ставит `failed`, как сеть и `500`. Причина отказа показывается рядом со статусом и не гаснет по таймеру: сообщение об отклонённом документе живёт, пока документ не примут или человек не уйдёт с экрана.
@@ -208,7 +208,7 @@ git commit -m "fix(web): a stale save response no longer overwrites newer work"
 
 **Files:** `web/src/subtitles.ts`, `web/src/subtitles.test.ts`
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```ts
 it('не перерисовывает карточки, когда изменились только клипы', () => {
@@ -218,7 +218,7 @@ it('не перерисовывает карточки, когда измени�
 it('перерисовывает, когда реплики действительно изменились', () => {})
 ```
 
-- [ ] **Step 2: Реализация**
+- [x] **Step 2: Реализация**
 
 `setProject` сравнивает реплики и режим с нарисованными и при совпадении не трогает DOM. Сравнение по значению: список короткий, а глубокое равенство здесь честнее ссылочного — документ приходит с сервера новым объектом каждый раз.
 
@@ -232,7 +232,7 @@ git commit -m "fix(web): typing in a cue card survives a save"
 
 **Files:** `web/src/subtitles.ts`, `web/src/versions.ts`
 
-- [ ] Сборка реплик, возврат к точке и снятие точки формой в панели вызывают `flush()` перед своим запросом — как это делают кнопка «Собрать» и снятие точки из шапки.
+- [x] Сборка реплик, возврат к точке и снятие точки формой в панели вызывают `flush()` перед своим запросом — как это делают кнопка «Собрать» и снятие точки из шапки.
 - [ ] Проверить руками: несохранённый монтаж не превращается в `409` «проект изменился в другом месте».
 
 ```bash
@@ -245,8 +245,8 @@ git commit -m "fix(web): server actions flush the pending edit first"
 
 **Files:** `web/src/editor.ts`, `web/src/subtitles.ts`, `web/src/transcript.ts`
 
-- [ ] Редактор опрашивает `/assets`, пока среди них есть незавершённые по статусу обработки или по расшифровке, и раздаёт свежую карточку панелям. Опрос гаснет в `stop()`, как остальные.
-- [ ] Панель субтитров обрабатывает `transcript_exists` так же, как панель транскрипта: это не ошибка, а «уже готово».
+- [x] Редактор опрашивает `/assets`, пока среди них есть незавершённые по статусу обработки или по расшифровке, и раздаёт свежую карточку панелям. Опрос гаснет в `stop()`, как остальные.
+- [x] Панель субтитров обрабатывает `transcript_exists` так же, как панель транскрипта: это не ошибка, а «уже готово».
 - [ ] Проверить: запись, отданную в монтаж сразу после загрузки, можно доиграть без перезахода в редактор.
 
 ```bash
@@ -259,7 +259,7 @@ git commit -m "fix(web): the editor notices when a record finishes processing"
 
 **Files:** `web/src/editor.ts`
 
-- [ ] Точка ставится, когда во вкладке появилась новость и вкладка закрыта: готовая расшифровка для «Транскрибации» и «Субтитров», собранный ролик для «Рендера». Снятие уже написано.
+- [x] Точка ставится, когда во вкладке появилась новость и вкладка закрыта: готовая расшифровка для «Транскрибации» и «Субтитров», собранный ролик для «Рендера». Снятие уже написано.
 
 ```bash
 git commit -m "feat(web): a tab with news wears a dot, as the spec promised"
@@ -271,9 +271,9 @@ git commit -m "feat(web): a tab with news wears a dot, as the spec promised"
 
 **Files:** `README.md`, `docs/superpowers/specs/2026-09-06-ux-redesign-and-subtitle-review-design.md`, `.gitignore`
 
-- [ ] README и спека переработки UX догоняют код: вкладки «Транскрибация» и «Рендер», текст и вёрстка двери, шаги кабинета вместо двух равных карточек.
-- [ ] README получает строки про новое поведение: отмена заданий при удалении и завершении проекта, запрет отмены анализа, здоровье без пульса.
-- [ ] `.gitignore` закрывает все виды `.env`, кроме примера.
+- [x] README и спека переработки UX догоняют код: вкладки «Транскрибация» и «Рендер», текст и вёрстка двери, шаги кабинета вместо двух равных карточек.
+- [x] README получает строки про новое поведение: отмена заданий при удалении и завершении проекта, запрет отмены анализа, здоровье без пульса.
+- [x] `.gitignore` закрывает все виды `.env`, кроме примера.
 - [ ] Устаревшая копия `.env.bak-20260906-121744` удаляется с ВМ.
 
 ```bash
@@ -297,7 +297,10 @@ git commit -m "docs: bring README and the UX spec back in line with the code"
 
 ## Поправки по ходу выполнения
 
-_Заполняется по ходу: что в плане оказалось неверным, что нашлось сверх него._
+- Опрос записей в редакторе идёт всё время, пока экран открыт, а не только пока статус незавершённый: расшифровку заказывают уже после `proxy_ready`, и без повторного тика вкладка субтитров об этом не узнает.
+- Правка текста реплики не вызывает полный `render()`: иначе блюр одной карточки пересобирает соседнюю, в которой уже начали печатать. `setProject` по-прежнему пропускает перерисовку, если реплики и режим те же (ответ сохранения, правка клипа).
+- Воркер пишет пульс сразу при старте, не дожидаясь первого цикла: иначе `deploy.sh` после рестарта юнита мог бы увидеть `degraded` из-за пустой таблицы.
+- `POST /projects/{id}/render` отдаёт `422` с телом `{ error: { code: "project_finished" } }`, не плоской строкой. То же для `cannot_cancel`.
 
 ## Вне рамок
 

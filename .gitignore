@@ -5,7 +5,8 @@ __pycache__/
 .ruff_cache/
 .cache/
 data/
-.env
+.env*
+!.env.example
 web/node_modules/
 web/dist/
 .npm/
