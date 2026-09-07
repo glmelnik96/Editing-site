@@ -88,6 +88,12 @@ describe('когда карточки незачем пересобирать', 
     } as Project
     expect(sameSubtitleView(on, off)).toBe(true)
   })
+
+  it('первый приход проекта не считается тем же видом, что пустой экран', () => {
+    const безРеплик = { ...view(), doc: { ...view().doc, subtitles: null } }
+    expect(sameSubtitleView(null, безРеплик)).toBe(false)
+    expect(sameSubtitleView(null, null)).toBe(true)
+  })
 })
 
 describe('галочка над шкалой', () => {

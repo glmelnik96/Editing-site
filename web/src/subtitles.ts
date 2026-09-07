@@ -39,8 +39,9 @@ export function cueTrouble(cues: Cue[], index: number, total: number): string {
 
 /** Правка клипа реплик не меняет: карточки незачем пересобирать, набор в textarea живёт до блюра. */
 export function sameSubtitleView(a: Project | null, b: Project | null): boolean {
-  const left = a?.doc.subtitles
-  const right = b?.doc.subtitles
+  if (!a || !b) return a === b
+  const left = a.doc.subtitles
+  const right = b.doc.subtitles
   if (left === right) return true
   if (!left || !right) return !left && !right
   return left.source === right.source
@@ -304,6 +305,8 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       showError(e)
     }
   }
+
+  draw()
 
   return {
     /** Проект изменился: перерисовать карточки, если реплики или режим другие. */
