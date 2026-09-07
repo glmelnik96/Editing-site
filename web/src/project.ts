@@ -9,6 +9,7 @@ export type Subtitles = {
   asset_id: string | null
   mode: 'burn' | 'soft'
   style: string
+  enabled?: boolean
   cues?: Cue[]
 }
 export type ProjectDoc = { output: Output; clips: Clip[]; music: Music | null; subtitles: Subtitles | null }

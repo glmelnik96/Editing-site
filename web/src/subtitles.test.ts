@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from './project'
-import { cueTrouble, plural, sameSubtitleView, splitCue } from './subtitles'
+import { burnEnabled, cueTrouble, cuesReady, patchCues, plural, sameSubtitleView, splitCue } from './subtitles'
 
 const cue = (start: number, end: number, text = 'раз два три четыре') => ({ start, end, text })
 
@@ -78,5 +78,36 @@ describe('когда карточки незачем пересобирать', 
   it('перерисовывает, когда реплики действительно изменились', () => {
     expect(sameSubtitleView(view([cue(0, 2)]), view([cue(0, 2, 'другое')]))).toBe(false)
     expect(sameSubtitleView(view([cue(0, 2)], 'burn'), view([cue(0, 2)], 'soft'))).toBe(false)
+  })
+
+  it('не пересобирает карточки из-за галочки', () => {
+    const on = view([cue(0, 2)])
+    const off = {
+      ...on,
+      doc: { ...on.doc, subtitles: { ...on.doc.subtitles!, enabled: false } },
+    } as Project
+    expect(sameSubtitleView(on, off)).toBe(true)
+  })
+})
+
+describe('галочка над шкалой', () => {
+  it('серая, пока реплик нет', () => {
+    expect(cuesReady(null)).toBe(false)
+    expect(burnEnabled(null)).toBe(false)
+  })
+
+  it('после сборки включена, даже если ключа ещё нет', () => {
+    const subs = { source: 'cues' as const, asset_id: null, mode: 'burn' as const,
+      style: 'default', cues: [cue(0, 2)] }
+    expect(cuesReady(subs)).toBe(true)
+    expect(burnEnabled(subs)).toBe(true)
+  })
+
+  it('снятая галочка не включает текст карточки обратно', () => {
+    const previous = { source: 'cues' as const, asset_id: null, mode: 'burn' as const,
+      style: 'default', enabled: false, cues: [cue(0, 2, 'старое')] }
+    const next = patchCues(previous, [cue(0, 2, 'новое')])
+    expect(next.enabled).toBe(false)
+    expect(next.cues[0].text).toBe('новое')
   })
 })

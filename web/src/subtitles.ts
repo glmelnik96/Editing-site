@@ -8,7 +8,7 @@
 import { ApiError, isRetryable } from './api'
 import { loadAsset } from './assets'
 import { escapeHtml } from './html'
-import { generateSubtitles, loadJob, startTranscribe, type Cue, type Project } from './project'
+import { generateSubtitles, loadJob, startTranscribe, type Cue, type Project, type Subtitles } from './project'
 import { formatTimecode, parseTimecode } from './timecode'
 
 const POLL_MS = 2000
@@ -46,6 +46,32 @@ export function sameSubtitleView(a: Project | null, b: Project | null): boolean 
   return left.source === right.source
     && left.mode === right.mode
     && JSON.stringify(left.cues ?? []) === JSON.stringify(right.cues ?? [])
+}
+
+/** Галочка живая, только когда в документе есть реплики, которые можно вжечь. */
+export function cuesReady(subs: Subtitles | null | undefined): subs is Subtitles {
+  return Boolean(subs && subs.source === 'cues' && (subs.cues?.length ?? 0) > 0)
+}
+
+/** Снятая галочка — явный false; нет ключа у старого проекта считается включённым. */
+export function burnEnabled(subs: Subtitles | null | undefined): boolean {
+  return cuesReady(subs) && subs.enabled !== false
+}
+
+/** Правка карточек не сбрасывает галочку: иначе выключенные субтитры снова попали бы в ролик. */
+export function patchCues(
+  previous: Subtitles | null | undefined,
+  cues: Cue[],
+  mode?: 'burn' | 'soft',
+): Subtitles {
+  return {
+    source: 'cues',
+    asset_id: null,
+    mode: mode ?? previous?.mode ?? 'burn',
+    style: previous?.style ?? 'default',
+    enabled: previous?.enabled !== false,
+    cues,
+  }
 }
 
 /** Разрезать реплику пополам по времени: текст уезжает в первую половину целиком. */
