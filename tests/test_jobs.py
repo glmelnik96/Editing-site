@@ -2,8 +2,19 @@ import sqlite3
 
 import pytest
 
-from server.app.jobs import LANES, cancel_jobs_for_target, enqueue_job
-from server.app.util import now_iso
+from datetime import UTC, datetime, timedelta
+
+from server.app.jobs import (
+    LANES,
+    LIST_LIMIT,
+    RECENT_SEC,
+    cancel_jobs_for_target,
+    enqueue_job,
+    job_cancelable,
+    job_label,
+    list_jobs_for_user,
+)
+from server.app.util import iso, now_iso
 from server.db.core import connect
 from server.db.migrate import migrate
 
@@ -76,3 +87,61 @@ def test_deleting_user_cascades_to_jobs_uploads_assets(conn):
     conn.execute("DELETE FROM users WHERE id = 'usr_000000000001'")
     for table in ("jobs", "uploads", "upload_chunks", "assets"):
         assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+
+
+def test_index_jobs_user_status_exists(conn):
+    names = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
+    assert "jobs_user_status_idx" in names
+
+
+def test_cancelable_only_live_transcribe_and_render():
+    assert job_cancelable("transcribe", "queued") is True
+    assert job_cancelable("render", "running") is True
+    assert job_cancelable("analyze", "running") is False
+    assert job_cancelable("proxy", "queued") is False
+    assert job_cancelable("render", "done") is False
+
+
+def test_label_falls_back_when_target_is_gone():
+    assert job_label("analyze", None, None) == "запись удалена"
+    assert job_label("render", None, None) == "проект удалён"
+    assert job_label("transcribe", "Нарезка.mp4", None) == "Нарезка.mp4"
+
+
+def _stamp(conn, job_id, **fields):
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(f"UPDATE jobs SET {sets} WHERE id = ?", (*fields.values(), job_id))
+
+
+def test_list_includes_open_jobs_and_recent_finished_only(conn):
+    now = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    uid = "usr_000000000001"
+    conn.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, last_access_at) "
+        "VALUES ('ast_list1', ?, 'video', 'Нарезка.mp4', 'mp4', 1, 'proxy_ready', ?, ?)",
+        (uid, now_iso(), now_iso()),
+    )
+    conn.execute(
+        "INSERT INTO projects (id, user_id, name, status, version, doc, created_at, updated_at) "
+        "VALUES ('prj_list1', ?, 'Ролик', 'draft', 1, '{}', ?, ?)",
+        (uid, now_iso(), now_iso()),
+    )
+    conn.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES ('usr_otheruser01', 'o@b.c', 'O', ?)",
+        (now_iso(),),
+    )
+    open_id = enqueue_job(conn, user_id=uid, type_="analyze", target_id="ast_list1")
+    fresh = enqueue_job(conn, user_id=uid, type_="render", target_id="prj_list1", params={"quality": "draft"})
+    stale = enqueue_job(conn, user_id=uid, type_="transcribe", target_id="ast_list1")
+    _stamp(conn, fresh, status="done", finished_at=iso(now - timedelta(seconds=5)), progress=1)
+    _stamp(conn, stale, status="done", finished_at=iso(now - timedelta(seconds=RECENT_SEC + 1)), progress=1)
+    other = enqueue_job(conn, user_id="usr_otheruser01", type_="analyze", target_id="ast_x")
+    rows = list_jobs_for_user(conn, uid, now=now)
+    ids = [r["id"] for r in rows]
+    assert open_id in ids and fresh in ids
+    assert stale not in ids and other not in ids
+    assert len(rows) <= LIST_LIMIT
+    analyze = next(r for r in rows if r["id"] == open_id)
+    assert analyze["label"] == "Нарезка.mp4" and analyze["cancelable"] is False
+    render = next(r for r in rows if r["id"] == fresh)
+    assert render["label"] == "Ролик" and render["quality"] == "draft" and render["cancelable"] is False
