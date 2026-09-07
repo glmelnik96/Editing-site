@@ -1,3 +1,7 @@
+import { POLL_MS } from './assets'
+import { escapeHtml } from './html'
+import { cancelJob, listJobs, type JobListItem } from './project'
+
 export const FLASH_MS = 2000
 
 export type WorkJob = {
@@ -31,6 +35,7 @@ export type WorkState = {
   dismissed: string[]
   heldFailed: WorkJob[]
   flashes: WorkFlash[]
+  uploadFails: { id: string; name: string; error: string }[]
 }
 
 export type WorkRow = {
@@ -103,6 +108,7 @@ export function foldIncoming(prev: WorkState, incoming: WorkJob[], now: number):
     dismissed: prev.dismissed,
     heldFailed,
     flashes,
+    uploadFails: prev.uploadFails ?? [],
   }
 }
 
@@ -166,6 +172,213 @@ export function workRows(state: WorkState, now: number): WorkRow[] {
       error: job.error,
     })
   }
+  for (const fail of state.uploadFails ?? []) {
+    const key = `up:${fail.id}`
+    if (dismissed.has(key)) continue
+    rows.push({
+      key,
+      title: `Загрузка «${fail.name}»`,
+      cancelable: false,
+      closeable: true,
+      error: fail.error,
+    })
+  }
 
   return rows
+}
+
+export function emptyWork(): WorkState {
+  return { jobs: [], uploads: [], dismissed: [], heldFailed: [], flashes: [], uploadFails: [] }
+}
+
+export function toWorkJob(job: JobListItem): WorkJob {
+  return {
+    id: job.id,
+    type: job.type,
+    status: job.status,
+    progress: job.progress,
+    error: job.error,
+    label: job.label,
+    cancelable: job.cancelable,
+    quality: job.quality,
+  }
+}
+
+export type TrackedUpload = {
+  id: string
+  signal: AbortSignal
+  setProgress: (done: number, total: number) => void
+  succeed: () => void
+  fail: (message: string) => void
+  abort: () => void
+}
+
+export type WorkControls = {
+  trackUpload: (name: string) => TrackedUpload
+  start: () => void
+  stop: () => void
+}
+
+export function mountWork(el: HTMLElement): WorkControls {
+  let state = emptyWork()
+  let running = false
+  let stale = false
+  let seq = 0
+  let pollTimer = 0
+  let flashTimer = 0
+  const rowErrors = new Map<string, string>()
+
+  function armFlash(now: number): void {
+    window.clearTimeout(flashTimer)
+    const next = state.flashes.reduce((min, flash) => Math.min(min, flash.until), Infinity)
+    if (next !== Infinity) {
+      flashTimer = window.setTimeout(draw, Math.max(0, next - now + 10))
+    }
+  }
+
+  function draw(): void {
+    const now = Date.now()
+    const rows = workRows(state, now)
+    el.hidden = rows.length === 0 && !stale
+    const staleNote = stale ? '<p class="meta">ход мог устареть</p>' : ''
+    el.innerHTML =
+      rows
+        .map(row => {
+          const err = row.error || rowErrors.get(row.key) || ''
+          const pct = row.percent !== undefined ? `<span class="meta">${row.percent} %</span>` : ''
+          const cancel = row.cancelable
+            ? row.key.startsWith('up:')
+              ? `<button type="button" class="btn btn-ghost" data-cancel-up="${escapeHtml(row.key.slice(3))}">Отменить</button>`
+              : `<button type="button" class="btn btn-ghost" data-cancel-job="${escapeHtml(row.key)}">Отменить</button>`
+            : ''
+          const close = row.closeable
+            ? `<button type="button" class="btn btn-ghost" data-dismiss="${escapeHtml(row.key)}">Закрыть</button>`
+            : ''
+          const bar = row.bar
+            ? `<div class="progress"><i style="width:${row.percent ?? 0}%"></i></div>`
+            : ''
+          const error = err ? `<p class="meta error">${escapeHtml(err)}</p>` : ''
+          return `<div class="work-row">
+            <div class="row">
+              <span>${escapeHtml(row.title)}</span>
+              ${pct}
+              ${cancel}${close}
+            </div>
+            ${bar}${error}
+          </div>`
+        })
+        .join('') + staleNote
+
+    el.querySelectorAll<HTMLButtonElement>('[data-cancel-job]').forEach(btn => {
+      btn.addEventListener('click', () => void onCancelJob(btn.dataset.cancelJob ?? '', btn))
+    })
+    el.querySelectorAll<HTMLButtonElement>('[data-cancel-up]').forEach(btn => {
+      btn.addEventListener('click', () => aborts.get(btn.dataset.cancelUp ?? '')?.())
+    })
+    el.querySelectorAll<HTMLButtonElement>('[data-dismiss]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.dismiss ?? ''
+        state = { ...state, dismissed: [...state.dismissed, id] }
+        rowErrors.delete(id)
+        draw()
+      })
+    })
+    armFlash(now)
+  }
+
+  const aborts = new Map<string, () => void>()
+
+  async function onCancelJob(id: string, btn: HTMLButtonElement): Promise<void> {
+    btn.disabled = true
+    try {
+      await cancelJob(id)
+      rowErrors.delete(id)
+    } catch (e) {
+      rowErrors.set(id, e instanceof Error ? e.message : String(e))
+    }
+    draw()
+  }
+
+  async function poll(): Promise<void> {
+    if (!running) return
+    try {
+      const { jobs } = await listJobs()
+      if (!running) return
+      stale = false
+      state = foldIncoming(state, jobs.map(toWorkJob), Date.now())
+    } catch {
+      if (!running) return
+      stale = true
+    }
+    draw()
+  }
+
+  function start(): void {
+    if (running) return
+    running = true
+    void poll()
+    pollTimer = window.setInterval(() => void poll(), POLL_MS)
+  }
+
+  function stop(): void {
+    running = false
+    window.clearInterval(pollTimer)
+    window.clearTimeout(flashTimer)
+    state = emptyWork()
+    stale = false
+    rowErrors.clear()
+    aborts.clear()
+    el.innerHTML = ''
+    el.hidden = true
+  }
+
+  function trackUpload(name: string): TrackedUpload {
+    const id = `u${++seq}`
+    const ac = new AbortController()
+    state = { ...state, uploads: [...state.uploads, { id, name, done: 0, total: 1 }] }
+    const drop = () => {
+      state = { ...state, uploads: state.uploads.filter(item => item.id !== id) }
+      aborts.delete(id)
+    }
+    const abort = () => {
+      ac.abort()
+      drop()
+      draw()
+    }
+    aborts.set(id, abort)
+    draw()
+    return {
+      id,
+      signal: ac.signal,
+      setProgress(done, total) {
+        state = {
+          ...state,
+          uploads: state.uploads.map(item => (item.id === id ? { ...item, done, total } : item)),
+        }
+        draw()
+      },
+      succeed() {
+        drop()
+        const now = Date.now()
+        state = {
+          ...state,
+          flashes: [...state.flashes.filter(flash => flash.until > now), {
+            id: `up:${id}`,
+            kind: 'done',
+            until: now + FLASH_MS,
+            title: `Загрузка «${name}»`,
+          }],
+        }
+        draw()
+      },
+      fail(message) {
+        drop()
+        state = { ...state, uploadFails: [...state.uploadFails, { id, name, error: message }] }
+        draw()
+      },
+      abort,
+    }
+  }
+
+  return { trackUpload, start, stop }
 }

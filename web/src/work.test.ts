@@ -19,6 +19,7 @@ const empty = (): WorkState => ({
   dismissed: [],
   heldFailed: [],
   flashes: [],
+  uploadFails: [],
 })
 
 describe('подписи', () => {

@@ -8,6 +8,7 @@
 import { api } from './api'
 import { fmtSize } from './assets'
 import { escapeHtml } from './html'
+import { mountWork, type WorkControls } from './work'
 
 export type Me = {
   id: string
@@ -23,6 +24,7 @@ export type Shell = {
   screen: HTMLElement
   setUser: (me: Me) => void
   clearUser: () => void
+  work: WorkControls
 }
 
 export function mountShell(root: HTMLElement): Shell {
@@ -32,10 +34,12 @@ export function mountShell(root: HTMLElement): Shell {
       <span></span>
       <nav class="row" id="shell-nav" style="margin:0;--row-gap:16px"></nav>
     </header>
+    <div id="shell-work" hidden></div>
     <div id="shell-screen"></div>`
 
   const nav = root.querySelector('#shell-nav') as HTMLElement
   const screen = root.querySelector('#shell-screen') as HTMLElement
+  const work = mountWork(root.querySelector('#shell-work') as HTMLElement)
 
   function setUser(me: Me): void {
     const admin = me.role === 'admin' ? '<a href="#/admin">Кабинет доступа</a>' : ''
@@ -64,11 +68,13 @@ export function mountShell(root: HTMLElement): Shell {
       location.hash = '#/'
       location.reload()
     })
+    work.start()
   }
 
   function clearUser(): void {
     nav.innerHTML = ''
+    work.stop()
   }
 
-  return { screen, setUser, clearUser }
+  return { screen, setUser, clearUser, work }
 }
