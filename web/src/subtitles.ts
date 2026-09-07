@@ -15,7 +15,7 @@ const POLL_MS = 2000
 
 export type SubtitleHandlers = {
   /** Правка реплик: редактор кладёт её в документ и планирует сохранение. */
-  onChange: (cues: Cue[], mode?: 'burn' | 'soft') => void
+  onChange: (cues: Cue[]) => void
   /** Собранный сервером проект: у него уже новая версия, редактор берёт его целиком. */
   onProject: (project: Project) => void
   /** Дождаться, пока очередь правок доедет: иначе сборка реплик получит конфликт версий. */
@@ -161,20 +161,11 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       el.querySelector('#sub-build')?.addEventListener('click', () => void build())
       return
     }
-    const mode = project?.doc.subtitles?.mode ?? 'burn'
-    const applied = project?.doc.subtitles?.source === 'cues'
     el.innerHTML = shell(`
       <div class="row">
         <span class="small">${plural(list.length)}</span>
-        <select class="field" id="sub-mode">
-          <option value="burn"${mode === 'burn' ? ' selected' : ''}>вжечь в кадр</option>
-          <option value="soft"${mode === 'soft' ? ' selected' : ''}>отдельной дорожкой</option>
-        </select>
         <button class="btn btn-ghost" id="sub-rebuild">Собрать заново</button>
       </div>
-      <p class="meta" style="margin:0">${applied
-        ? 'Субтитры войдут в ролик при следующей сборке'
-        : 'Пока не наложены: ролик соберётся без них'}</p>
       <div class="stack">${list.map(card).join('')}</div>`)
     wire()
   }
@@ -191,9 +182,6 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     el.querySelector('#sub-rebuild')?.addEventListener('click', () => {
       if (!window.confirm('Собрать реплики заново? Ваши правки текста и времени пропадут.')) return
       void build()
-    })
-    el.querySelector<HTMLSelectElement>('#sub-mode')?.addEventListener('change', event => {
-      handlers.onChange(cues(), (event.target as HTMLSelectElement).value as 'burn' | 'soft')
     })
 
     el.querySelectorAll<HTMLElement>('.cue').forEach(node =>
@@ -311,8 +299,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     if (!assetId) return
     try {
       await handlers.flush()
-      const mode = project?.doc.subtitles?.mode ?? 'burn'
-      handlers.onProject(await generateSubtitles(projectId, assetId, mode))
+      handlers.onProject(await generateSubtitles(projectId, assetId, 'burn'))
     } catch (e) {
       showError(e)
     }

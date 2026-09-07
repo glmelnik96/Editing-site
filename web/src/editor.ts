@@ -16,7 +16,7 @@ import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountRender } from './render'
 import { mountSource } from './source'
-import { mountSubtitles } from './subtitles'
+import { mountSubtitles, patchCues } from './subtitles'
 import { mountTranscript } from './transcript'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
@@ -323,7 +323,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   })
 
   const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
-    onChange: (cues, mode) => applySubtitles(cues, mode),
+    onChange: cues => applySubtitles(cues),
     onProject: fresh => {
       remember()
       project = fresh
@@ -342,23 +342,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   })
 
   /** Правка реплик — обычная правка документа: с откатом, точками сохранения и автосохранением. */
-  function applySubtitles(cues: Cue[], mode?: 'burn' | 'soft'): void {
+  function applySubtitles(cues: Cue[]): void {
     if (!project) return
     remember()
     const было = project.doc.subtitles
-    const subs = {
-      source: 'cues' as const,
-      asset_id: null,
-      mode: mode ?? было?.mode ?? ('burn' as const),
-      style: было?.style ?? 'default',
-      cues,
-    }
+    const subs = patchCues(было, cues)
     const previous = было?.cues ?? []
     // Текст живёт в textarea до блюра: полный render сотрёт набор в соседней карточке.
-    // Времена, режим и число реплик меняют вёрстку — там перерисовка нужна.
+    // Времена и число реплик меняют вёрстку — там перерисовка нужна.
     const textOnly =
       cues.length === previous.length
-      && subs.mode === (было?.mode ?? 'burn')
       && cues.every((c, i) => {
         const prev = previous[i]
         return prev !== undefined && c.start === prev.start && c.end === prev.end
