@@ -12,9 +12,10 @@ from pydantic import BaseModel
 
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.errors import ApiError
+from server.app.jobs import list_jobs_for_user
 from server.app.projects.routes import RenderView
 from server.app.projects.store import delete_render, get_render
-from server.app.util import now_iso
+from server.app.util import now_iso, utcnow
 from server.db.core import get_db
 
 router = APIRouter(prefix="/api/v1", tags=["renders"])
@@ -28,6 +29,23 @@ class JobView(BaseModel):
     error: str | None
     created_at: str
     finished_at: str | None
+
+
+class JobListItem(BaseModel):
+    id: str
+    type: str
+    status: str
+    progress: float
+    error: str | None
+    created_at: str
+    finished_at: str | None
+    label: str
+    cancelable: bool
+    quality: str | None
+
+
+class JobList(BaseModel):
+    jobs: list[JobListItem]
 
 
 def _owned_job(conn: sqlite3.Connection, user: CurrentUser, job_id: str) -> sqlite3.Row:
@@ -58,6 +76,15 @@ def delete(
     if not delete_render(conn, user.id, render_id):
         raise ApiError(404, "not_found", "Ролик не найден")
     return Response(status_code=204)
+
+
+@router.get("/jobs", response_model=JobList)
+def list_jobs(
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> JobList:
+    rows = list_jobs_for_user(conn, user.id, now=utcnow())
+    return JobList(jobs=[JobListItem(**row) for row in rows])
 
 
 @router.get("/jobs/{job_id}", response_model=JobView)
