@@ -617,6 +617,21 @@ main.card {
 }
 .project-name { overflow-wrap: anywhere; }
 
+.burn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.burn:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.burn input { accent-color: var(--brand); }
+
 /* Вкладки: открыта одна панель, остальные скрыты атрибутом hidden. */
 .tabs {
   display: flex;

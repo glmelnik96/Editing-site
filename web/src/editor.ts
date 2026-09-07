@@ -10,16 +10,14 @@ import { POLL_MS, listAssets, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
 import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
-import { createCheckpoint, createSaver, loadProject, type Cue, type FieldError, type Project, type ProjectDoc } from './project'
+import { createSaver, loadProject, type Cue, type FieldError, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { insertClip, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountRender } from './render'
 import { mountSource } from './source'
-import { mountSubtitles, patchCues } from './subtitles'
-import { mountTranscript } from './transcript'
+import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTimeline, type AssetInfo } from './timeline/view'
-import { mountVersions } from './versions'
 
 const STATE_TEXT = {
   idle: 'сохранено',
@@ -40,15 +38,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <section class="side">
         <nav class="tabs" id="ed-tabs">
           <button type="button" class="tab" data-tab="source">Исходник</button>
-          <button type="button" class="tab" data-tab="transcript">Транскрибация</button>
           <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
-          <button type="button" class="tab" data-tab="versions">Точки</button>
           <button type="button" class="tab" data-tab="renders">Рендер</button>
         </nav>
         <div id="ed-source" data-panel="source"></div>
-        <div id="ed-transcript" data-panel="transcript" hidden></div>
         <div id="ed-subtitles" data-panel="subtitles" hidden></div>
-        <div id="ed-versions" data-panel="versions" hidden></div>
         <section id="ed-renders" data-panel="renders" hidden></section>
       </section>
       <section>
@@ -57,8 +51,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <button id="ed-undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
           <button id="ed-play" type="button">▶</button>
           <button id="ed-split" type="button">Разрезать</button>
+          <label class="burn">
+            <input id="ed-burn" type="checkbox" disabled />
+            Субтитры
+          </label>
           <button id="ed-delete" type="button">Удалить клип</button>
-          <button id="ed-save" type="button">Сохранить точку</button>
           <button id="ed-zoom-in" type="button">+</button>
           <button id="ed-zoom-out" type="button">−</button>
           <select id="ed-aspect">
@@ -82,6 +79,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
+  const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
 
   let project: Project | null = null
   let assets = new Map<string, AssetInfo>()
@@ -92,7 +90,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let playIndex = 0
   let timelineTime = 0
   let stopped = false
-  let versions: { refresh: () => Promise<void> } | null = null
   let renders: { stop: () => void } | null = null
   let assetTimer = 0
 
@@ -111,12 +108,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       const fresh = list.find(a => a.id === current.id) ?? current
       const hadTranscript = Boolean(previous.get(current.id)?.files.transcript)
       const hasTranscript = Boolean(fresh.files.transcript)
-      transcript.setAsset(fresh)
       subtitles.setAsset(fresh.id, hasTranscript)
-      if (hasTranscript && !hadTranscript) {
-        markNews('transcript')
-        markNews('subtitles')
-      }
+      if (hasTranscript && !hadTranscript) markNews('subtitles')
     }
     if (project?.doc.music) {
       const musicAsset = list.find(a => a.id === project?.doc.music?.asset_id)
@@ -307,21 +300,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onAdd: (asset, range) => addClip(asset.id, range.from, range.to, false),
   })
 
-  const sourcePlayer = (): HTMLMediaElement | null => sourceBox.querySelector('video, audio')
-
-  const transcript = mountTranscript(el.querySelector('#ed-transcript') as HTMLElement, {
-    onSeek: seconds => {
-      const player = sourcePlayer()
-      if (player) player.currentTime = seconds
-    },
-    // Времена слов интерполированы (±0.3 с), поэтому клип идёт со снэпом: границы досадит на
-    // измеренные паузы сервер. Это тот же путь, которым кладёт кусок агент через API.
-    onTake: (start, end) => {
-      const asset = source.current()
-      if (asset) addClip(asset.id, start, end, true)
-    },
-  })
-
   const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
     onChange: cues => applySubtitles(cues),
     onProject: fresh => {
@@ -362,52 +340,49 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     saver.schedule(project)
   }
 
-  // Панель текста работает с тем же файлом, что и панель исходника. О смене файла узнаём по
-  // событию из самой панели: change от её списка всплывает до контейнера, и лезть внутрь чужой
-  // панели за её select не приходится. Тот же файл setAsset пропускает, так что change от полей
-  // таймкода панель текста не тревожит.
+  function syncBurn(): void {
+    const subs = project?.doc.subtitles
+    burnBox.disabled = !cuesReady(subs)
+    burnBox.checked = burnEnabled(subs)
+  }
+
+  function applyEnabled(on: boolean): void {
+    if (!project || !cuesReady(project.doc.subtitles)) return
+    remember()
+    project = {
+      ...project,
+      doc: { ...project.doc, subtitles: { ...project.doc.subtitles, enabled: on } },
+    }
+    syncBurn()
+    saver.schedule(project)
+  }
+
+  burnBox.addEventListener('change', () => applyEnabled(burnBox.checked))
+
+  // О смене файла узнаём по событию из самой панели: change от её списка всплывает до контейнера,
+  // и лезть внутрь чужой панели за её select не приходится. Тот же файл setAsset пропускает,
+  // так что change от полей таймкода панель субтитров не тревожит.
   sourceBox.addEventListener('change', () => {
     const asset = source.current()
-    transcript.setAsset(asset)
     subtitles.setAsset(asset?.id ?? null, Boolean(asset?.files.transcript))
   })
-  // timeupdate не всплывает — слушаем на фазе перехвата: плеер исходника панель исходника
-  // пересоздаёт при каждом выборе файла, а этот слушатель переживает пересоздание.
-  sourceBox.addEventListener('timeupdate', event => transcript.setTime((event.target as HTMLMediaElement).currentTime), true)
 
   /* ═══ Вкладки левой колонки ═══════════════════════════════════════════════
    *
-   * Пять панелей разом спорили за внимание, а нужна почти всегда одна. Панель монтируется при
-   * первом открытии своей вкладки и дальше живёт: перезагружать транскрипт на каждый клик незачем.
+   * Три панели спорили бы за внимание, если показать все сразу. Панель монтируется при
+   * первом открытии своей вкладки и дальше живёт.
    */
   const tabsBar = el.querySelector('#ed-tabs') as HTMLElement
   const panels = new Map<string, HTMLElement>(
     Array.from(el.querySelectorAll<HTMLElement>('[data-panel]')).map(node => [node.dataset.panel ?? '', node]),
   )
-  const mounted = new Set<string>(['source', 'transcript']) // эти нужны сразу: на них завязан выбор файла
+  const mounted = new Set<string>(['source'])
   let tab = 'source'
   let booted = false
 
   function openPanel(name: string): void {
     if (mounted.has(name) || !booted) return
     mounted.add(name)
-    if (name === 'versions') {
-      versions = mountVersions(
-        panels.get('versions') as HTMLElement,
-        projectId,
-        restored => {
-          remember()
-          project = restored
-          timelineTime = 0
-          render()
-          if (playing) seek(0)
-          notice('Вернулись к сохранённой точке')
-        },
-        async () => {
-          if (project && saver.pending()) await saver.flush(project)
-        },
-      )
-    }
     if (name === 'renders') {
       renders = mountRender(
         panels.get('renders') as HTMLElement,
@@ -472,6 +447,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
     subtitles.setProject(project)
+    syncBurn()
     showTime()
     void ensureData(project.doc.clips)
   }
@@ -500,19 +476,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const id = timeline.selected()
     if (!project || !id) return notice('Сначала выберите клип на шкале')
     applyClips(removeClip(project.doc.clips, id))
-  })
-
-  el.querySelector('#ed-save')!.addEventListener('click', async () => {
-    if (!project) return
-    try {
-      // Сначала дописываем несохранённое: снимок должен поймать то, что видит человек.
-      if (saver.pending()) await saver.flush(project)
-      await createCheckpoint(projectId, '')
-      await versions?.refresh()
-      notice('Точка сохранена')
-    } catch (e) {
-      showError(e)
-    }
   })
 
   el.querySelector('#ed-zoom-in')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() * 1.5))
@@ -611,7 +574,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       window.clearTimeout(assetTimer)
       document.removeEventListener('keydown', onKey)
       renders?.stop()
-      transcript.stop()
       subtitles.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
       // Отказ здесь гасим: экран уже разбирается, показывать ошибку некому, а необработанный

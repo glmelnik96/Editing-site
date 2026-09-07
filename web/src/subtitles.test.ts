@@ -108,6 +108,6 @@ describe('галочка над шкалой', () => {
       style: 'default', enabled: false, cues: [cue(0, 2, 'старое')] }
     const next = patchCues(previous, [cue(0, 2, 'новое')])
     expect(next.enabled).toBe(false)
-    expect(next.cues[0].text).toBe('новое')
+    expect(next.cues![0].text).toBe('новое')
   })
 })
