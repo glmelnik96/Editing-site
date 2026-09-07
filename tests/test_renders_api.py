@@ -1,5 +1,6 @@
 import sqlite3
 
+from server.app.jobs import enqueue_job
 from server.app.util import now_iso
 
 VIDEO = "ast_000000000001"
@@ -141,6 +142,23 @@ def test_deleting_a_project_cancels_its_render(client, login_as, settings):
     job_id = client.post(f"/api/v1/projects/{project['id']}/render", json={}).json()["job_id"]
     assert client.delete(f"/api/v1/projects/{project['id']}").status_code == 204
     assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "canceled"
+
+
+def test_analysis_cannot_be_canceled(client, login_as, settings):
+    """Отменить анализ значило бы оставить запись навсегда в analyzing: в проект её не поставить,
+    перезапустить нечем. Кому нужно прервать — удаляет запись, и это отменяет задания правильно."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    conn = sqlite3.connect(str(settings.db_path), isolation_level=None)
+    try:
+        job_id = enqueue_job(conn, user_id=me["id"], type_="analyze", target_id=VIDEO)
+    finally:
+        conn.close()
+
+    r = client.post(f"/api/v1/jobs/{job_id}/cancel")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "cannot_cancel"
+    assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "queued"
 
 
 def test_job_can_be_canceled(client, login_as, settings):

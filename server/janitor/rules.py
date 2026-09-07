@@ -22,6 +22,7 @@ JOB_STALE_AFTER_SEC = 120
 JOB_MAX_ATTEMPTS = 2
 BACKUP_KEEP = 7
 WORKER_LOST = "воркер пропал без вести (нет пульса дольше 2 минут)"
+ANALYZE_LOST = "анализ не завершился: задания под него больше нет, загрузите запись заново"
 
 log = logging.getLogger("video.janitor")
 
@@ -170,6 +171,26 @@ def requeue_stale_jobs(conn: sqlite3.Connection, now: datetime) -> tuple[int, in
                         (WORKER_LOST, row["target_id"]),
                     )
     return requeued, failed
+
+
+def free_stuck_assets(conn: sqlite3.Connection) -> int:
+    """Запись висит в analyzing, а живого задания анализа под неё нет.
+
+    Так бывает, когда задание отменили вместе с чем-то ещё или воркера убили так, что задание
+    до running не дожило. В analyzing запись бесполезна: в проект её не поставить (там нужен
+    ready или proxy_ready), а перезапустить анализ нечем — до суточного срока жизни она просто
+    занимает место и врёт человеку, что ещё обрабатывается.
+
+    Условие смотрит на queued и running: воркер при старте возвращает свои running в очередь,
+    и такая запись честно ждёт анализа, а не застряла.
+    """
+    with transaction(conn):
+        cur = conn.execute(
+            "UPDATE assets SET status = 'failed', error = ? WHERE status = 'analyzing' AND id NOT IN "
+            "(SELECT target_id FROM jobs WHERE type = 'analyze' AND status IN ('queued', 'running'))",
+            (ANALYZE_LOST,),
+        )
+    return cur.rowcount
 
 
 def delete_expired_sessions(conn: sqlite3.Connection, settings: Settings, now: datetime) -> int:

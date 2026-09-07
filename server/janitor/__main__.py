@@ -28,6 +28,7 @@ def run(settings: Settings, now: datetime | None = None) -> dict[str, int]:
         "sessions_expired": 0,
         "jobs_requeued": 0,
         "jobs_failed": 0,
+        "assets_freed": 0,
         "error": 0,
     }
     conn = connect(settings.db_path)
@@ -39,6 +40,9 @@ def run(settings: Settings, now: datetime | None = None) -> dict[str, int]:
             stats["orphans"] = rules.delete_orphans(conn, settings, now)
             stats["sessions_expired"] = rules.delete_expired_sessions(conn, settings, now)
             stats["jobs_requeued"], stats["jobs_failed"] = rules.requeue_stale_jobs(conn, now)
+            # После разбора заданий: протухшее running уже стало failed и запись за ним подтянулась,
+            # а здесь остаются те, под кем задания не стало вовсе.
+            stats["assets_freed"] = rules.free_stuck_assets(conn)
         except Exception:
             log.exception("janitor: правила очистки упали")
             stats["error"] = 1

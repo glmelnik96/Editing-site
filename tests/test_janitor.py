@@ -158,6 +158,41 @@ def test_failed_analyze_marks_asset_failed(conn, settings, tmp_path):
     assert row["status"] == "failed" and row["error"]
 
 
+def test_asset_stuck_in_analyzing_without_a_job_is_freed(conn, settings, tmp_path):
+    """Задание анализа исчезло (отмена, убитый воркер), а запись осталась в analyzing.
+
+    В таком виде она мертва: в проект её не поставить (там нужен ready или proxy_ready),
+    анализ не перезапустить, и до суточного срока жизни она просто занимает место.
+    Прежнее правило ловит только протухшее running — отменённое задание мимо него проходит.
+    """
+    asset = _asset(conn, settings, tmp_path)
+    conn.execute("UPDATE assets SET status = 'analyzing' WHERE id = ?", (asset,))
+    conn.execute("UPDATE jobs SET status = 'canceled' WHERE target_id = ?", (asset,))
+
+    assert rules.free_stuck_assets(conn) == 1
+    row = conn.execute("SELECT status, error FROM assets WHERE id = ?", (asset,)).fetchone()
+    assert row["status"] == "failed" and row["error"]
+
+
+def test_asset_whose_analyze_is_still_alive_is_left_alone(conn, settings, tmp_path):
+    """Воркер поднял задание обратно в очередь — анализ ещё случится, трогать запись нельзя."""
+    asset = _asset(conn, settings, tmp_path)
+    conn.execute("UPDATE assets SET status = 'analyzing' WHERE id = ?", (asset,))
+
+    assert rules.free_stuck_assets(conn) == 0
+    assert conn.execute("SELECT status FROM assets WHERE id = ?", (asset,)).fetchone()[0] == "analyzing"
+
+
+def test_ready_assets_are_not_touched(conn, settings, tmp_path):
+    """Правило смотрит только на analyzing: готовая запись без заданий — норма, а не поломка."""
+    asset = _asset(conn, settings, tmp_path)
+    conn.execute("UPDATE assets SET status = 'ready' WHERE id = ?", (asset,))
+    conn.execute("UPDATE jobs SET status = 'done' WHERE target_id = ?", (asset,))
+
+    assert rules.free_stuck_assets(conn) == 0
+    assert conn.execute("SELECT status FROM assets WHERE id = ?", (asset,)).fetchone()[0] == "ready"
+
+
 def test_expired_sessions(conn, settings):
     def add(sid, last_seen, absolute):
         conn.execute(
@@ -221,6 +256,7 @@ def test_run_returns_stats(conn, settings):
         "sessions_expired": 0,
         "jobs_requeued": 0,
         "jobs_failed": 0,
+        "assets_freed": 0,
         "error": 0,
         "backup": 1,
     }

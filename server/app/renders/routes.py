@@ -80,7 +80,14 @@ def cancel(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     """Отменяет задание в очереди или выполняющееся: воркер увидит это при следующем пульсе."""
-    _owned_job(conn, user, job_id)
+    row = _owned_job(conn, user, job_id)
+    # Анализ отменять нечего: без него у записи нет ни длительности, ни карт пауз, ни полоски
+    # кадров, и в проект она не встанет. Кому нужно прервать — удаляет запись, а это отменяет
+    # её задания правильно и не оставляет её висеть в analyzing.
+    if row["type"] == "analyze":
+        raise ApiError(
+            422, "cannot_cancel", "Анализ записи отменить нельзя: удалите саму запись"
+        )
     conn.execute(
         "UPDATE jobs SET status = 'canceled', finished_at = ? "
         "WHERE id = ? AND user_id = ? AND status IN ('queued', 'running')",
