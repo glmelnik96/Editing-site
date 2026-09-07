@@ -162,6 +162,10 @@ def test_analyze_of_a_missing_asset_is_not_an_error(conn, settings):
     """Ассет удалили, пока задание ждало очереди: работать не над чем, но и падать незачем."""
     job = take(conn, target_id="ast_00000000dead")
     handlers.handle_analyze(conn, settings, job)
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job["id"],)).fetchone()
+    assert row["status"] == "running"  # обработчик не трогает задание: воркер закроет его как done
+    assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM jobs WHERE type = 'proxy'").fetchone()[0] == 0
 
 
 def test_proxy_encodes_and_moves_status_forward(conn, settings, monkeypatch):

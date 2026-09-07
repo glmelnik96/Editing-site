@@ -239,16 +239,19 @@ class TestОтказы:
             handlers.handle_render(conn, settings, take_render(conn, project["id"]))
 
     def test_отмена_доходит_до_ffmpeg(self, conn, settings, monkeypatch):
+        """Проверяем поведение, а не наличие аргумента: после отмены should_stop отвечает «стой»."""
         project = make_project(conn, settings)
+        job = take_render(conn, project["id"])
+        conn.execute("UPDATE jobs SET status = 'canceled' WHERE id = ?", (job["id"],))
         seen = {}
 
         def spy(args, *, timeout, on_line, should_stop=None, stop_check_sec=2.0):
-            seen["есть_проверка"] = should_stop is not None and callable(should_stop)
+            seen["стоит"] = should_stop is not None and should_stop() is True
             seen["таймаут"] = timeout
             with open(args[-1], "wb") as f:
                 f.write(b"v")
 
         monkeypatch.setattr(handlers, "run_streaming", spy)
-        handlers.handle_render(conn, settings, take_render(conn, project["id"]))
-        assert seen["есть_проверка"] is True
+        handlers.handle_render(conn, settings, job)
+        assert seen["стоит"] is True
         assert seen["таймаут"] == settings.render_timeout_sec

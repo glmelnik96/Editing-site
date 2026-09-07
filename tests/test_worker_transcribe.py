@@ -177,6 +177,16 @@ class TestОтказыДоРаботы:
             handlers.handle_transcribe(conn, settings, take(conn))
         assert exc.value.reason == "no_analysis" and "analysis.json" in exc.value.message
 
+    def test_мало_места_на_диске(self, conn, settings, tones, monkeypatch):
+        """У рендера такой тест есть, у расшифровки его не было: проверку можно было вырезать втихую."""
+        folder = prepare(conn, settings, tones["short"], duration=12.0)
+        install(monkeypatch, lambda name: pytest.fail("отправлять нечего"))
+        monkeypatch.setattr(handlers, "disk_free_bytes", lambda _p: 1024)
+        with pytest.raises(MediaError) as exc:
+            handlers.handle_transcribe(conn, settings, take(conn))
+        assert exc.value.reason == "disk_low" and "мест" in exc.value.message
+        assert no_leftovers(folder)
+
 
 class TestУспех:
     def test_транскрипт_на_диске_и_строка_в_базе(self, conn, settings, tones, monkeypatch):
