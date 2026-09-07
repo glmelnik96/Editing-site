@@ -103,10 +103,32 @@ def test_cues_land_in_the_document(client, login_as, settings):
     assert r.status_code == 200, r.text
     subs = r.json()["doc"]["subtitles"]
     assert subs["source"] == "cues" and subs["mode"] == "burn" and subs["style"] == "default"
+    assert subs["enabled"] is True
     assert " ".join(lines_of(subs["cues"])).startswith("Мы поехали")
     assert r.json()["version"] == project["version"] + 1
     # Это состояние проекта, а не ответ на один запрос: следующий читатель видит те же реплики.
     assert client.get(f"/api/v1/projects/{project['id']}").json()["doc"]["subtitles"] == subs
+
+
+def test_edited_cues_keep_enabled_false(client, login_as, settings):
+    """Снятая галочка — правка документа: текст карточки её не включает обратно."""
+    login_as()
+    project = with_transcript(client, settings)
+    saved = generate(client, project).json()
+    doc = saved["doc"]
+    doc["subtitles"]["enabled"] = False
+    doc["subtitles"]["cues"][0]["text"] = "Я поправил"
+    put = client.put(
+        f"/api/v1/projects/{project['id']}",
+        json={"name": saved["name"], "version": saved["version"], "doc": doc},
+    )
+    assert put.status_code == 200, put.text
+    subs = put.json()["doc"]["subtitles"]
+    assert subs["enabled"] is False
+    assert subs["cues"][0]["text"] == "Я поправил"
+    got = subtitles(client, put.json())
+    assert got.status_code == 200
+    assert "Я поправил" in got.text
 
 
 def test_cue_times_follow_the_roll_not_the_source(client, login_as, settings):

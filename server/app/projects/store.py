@@ -481,7 +481,10 @@ def generate_project_cues(
         conn, settings, user_id, project["id"], name=project["name"], version=version,
         raw_doc={
             **doc,
-            "subtitles": {"source": "cues", "mode": mode, "style": "default", "cues": cues},
+            "subtitles": {
+                "source": "cues", "mode": mode, "style": "default",
+                "enabled": True, "cues": cues,
+            },
         },
     )
 
