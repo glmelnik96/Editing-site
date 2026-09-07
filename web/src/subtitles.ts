@@ -143,9 +143,8 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       return
     }
     if (jobId) {
-      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровываю. Это занимает несколько
-        минут — можно уйти на другую вкладку, работа не прервётся</p>
-        <div class="progress"><i id="sub-bar" style="width:0%"></i></div>`)
+      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровываю — ход вверху. Можно уйти
+        на другую вкладку, работа не прервётся</p>`)
       return
     }
     if (!hasTranscript) {
@@ -267,8 +266,6 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       // только по появлению файла у записи.
       if (jobId !== 'unknown') {
         const job = await loadJob(jobId)
-        const bar = el.querySelector<HTMLElement>('#sub-bar')
-        if (bar) bar.style.width = `${Math.round(job.progress * 100)}%`
         if (job.status === 'failed' || job.status === 'canceled') {
           jobId = null
           draw()

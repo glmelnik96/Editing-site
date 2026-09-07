@@ -29,10 +29,6 @@ function whenFull(iso: string): string {
   return iso.replace('T', ' ').slice(0, 16)
 }
 
-function percent(progress: number): number {
-  return Math.round(Math.min(1, Math.max(0, progress)) * 100)
-}
-
 export function mountRender(
   el: HTMLElement,
   projectId: string,
@@ -48,7 +44,6 @@ export function mountRender(
       </div>
       <div id="rnd-job" hidden>
         <span class="muted" id="rnd-status"></span>
-        <div class="progress"><i id="rnd-bar" style="width:0%"></i></div>
         <button id="rnd-cancel" type="button">Отменить сборку</button>
       </div>
       <ul id="rnd-list" class="versions"><li class="muted">Пока нет</li></ul>
@@ -58,7 +53,6 @@ export function mountRender(
   const finalButton = el.querySelector('#rnd-final') as HTMLButtonElement
   const jobBox = el.querySelector('#rnd-job') as HTMLElement
   const statusBox = el.querySelector('#rnd-status') as HTMLElement
-  const bar = el.querySelector('#rnd-bar') as HTMLElement
   const cancelButton = el.querySelector('#rnd-cancel') as HTMLButtonElement
   const list = el.querySelector('#rnd-list') as HTMLElement
   const errorBox = el.querySelector('#rnd-error') as HTMLPreElement
@@ -76,13 +70,9 @@ export function mountRender(
     errorBox.textContent = ''
   }
 
-  function showJob(status: JobView['status'], progress: number): void {
+  function showJob(status: JobView['status']): void {
     jobBox.hidden = false
-    const pct = percent(progress)
-    const broken = status === 'failed' || status === 'canceled'
-    statusBox.textContent = status === 'running' ? `${JOB_TEXT.running}, ${pct} %` : (JOB_TEXT[status] ?? status)
-    // Под подписью «не собралось» полоса на 80 % врёт: у сорвавшейся сборки прогресса больше нет.
-    bar.style.width = broken ? '0%' : `${pct}%`
+    statusBox.textContent = RUNNING.has(status) ? 'Собираю — ход вверху' : (JOB_TEXT[status] ?? status)
     const running = RUNNING.has(status)
     cancelButton.hidden = !running
     draftButton.disabled = running
@@ -149,7 +139,7 @@ export function mountRender(
     }
     if (stopped || job.id !== jobId) return
     clearError() // опрос снова доходит: жалобу на прошлый оборванный запрос убираем
-    showJob(job.status, job.progress)
+    showJob(job.status)
     if (RUNNING.has(job.status)) {
       scheduleNext()
       return
@@ -181,7 +171,7 @@ export function mountRender(
       const { job_id } = await startRender(projectId, quality)
       if (stopped) return
       jobId = job_id
-      showJob('queued', 0)
+      showJob('queued')
       scheduleNext()
     } catch (e) {
       showError(e)
