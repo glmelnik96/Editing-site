@@ -300,7 +300,11 @@ def _validate_subtitles(
     if style not in SUB_STYLES:
         errors.add("subtitles.style", f"style: {', '.join(SUB_STYLES)}")
         return None
-    out = {"source": source, "asset_id": asset_id, "mode": mode, "style": style}
+    enabled = raw.get("enabled", True)
+    if not isinstance(enabled, bool):
+        errors.add("subtitles.enabled", "enabled должен быть true или false")
+        return None
+    out = {"source": source, "asset_id": asset_id, "mode": mode, "style": style, "enabled": enabled}
     if cues is not None:
         out["cues"] = cues
     return out

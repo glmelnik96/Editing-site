@@ -114,7 +114,8 @@ def test_subtitles_rules():
         assets=ASSETS, settings=S,
     )
     assert out["subtitles"] == {
-        "source": "file", "asset_id": "ast_000000000004", "mode": "soft", "style": "default",
+        "source": "file", "asset_id": "ast_000000000004", "mode": "soft",
+        "style": "default", "enabled": True,
     }
     assert errors_of(doc(subtitles={"source": "file", "asset_id": "ast_000000000001"})) == [
         "subtitles.asset_id"
@@ -128,6 +129,26 @@ def test_subtitles_rules():
     assert errors_of(
         doc(subtitles={"source": "file", "asset_id": "ast_000000000004", "mode": "glow"})
     ) == ["subtitles.mode"]
+
+
+def test_missing_enabled_means_on():
+    """Старый проект без ключа не должен молча потерять субтитры в ролике."""
+    out = validate_doc(
+        doc(subtitles={"source": "file", "asset_id": "ast_000000000004", "mode": "soft"}),
+        assets=ASSETS, settings=S,
+    )
+    assert out["subtitles"]["enabled"] is True
+
+
+def test_enabled_false_is_kept():
+    out = validate_doc(subs_doc(enabled=False), assets=ASSETS, settings=S)
+    assert out["subtitles"]["enabled"] is False
+    assert out["subtitles"]["cues"][0]["text"] == "Привет"
+
+
+def test_enabled_must_be_bool():
+    assert errors_of(subs_doc(enabled="false")) == ["subtitles.enabled"]
+    assert errors_of(subs_doc(enabled=1)) == ["subtitles.enabled"]
 
 
 def subs_doc(**over) -> dict:
@@ -144,6 +165,7 @@ def test_cues_source_needs_no_asset():
     assert out["subtitles"]["cues"] == [{"start": 0.0, "end": 2.0, "text": "Привет"}]
     assert out["subtitles"]["asset_id"] is None
     assert out["subtitles"]["mode"] == "burn" and out["subtitles"]["style"] == "default"
+    assert out["subtitles"]["enabled"] is True
 
 
 def test_cues_are_sorted_by_start():
