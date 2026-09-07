@@ -185,6 +185,11 @@ class TestСубтитры:
         chain = filter_of(args)
         assert r"\:" in chain and r"\'" in chain
 
+    def test_выключенный_файл_не_вжигается(self):
+        args = build(self.subs_doc(enabled=False))
+        assert "subtitles=" not in filter_of(args)
+        assert SOURCES["ast_s"].path not in args
+
 
 class TestСубтитрыИзТранскрипта:
     """Файл собирает вызывающий: чистая функция на диск не ходит и написать его не может."""
@@ -231,6 +236,23 @@ class TestСубтитрыИзТранскрипта:
         args = self.build(doc(subtitles={"source": "file", "asset_id": "ast_s", "mode": "soft",
                                          "style": "default"}))
         assert SOURCES["ast_s"].path in args and str(self.CACHE) not in args
+
+    def test_выключенные_реплики_не_едут_в_команду(self):
+        """Галочка снята: реплики в документе, в кадре их быть не должно."""
+        args = self.build(doc(subtitles={
+            "source": "cues", "asset_id": None, "mode": "burn", "style": "default",
+            "enabled": False,
+            "cues": [{"start": 0, "end": 1, "text": "х"}],
+        }), path=None)
+        assert "subtitles=" not in filter_of(args)
+        assert "mov_text" not in args
+
+    def test_нет_ключа_enabled_как_включено(self):
+        chain = filter_of(self.build(doc(subtitles={
+            "source": "cues", "asset_id": None, "mode": "burn", "style": "default",
+            "cues": [{"start": 0, "end": 1, "text": "х"}],
+        })))
+        assert "subs/3.srt" in chain
 
 
 class TestКодирование:

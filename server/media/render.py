@@ -167,6 +167,8 @@ def build_render_command(
 
     music = doc.get("music")
     subtitles = doc.get("subtitles")
+    if not isinstance(subtitles, dict) or subtitles.get("enabled") is False:
+        subtitles = None
 
     video_out, audio_out = "[v]", "[a]"
     filters.append(f"{''.join(concat_labels)}concat=n={len(clips)}:v=1:a=1{video_out}{audio_out}")
