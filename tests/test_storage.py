@@ -4,6 +4,8 @@ from server.app.config import Settings
 from server.app.storage import (
     PUBLIC_FILES,
     asset_dir,
+    conversion_dir,
+    conversion_url,
     file_url,
     kind_from_ext,
     parse_file_url,
@@ -112,3 +114,26 @@ def test_parse_file_url_understands_renders():
     assert parse_file_url(f"{base}/rnd_0123456789ab.part") is None
     assert parse_file_url(f"{base}/notanid.mp4") is None
     assert parse_file_url("/files/usr_x/projects/prj_0123456789ab/renders/rnd_0123456789ab.mp4") is None
+
+
+def test_conversion_paths_come_from_ids(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path / "d")
+    assert conversion_dir(s, "usr_0123456789ab", "ast_0123456789ab") == (
+        tmp_path / "d" / "usr_0123456789ab" / "assets" / "ast_0123456789ab" / "conversions"
+    )
+    assert conversion_url("usr_0123456789ab", "ast_0123456789ab", "cnv_0123456789ab", "mp3") == (
+        "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions/cnv_0123456789ab.mp3"
+    )
+
+
+def test_parse_file_url_understands_conversions():
+    url = "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions/cnv_0123456789ab.mp3"
+    assert parse_file_url(url) == (
+        "usr_0123456789ab", "ast_0123456789ab", "cnv_0123456789ab.mp3", "conversion"
+    )
+    base = "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions"
+    assert parse_file_url(f"{base}/../source.mp4") is None
+    assert parse_file_url(f"{base}/evil.exe") is None
+    assert parse_file_url(f"{base}/cnv_0123456789ab.part") is None
+    assert parse_file_url(f"{base}/notanid.wav") is None
+    assert parse_file_url("/files/usr_x/assets/ast_0123456789ab/conversions/cnv_0123456789ab.mp3") is None

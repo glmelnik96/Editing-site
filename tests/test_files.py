@@ -171,6 +171,64 @@ def test_foreign_render_is_404(client, login_as, settings):
         assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, url
 
 
+def _conversion_on_disk(client, settings, user_id, name="встреча \"2026\".mov", fmt="mp3"):
+    files = {"file": ("c.mp4", b"\0" * 10, "application/octet-stream")}
+    r = client.post("/api/v1/assets/upload", files=files)
+    assert r.status_code == 201, r.text
+    asset_id = r.json()["id"]
+    conversion_id = "cnv_000000000001"
+    folder = settings.data_dir / user_id / "assets" / asset_id / "conversions"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{conversion_id}.{fmt}"
+    path.write_bytes(b"\0" * 16)
+    conn = sqlite3.connect(str(settings.db_path))
+    conn.execute("UPDATE assets SET original_name = ?, status = 'ready' WHERE id = ?", (name, asset_id))
+    conn.execute(
+        "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+        "created_at, expires_at) VALUES (?, ?, ?, 'job_1', ?, ?, 16, 5, ?, ?)",
+        (conversion_id, user_id, asset_id, fmt, str(path), OLD, "2099-01-01T00:00:00.000Z"),
+    )
+    conn.commit()
+    conn.close()
+    return asset_id, conversion_id
+
+
+def test_conversion_is_served_as_a_download(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    asset_id, conversion_id = _conversion_on_disk(client, settings, me["id"])
+    url = f"/files/{me['id']}/assets/{asset_id}/conversions/{conversion_id}.mp3"
+    r = client.get(url)
+    assert r.status_code == 200 and r.content == b"\0" * 16
+    disposition = r.headers["content-disposition"]
+    assert disposition.startswith(f'attachment; filename="{conversion_id}.mp3"; filename*=UTF-8\'\'')
+    assert "%D0%B2%D1%81%D1%82%D1%80%D0%B5%D1%87%D0%B0" in disposition
+    assert ".mp3" in disposition.split("''")[1]
+    assert '"' not in disposition.split("filename*=")[1]
+    assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 204
+
+
+def test_conversion_source_is_still_forbidden(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    asset_id, _ = _conversion_on_disk(client, settings, me["id"])
+    r = client.get(f"/files/{me['id']}/assets/{asset_id}/source.mp4")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+
+
+def test_foreign_conversion_file_is_404(client, login_as, settings):
+    login_as()
+    owner = client.get("/api/v1/me").json()
+    asset_id, conversion_id = _conversion_on_disk(client, settings, owner["id"])
+    good = f"/files/{owner['id']}/assets/{asset_id}/conversions/{conversion_id}.mp3"
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    thief = client.get("/api/v1/me").json()
+    for url in (good, f"/files/{thief['id']}/assets/{asset_id}/conversions/{conversion_id}.mp3"):
+        assert client.get(url).status_code == 404, url
+        assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, url
+
+
 def test_render_url_shapes_that_are_not_ours(client, login_as, settings):
     """Всё, что не {id}.mp4 в каталоге рендеров, до проверки прав не доходит."""
     login_as()

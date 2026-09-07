@@ -6,7 +6,7 @@ import sqlite3
 
 from server.app.util import new_id, now_iso
 
-LANES = {"analyze": "cpu", "proxy": "cpu", "render": "cpu", "transcribe": "net"}
+LANES = {"analyze": "cpu", "proxy": "cpu", "render": "cpu", "convert": "cpu", "transcribe": "net"}
 
 
 def enqueue_job(

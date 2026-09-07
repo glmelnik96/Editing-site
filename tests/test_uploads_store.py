@@ -103,6 +103,21 @@ def test_quota_counts_assets_and_pending_uploads(conn, settings):
     assert e.value.details == {"used_bytes": 6_000, "limit_bytes": 10_000}
 
 
+def test_quota_does_not_count_conversions(conn, settings):
+    """Квота 20 ГБ считает ассеты и незавершённые загрузки. Конверсии в неё не входят."""
+    src = settings.data_dir / "a.mp4"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"x" * 100)
+    row = finalize_file(conn, settings, user_id=USER, src=src, filename="a.mp4", size=100, kind="video")
+    conn.execute(
+        "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+        "created_at, expires_at) VALUES ('cnv_000000000001', ?, ?, 'job_1', 'mp3', '/x.mp3', "
+        "9_000, 5, ?, ?)",
+        (USER, row["id"], now_iso(), now_iso()),
+    )
+    assert used_bytes(conn, USER) == 100
+
+
 def test_disk_low_blocks_new_uploads(conn, settings, monkeypatch):
     monkeypatch.setattr(store, "disk_free_pct_safe", lambda _path: 5.0)
     with pytest.raises(UploadError) as e:

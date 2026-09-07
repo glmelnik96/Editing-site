@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 
 from server.app.jobs import LANES, cancel_jobs_for_target, enqueue_job
+from server.app.projects.store import active_renders
 from server.app.util import now_iso
 from server.db.core import connect
 from server.db.migrate import migrate
@@ -27,6 +28,23 @@ def test_enqueue_sets_lane_and_defaults(conn):
     assert row["lane"] == "cpu" and row["status"] == "queued" and row["priority"] == 10
     assert row["params"] == "{}" and row["progress"] == 0 and row["attempts"] == 0
     assert LANES["transcribe"] == "net"
+    assert LANES["convert"] == "cpu"
+
+
+def test_convert_uses_cpu_lane_and_default_priority(conn):
+    job_id = enqueue_job(conn, user_id="usr_000000000001", type_="convert", target_id="ast_1")
+    row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    assert row["type"] == "convert" and row["lane"] == "cpu" and row["priority"] == 0
+
+
+def test_active_renders_counts_convert_jobs_too(conn):
+    """Лимит очереди общий: конвертация часового файла не должна отодвинуть сборку без правила."""
+    enqueue_job(conn, user_id="usr_000000000001", type_="render", target_id="prj_1")
+    enqueue_job(conn, user_id="usr_000000000001", type_="convert", target_id="ast_1")
+    done = enqueue_job(conn, user_id="usr_000000000001", type_="convert", target_id="ast_2")
+    conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (done,))
+    enqueue_job(conn, user_id="usr_000000000001", type_="analyze", target_id="ast_3")
+    assert active_renders(conn, "usr_000000000001") == 2
 
 
 def test_enqueue_rejects_unknown_type(conn):

@@ -22,6 +22,8 @@ ID_RE = re.compile(r"^[a-z]{3}_[0-9a-f]{12}$")
 _EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _ASSET_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/([^/]+)$")
 _RENDER_URL_RE = re.compile(r"^/files/([^/]+)/projects/([^/]+)/renders/([^/]+)$")
+_CONVERSION_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/conversions/([^/]+)$")
+CONVERT_EXTS = {"mp3", "m4a", "wav", "mp4"}
 
 
 def safe_ext(filename: str) -> str:
@@ -68,6 +70,14 @@ def render_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     return project_dir(settings, user_id, project_id) / "renders"
 
 
+def conversion_dir(settings: Settings, user_id: str, asset_id: str) -> Path:
+    return asset_dir(settings, user_id, asset_id) / "conversions"
+
+
+def conversion_url(user_id: str, asset_id: str, conversion_id: str, fmt: str) -> str:
+    return f"/files/{user_id}/assets/{asset_id}/conversions/{conversion_id}.{fmt}"
+
+
 def subs_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     """Кэш субтитров проекта: имя файла — версия проекта, поэтому правка документа не может
     отдать старые реплики. Наружу этот каталог не отдаётся (см. parse_file_url)."""
@@ -89,10 +99,21 @@ def file_url(user_id: str, asset_id: str, name: str) -> str:
 def parse_file_url(path: str) -> tuple[str, str, str, str] | None:
     """(user_id, owner_id, name, kind) из пути /files/…; идентификаторы проверяются по форме.
 
-    Две формы: файлы ассета (`/assets/{id}/{имя}`) и готовые ролики
-    (`/projects/{id}/renders/{id}.mp4`). Вид возвращается четвёртым элементом, чтобы вызывающий
+    Две формы ассета: файлы (`/assets/{id}/{имя}`) и конверсии
+    (`/assets/{id}/conversions/{id}.{ext}`). Готовые ролики —
+    `/projects/{id}/renders/{id}.mp4`. Вид возвращается четвёртым элементом, чтобы вызывающий
     не разбирал путь второй раз.
     """
+    m = _CONVERSION_URL_RE.match(path)
+    if m:
+        user_id, asset_id, name = m.groups()
+        if not (ID_RE.match(user_id) and ID_RE.match(asset_id)):
+            return None
+        stem, sep, ext = name.rpartition(".")
+        if not sep or ext not in CONVERT_EXTS or not ID_RE.match(stem):
+            return None
+        return user_id, asset_id, name, "conversion"
+
     m = _ASSET_URL_RE.match(path)
     if m:
         user_id, asset_id, name = m.groups()

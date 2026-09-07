@@ -22,6 +22,7 @@ TABLES = {
     "project_versions",
     "renders",
     "transcripts",
+    "conversions",
 }
 
 
@@ -41,7 +42,7 @@ def _migrations_dir(tmp_path, monkeypatch, files):
 def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     conn = connect(tmp_path / "t.db")
     try:
-        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
         assert TABLES <= _tables(conn)
         assert migrate(conn) == []
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -169,7 +170,7 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert migrate(conn) == [1]
         assert "yandex_id" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8]
+        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9]
         assert "yandex_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u1', 'a@ya.ru', 'x', '42')"
@@ -199,5 +200,40 @@ def test_transaction_rolls_back_on_error(tmp_path):
         with transaction(conn):
             conn.execute("INSERT INTO heartbeats (name, at) VALUES ('w', 'x')")
         assert conn.execute("SELECT count(*) FROM heartbeats").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_jobs_rebuild_keeps_old_rows_and_accepts_convert(tmp_path, monkeypatch):
+    """SQLite CHECK нельзя расширить на месте: таблица jobs пересоздаётся, старые строки остаются."""
+    conn = connect(tmp_path / "t.db")
+    try:
+        real_discover = migrate_mod.discover
+        monkeypatch.setattr(
+            migrate_mod, "discover", lambda: [item for item in real_discover() if item[0] <= 8]
+        )
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8]
+        conn.execute("INSERT INTO users (id, email, created_at) VALUES ('usr_000000000001', 'a@ya.ru', 'x')")
+        conn.execute(
+            "INSERT INTO jobs (id, user_id, type, lane, status, target_id, created_at) "
+            "VALUES ('job_oldrender01', 'usr_000000000001', 'render', 'cpu', 'queued', 'prj_1', 'x')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO jobs (id, user_id, type, lane, status, target_id, created_at) "
+                "VALUES ('job_noconvert01', 'usr_000000000001', 'convert', 'cpu', 'queued', 'ast_1', 'x')"
+            )
+        monkeypatch.setattr(migrate_mod, "discover", real_discover)
+        assert migrate(conn) == [9]
+        assert conn.execute("SELECT type FROM jobs WHERE id = 'job_oldrender01'").fetchone()[0] == "render"
+        conn.execute(
+            "INSERT INTO jobs (id, user_id, type, lane, status, target_id, created_at) "
+            "VALUES ('job_convert0001', 'usr_000000000001', 'convert', 'cpu', 'queued', 'ast_1', 'x')"
+        )
+        assert conn.execute("SELECT type FROM jobs WHERE id = 'job_convert0001'").fetchone()[0] == "convert"
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversions'"
+        ).fetchone()[0]
+        assert "asset_id" in sql and "expires_at" in sql
     finally:
         conn.close()

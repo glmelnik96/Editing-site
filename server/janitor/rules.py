@@ -98,6 +98,23 @@ def delete_expired_renders(conn: sqlite3.Connection, now: datetime) -> int:
     return deleted
 
 
+def delete_expired_conversions(conn: sqlite3.Connection, now: datetime) -> int:
+    """Готовая конверсия живёт render_ttl_hours. Файл рядом с ассетом, каталог ассета не трогаем."""
+    cutoff = iso(now)
+    rows = conn.execute("SELECT id, path FROM conversions WHERE expires_at < ?", (cutoff,)).fetchall()
+    deleted = 0
+    for row in rows:
+        with transaction(conn):
+            cur = conn.execute(
+                "DELETE FROM conversions WHERE id = ? AND expires_at < ?", (row["id"], cutoff)
+            )
+            if cur.rowcount == 0:
+                continue
+        Path(row["path"]).unlink(missing_ok=True)
+        deleted += 1
+    return deleted
+
+
 def _older_than(path: Path, now: datetime, seconds: int) -> bool:
     try:
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)

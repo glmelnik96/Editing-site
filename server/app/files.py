@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.config import Settings
 from server.app.errors import ApiError
-from server.app.storage import PUBLIC_FILES, asset_dir, parse_file_url, render_dir
+from server.app.storage import PUBLIC_FILES, asset_dir, conversion_dir, parse_file_url, render_dir
 from server.app.util import iso, utcnow
 from server.db.core import get_db
 
@@ -42,7 +42,7 @@ def authorize_file(
 ) -> Path:
     """Путь к файлу или ApiError: 403 для непубличных имён (source.*), 404 для чужого и несуществующего.
 
-    owner_id — это ассет для kind="asset" и проект для kind="render".
+    owner_id — это ассет для kind="asset"/"conversion" и проект для kind="render".
     """
     if user_id != user.id:
         raise ApiError(404, "not_found", "Файл не найден")
@@ -55,6 +55,15 @@ def authorize_file(
         if row is None:
             raise ApiError(404, "not_found", "Файл не найден")
         return render_dir(settings, user_id, owner_id) / name
+    if kind == "conversion":
+        conversion_id = name.rsplit(".", 1)[0]
+        row = conn.execute(
+            "SELECT id FROM conversions WHERE id = ? AND asset_id = ? AND user_id = ?",
+            (conversion_id, owner_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise ApiError(404, "not_found", "Файл не найден")
+        return conversion_dir(settings, user_id, owner_id) / name
     if name not in PUBLIC_FILES:
         raise ApiError(403, "forbidden", "Этот файл наружу не отдаётся")
     row = conn.execute("SELECT id FROM assets WHERE id = ? AND user_id = ?", (owner_id, user_id)).fetchone()
@@ -63,14 +72,15 @@ def authorize_file(
     return asset_dir(settings, user_id, owner_id) / name
 
 
-def download_disposition(project_name: str, fallback: str) -> str:
-    """Заголовок вложения с именем проекта. Имена у нас кириллические, а в заголовок HTTP такое
-    напрямую не положить (latin-1), поэтому имя идёт вторым параметром в кодировке из RFC 5987,
-    а ASCII-запасное (rnd_….mp4) остаётся для старых клиентов. Кавычки, слэши и переводы строк
-    убираем: иначе заголовок можно разорвать самим названием проекта."""
+def download_disposition(title: str, fallback: str) -> str:
+    """Заголовок вложения. Имена кириллические, в HTTP — RFC 5987; ASCII-запасное — fallback.
+
+    Расширение берём из fallback (rnd_….mp4 или cnv_….mp3), чтобы конверсии не становились .mp4.
+    """
     bad = ('"', "\\", "/", "\r", "\n", "\t")
-    cleaned = "".join(ch for ch in project_name if ch not in bad).strip()
-    name = f"{cleaned}.mp4" if cleaned else fallback
+    cleaned = "".join(ch for ch in title if ch not in bad).strip()
+    ext = fallback.rsplit(".", 1)[-1] if "." in fallback else "mp4"
+    name = f"{cleaned}.{ext}" if cleaned else fallback
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name)}"
 
 
@@ -128,6 +138,37 @@ def serve_render(
     )
 
 
+@router.get("/files/{user_id}/assets/{asset_id}/conversions/{name}", include_in_schema=False)
+def serve_conversion(
+    request: Request,
+    user_id: str,
+    asset_id: str,
+    name: str,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> FileResponse:
+    """Готовая конверсия отдаётся вложением: имя из original_name плюс новое расширение."""
+    parsed = parse_file_url(f"/files/{user_id}/assets/{asset_id}/conversions/{name}")
+    if parsed is None:
+        raise ApiError(404, "not_found", "Файл не найден")
+    settings = request.app.state.settings
+    path = authorize_file(conn, settings, user, user_id, asset_id, name, "conversion")
+    if not path.is_file():
+        raise ApiError(404, "not_found", "Файл ещё не готов")
+    row = conn.execute(
+        "SELECT original_name FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id)
+    ).fetchone()
+    original = row["original_name"] if row else ""
+    stem = original.rsplit(".", 1)[0] if "." in original else original
+    return FileResponse(
+        path,
+        headers={
+            "Cache-Control": FILE_CACHE,
+            "Content-Disposition": download_disposition(stem, name),
+        },
+    )
+
+
 @router.get("/internal/authz", include_in_schema=False)
 def authz(
     request: Request,
@@ -141,6 +182,6 @@ def authz(
         raise ApiError(404, "not_found", "Файл не найден")
     user_id, owner_id, name, kind = parsed
     authorize_file(conn, request.app.state.settings, user, user_id, owner_id, name, kind)
-    if kind == "asset":
+    if kind in ("asset", "conversion"):
         touch_last_access(conn, owner_id)
     return Response(status_code=204)
