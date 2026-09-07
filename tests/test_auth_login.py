@@ -201,7 +201,8 @@ def test_login_requires_client_secret_too(tmp_path):
 
 
 def test_head_healthz_and_options_on_unknown_api_path(client):
-    assert client.head("/healthz").status_code == 200
+    # HEAD идёт тем же обработчиком, что GET. Пульса воркера в тесте нет — 503, не 405.
+    assert client.head("/healthz").status_code == 503
     assert client.options("/api/v1/nope").status_code == 404
 
 
