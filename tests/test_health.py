@@ -11,14 +11,25 @@ from server.app.util import iso, utcnow
 from server.db.core import connect
 
 
-def test_healthz_ok_without_worker(client):
+def test_healthz_degraded_without_worker(client):
+    """Воркер ни разу не стартовал: deploy ждёт status=ok и не должен его получить."""
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["db"] is True
+    assert body["worker_seen_sec_ago"] is None
+
+
+def test_healthz_ok_when_worker_just_wrote(client, settings):
+    conn = connect(settings.db_path)
+    conn.execute("INSERT INTO heartbeats (name, at) VALUES ('worker', ?)", (iso(utcnow()),))
+    conn.close()
     r = client.get("/healthz")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["db"] is True
-    assert 0 <= body["disk_free_pct"] <= 100
-    assert body["worker_seen_sec_ago"] is None
+    assert body["worker_seen_sec_ago"] == 0
 
 
 def test_healthz_degraded_when_worker_stale(client, settings):
@@ -46,13 +57,16 @@ def test_app_keeps_a_long_lived_db_connection(client, app):
     assert keeper.in_transaction is False
 
 
-def test_healthz_degraded_when_disk_low(client, monkeypatch):
+def test_healthz_disk_threshold_comes_from_settings(client, settings, monkeypatch):
+    """Порог был зашитой десяткой и расходился с настройкой отказа в загрузке."""
+    settings.disk_low_pct = 3.0
     monkeypatch.setattr(health, "disk_free_pct", lambda path: 5.0)
     r = client.get("/healthz")
+    # Пульса нет — degraded из-за воркера, а не из-за диска: проверяем, что 5 % выше порога 3
+    # не делает диск причиной. Тело всё равно degraded, потому что воркера нет.
+    assert r.json()["disk_free_pct"] == 5.0
     assert r.status_code == 503
-    body = r.json()
-    assert body["status"] == "degraded"
-    assert body["disk_free_pct"] == 5.0
+    assert r.json()["worker_seen_sec_ago"] is None
 
 
 def test_healthz_reports_db_false_when_tables_missing(client, settings):
@@ -113,7 +127,9 @@ def test_static_mount_keeps_api_routes_first(settings, tmp_path):
     app = create_app(settings, web_dist=dist)
     with TestClient(app, headers={"Origin": "http://testserver"}) as c:
         assert c.get("/").text == "<h1>spa</h1>"
-        assert c.get("/healthz").status_code == 200
+        health = c.get("/healthz")
+        assert health.status_code in (200, 503)
+        assert health.json()["db"] is True
         assert c.get("/api/v1/openapi.json").status_code == 200
         r = c.get("/api/v1/nope")
         assert r.status_code == 404

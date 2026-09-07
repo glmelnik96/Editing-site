@@ -1,7 +1,7 @@
 """GET /healthz: база, свободный диск, пульс воркера. Без авторизации; поля описаны в схеме ответа.
 
-Любая поломка базы, диска или пульса даёт status=degraded и код 503, чтобы внешний пинг заметил; deploy.sh
-читает тело.
+Любая поломка базы, диска или пульса даёт status=degraded и код 503, чтобы внешний пинг заметил;
+deploy.sh читает тело. Нет записи пульса — это тоже degraded: воркер ни разу не стартовал.
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ router = APIRouter(tags=["health"])
 log = logging.getLogger("video.health")
 
 WORKER_STALE_AFTER_SEC = 120
-DISK_LOW_PCT = 10.0
 
 
 class Health(BaseModel):
@@ -57,7 +56,9 @@ def worker_age_sec(conn: sqlite3.Connection) -> tuple[int | None, bool]:
     try:
         row = conn.execute("SELECT at FROM heartbeats WHERE name = 'worker'").fetchone()
         if row is None:
-            return None, True
+            # Нет записи — воркер ни разу не стартовал. Это не «пульс в норме», а degraded:
+            # deploy.sh ждёт status=ok и иначе отрапортует успех на сервисе без половины.
+            return None, False
         return int((utcnow() - parse_iso(row["at"])).total_seconds()), True
     except (sqlite3.Error, TypeError, ValueError) as exc:
         log.warning("healthz: пульс воркера не читается: %s", exc)
@@ -81,7 +82,7 @@ def healthz(request: Request, response: Response) -> Health:
     finally:
         conn.close()
     stale = worker_age is not None and worker_age > WORKER_STALE_AFTER_SEC
-    degraded = (not db_ok) or (not worker_ok) or free < DISK_LOW_PCT or stale
+    degraded = (not db_ok) or (not worker_ok) or free < settings.disk_low_pct or stale
     health = Health(
         status="degraded" if degraded else "ok",
         db=db_ok,
