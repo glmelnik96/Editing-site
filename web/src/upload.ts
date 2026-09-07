@@ -12,6 +12,14 @@ export type UploadOptions = {
   storage?: Storage
   request?: typeof api
   sleep?: (ms: number) => Promise<void>
+  signal?: AbortSignal
+}
+
+export class UploadAborted extends Error {
+  constructor() {
+    super('Загрузка отменена')
+    this.name = 'UploadAborted'
+  }
 }
 
 export const PARALLEL = 3 // спека, раздел 6.1
@@ -37,12 +45,23 @@ export function backoffMs(attempt: number): number {
   return 1000 * 2 ** attempt
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new UploadAborted()
+}
+
 /** Повторяет fn с задержкой backoffMs, пока ошибка ретраится и попытки не исчерпаны. */
-async function withRetry<T>(fn: () => Promise<T>, retries: number, sleep: (ms: number) => Promise<void>): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries: number,
+  sleep: (ms: number) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
+    throwIfAborted(signal)
     try {
       return await fn()
     } catch (e) {
+      if (e instanceof UploadAborted || signal?.aborted) throw e instanceof UploadAborted ? e : new UploadAborted()
       if (attempt >= retries || !isRetryable(e)) throw e
       await sleep(backoffMs(attempt))
     }
@@ -59,14 +78,20 @@ function defaultStorage(): Storage | undefined {
 
 type Session = { id: string; chunkSize: number; total: number; received: number[] }
 
-async function resumeOrCreate(file: FileLike, request: typeof api, storage?: Storage): Promise<Session> {
+async function resumeOrCreate(
+  file: FileLike,
+  request: typeof api,
+  storage?: Storage,
+  signal?: AbortSignal,
+): Promise<Session> {
   const key = fingerprint(file)
   const saved = storage?.getItem(key)
   if (saved) {
     try {
-      const st = await request<UploadStatus>(`/api/v1/uploads/${saved}`)
+      const st = await request<UploadStatus>(`/api/v1/uploads/${saved}`, { signal })
       if (st.size === file.size) return { id: st.upload_id, chunkSize: st.chunk_size, total: st.total, received: st.received }
     } catch (e) {
+      if (signal?.aborted) throw new UploadAborted()
       if (!(e instanceof ApiError && e.status === 404)) throw e
     }
     storage?.removeItem(key)
@@ -74,6 +99,7 @@ async function resumeOrCreate(file: FileLike, request: typeof api, storage?: Sto
   const created = await request<UploadCreated>('/api/v1/uploads', {
     method: 'POST',
     body: JSON.stringify({ filename: file.name, size: file.size }),
+    signal,
   })
   storage?.setItem(key, created.upload_id)
   return { id: created.upload_id, chunkSize: created.chunk_size, total: created.total_chunks, received: [] }
@@ -89,7 +115,8 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
 
   /** Одна полная попытка: докачка либо новая загрузка, отправка всех частей, завершение. */
   const attemptOnce = async (): Promise<UploadResult> => {
-    const up = await resumeOrCreate(file, request, storage)
+    const up = await resumeOrCreate(file, request, storage, opts.signal)
+    throwIfAborted(opts.signal)
     const queue = missingChunks(up.total, up.received)
     let done = up.received.length
     let failed = false // фатальный сбой одного воркера — остальные не берут новые части
@@ -98,6 +125,7 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
 
     const worker = async () => {
       for (let idx = queue.shift(); idx !== undefined; idx = queue.shift()) {
+        throwIfAborted(opts.signal)
         if (failed) return
         const body = file.slice(idx * up.chunkSize, Math.min(file.size, (idx + 1) * up.chunkSize))
         try {
@@ -107,9 +135,11 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
                 method: 'PUT',
                 body,
                 headers: { 'Content-Type': 'application/octet-stream' },
+                signal: opts.signal,
               }),
             retries,
             sleep,
+            opts.signal,
           )
         } catch (e) {
           failed = true
@@ -124,9 +154,10 @@ export async function uploadFile(file: FileLike, opts: UploadOptions = {}): Prom
 
     // тот же ретрай и на завершение: временный сбой после долгой заливки не должен требовать всё заново
     const result = await withRetry(
-      () => request<UploadResult>(`/api/v1/uploads/${up.id}/complete`, { method: 'POST' }),
+      () => request<UploadResult>(`/api/v1/uploads/${up.id}/complete`, { method: 'POST', signal: opts.signal }),
       retries,
       sleep,
+      opts.signal,
     )
     storage?.removeItem(fingerprint(file))
     return result
