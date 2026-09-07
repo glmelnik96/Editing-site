@@ -15,11 +15,10 @@ export function mountVersions(
   flush: () => Promise<void>,
 ) {
   el.innerHTML = `
-    <main class="card">
-      <h3>Точки сохранения</h3>
+    <main>
       <form id="ver-form" class="row">
         <input name="label" placeholder="Например: до перестановки" maxlength="200" />
-        <button type="submit">Сохранить точку</button>
+        <button type="submit">Сохранить</button>
       </form>
       <ul id="ver-list" class="versions"><li class="muted">Пока нет</li></ul>
       <pre id="ver-error" hidden></pre>

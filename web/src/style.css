@@ -617,6 +617,22 @@ main.card {
 }
 .project-name { overflow-wrap: anywhere; }
 
+.project-bar .saves {
+  margin-left: auto;
+  position: relative;
+}
+.saves-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 5;
+  min-width: 320px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
 .burn {
   display: inline-flex;
   align-items: center;

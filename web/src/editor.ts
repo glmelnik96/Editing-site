@@ -18,6 +18,7 @@ import { mountRender } from './render'
 import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTimeline, type AssetInfo } from './timeline/view'
+import { mountVersions } from './versions'
 
 const STATE_TEXT = {
   idle: 'сохранено',
@@ -33,6 +34,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <strong id="ed-name" class="display-m project-name">Проект</strong>
       <span class="small" id="ed-state">загрузка…</span>
       <span id="ed-notice" class="meta"></span>
+      <div class="saves" id="ed-saves">
+        <button type="button" class="btn btn-ghost" id="ed-saves-toggle" aria-expanded="false">
+          Сохранения проекта
+        </button>
+        <div class="saves-panel" id="ed-saves-panel" hidden></div>
+      </div>
     </div>
     <div class="editor">
       <section class="side">
@@ -80,6 +87,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
   const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
+  const saves = el.querySelector('#ed-saves') as HTMLElement
+  const savesToggle = el.querySelector('#ed-saves-toggle') as HTMLButtonElement
+  const savesPanel = el.querySelector('#ed-saves-panel') as HTMLElement
 
   let project: Project | null = null
   let assets = new Map<string, AssetInfo>()
@@ -90,6 +100,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let playIndex = 0
   let timelineTime = 0
   let stopped = false
+  let versions: { refresh: () => Promise<void> } | null = null
   let renders: { stop: () => void } | null = null
   let assetTimer = 0
 
@@ -410,6 +421,46 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   )
   showTab('source')
 
+  function closeSaves(): void {
+    savesPanel.hidden = true
+    savesToggle.setAttribute('aria-expanded', 'false')
+    document.removeEventListener('pointerdown', onSavesPointerDown, true)
+  }
+
+  function onSavesPointerDown(event: PointerEvent): void {
+    if (!saves.contains(event.target as Node)) closeSaves()
+  }
+
+  savesToggle.addEventListener('click', () => {
+    if (!savesPanel.hidden) {
+      closeSaves()
+      return
+    }
+    if (!versions) {
+      versions = mountVersions(
+        savesPanel,
+        projectId,
+        restored => {
+          remember()
+          project = restored
+          timelineTime = 0
+          render()
+          if (playing) seek(0)
+          notice('Вернулись к сохранённой точке')
+          closeSaves()
+        },
+        async () => {
+          if (project && saver.pending()) await saver.flush(project)
+        },
+      )
+    } else {
+      void versions.refresh()
+    }
+    savesPanel.hidden = false
+    savesToggle.setAttribute('aria-expanded', 'true')
+    document.addEventListener('pointerdown', onSavesPointerDown, true)
+  })
+
   function applyClips(clips: Clip[]): void {
     if (!project) return
     remember()
@@ -573,6 +624,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       stopped = true
       window.clearTimeout(assetTimer)
       document.removeEventListener('keydown', onKey)
+      closeSaves()
       renders?.stop()
       subtitles.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
