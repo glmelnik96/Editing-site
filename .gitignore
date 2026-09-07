@@ -7,6 +7,7 @@ __pycache__/
 data/
 .env*
 !.env.example
+.superpowers/
 web/node_modules/
 web/dist/
 .npm/
