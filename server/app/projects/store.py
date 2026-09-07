@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from server.app.config import Settings
+from server.app.jobs import cancel_jobs_for_target
 from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
 from server.app.projects.snap import snap_clips
 from server.app.storage import asset_dir, project_dir, render_dir, render_url, subs_dir, transcript_path
@@ -195,11 +196,17 @@ def delete_project(
     Сначала запись, потом файлы, как везде: упавший процесс не оставит запись без файлов.
     В каталоге лежат готовые ролики и кэш субтитров — по файлу на каждую версию, для которой
     собирали ролик, так что без уборки он растёт с каждой правкой документа.
+
+    Задания проекта отменяются в той же транзакции: внешнего ключа на проект у jobs нет, и без
+    отмены идущая сборка кодирует ещё час впустую, а её INSERT в renders падает по ключу уже
+    после того, как файл записан на диск.
     """
     with transaction(conn):
         cur = conn.execute(
             "DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
         )
+        if cur.rowcount:
+            cancel_jobs_for_target(conn, project_id)
     if cur.rowcount == 0:
         return False
     shutil.rmtree(project_dir(settings, user_id, project_id), ignore_errors=True)
@@ -248,6 +255,9 @@ def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, p
                 "UPDATE projects SET status = 'finished', finished_at = ?, updated_at = ? WHERE id = ?",
                 (now, now, project_id),
             )
+            # Момент, когда проект перестаёт принимать работу, — он же момент отмены его заданий:
+            # иначе доехавшая сборка положит ролик уже после того, как мы снесли все рендеры.
+            cancel_jobs_for_target(conn, project_id)
         project = {**project, "status": "finished", "finished_at": now, "updated_at": now}
     # Рендеры завершённого проекта не нужны никому: они собираются заново из документа.
     delete_project_renders(conn, settings, user_id, project_id)

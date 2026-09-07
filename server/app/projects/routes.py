@@ -286,6 +286,10 @@ def render(
 ) -> RenderQueued:
     """Ставит сборку в очередь. Ход виден в задании, готовый ролик появится в списке рендеров."""
     project = _owned(conn, user, project_id)
+    # Завершение сносит рендеры проекта: ролик, собранный после него, воскрес бы там,
+    # где человек только что всё убрал.
+    if project["status"] != "draft":
+        raise ApiError(422, "project_finished", "Проект завершён, собрать его заново нельзя")
     if not project["doc"].get("clips"):
         raise ApiError(422, "empty_project", "В проекте нет клипов")
     settings = request.app.state.settings

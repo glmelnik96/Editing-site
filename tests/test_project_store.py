@@ -3,6 +3,7 @@ import json
 import pytest
 
 from server.app.config import Settings
+from server.app.jobs import enqueue_job
 from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     ProjectConflict,
@@ -180,6 +181,54 @@ def test_delete_takes_the_project_folder_with_it(conn, settings):
     assert folder.exists(), "чужое удаление не должно трогать файлы"
     assert delete_project(conn, settings, USER, p["id"]) is True
     assert not folder.exists()
+
+
+def job_status(conn, job_id: str) -> str:
+    return conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()["status"]
+
+
+def test_delete_cancels_the_jobs_of_the_project(conn, settings):
+    """ffmpeg может кодировать ещё час после того, как проекта не стало: отмена — это его стоп-кран.
+
+    Без неё воркер доводит сборку до конца, INSERT в renders падает по внешнему ключу, на диске
+    остаётся недописанный файл, а полоса cpu занята заданием, которое уже никому не нужно.
+    """
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    job_id = enqueue_job(conn, user_id=USER, type_="render", target_id=p["id"])
+    conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
+
+    assert delete_project(conn, settings, USER, p["id"]) is True
+    assert job_status(conn, job_id) == "canceled"
+
+
+def test_failed_delete_leaves_the_jobs_alone(conn, settings):
+    """Чужое удаление ничего не удалило — значит и отменять нечего."""
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    job_id = enqueue_job(conn, user_id=USER, type_="render", target_id=p["id"])
+
+    assert delete_project(conn, settings, OTHER, p["id"]) is False
+    assert job_status(conn, job_id) == "queued"
+
+
+def test_finish_cancels_the_jobs_of_the_project(conn, settings):
+    """Иначе у завершённого проекта появится ролик, который человек только что убрал:
+    finish сносит рендеры, а доехавшая сборка кладёт новый уже после этого."""
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    job_id = enqueue_job(conn, user_id=USER, type_="render", target_id=p["id"])
+    conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
+
+    finish_project(conn, settings, USER, p["id"])
+    assert job_status(conn, job_id) == "canceled"
+
+
+def test_finished_job_is_not_touched_by_delete(conn, settings):
+    """Отмена не переписывает историю: завершённое задание остаётся выполненным."""
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    job_id = enqueue_job(conn, user_id=USER, type_="render", target_id=p["id"])
+    conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
+
+    delete_project(conn, settings, USER, p["id"])
+    assert job_status(conn, job_id) == "done"
 
 
 def test_assets_of_lists_every_referenced_asset(conn, settings):
