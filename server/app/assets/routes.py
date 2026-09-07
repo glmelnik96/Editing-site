@@ -405,8 +405,13 @@ def delete_transcript(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     """Убирает и строку, и файл. 404 только когда нет ни того, ни другого: после сбоя они могли
-    разъехаться, и тогда удаление обязано вычистить остаток, а не сказать «удалять нечего»."""
+    разъехаться, и тогда удаление обязано вычистить остаток, а не сказать «удалять нечего».
+
+    Пока расшифровка идёт — нельзя: доехавший воркер молча вернёт удалённый файл. Для PUT
+    эту гонку уже закрывали тем же отказом.
+    """
     asset = _owned(conn, user, asset_id)
+    _refuse_while_transcribing(conn, asset_id)
     cur = conn.execute(
         "DELETE FROM transcripts WHERE asset_id = ? AND user_id = ?", (asset_id, user.id)
     )

@@ -320,6 +320,15 @@ def test_agent_works_with_a_token(bearer_client, settings):
     assert bearer_client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 202
 
 
+def test_delete_is_refused_while_our_job_is_running(client, login_as, settings):
+    """Для PUT это уже чинили: доехавший воркер молча вернёт удалённый файл."""
+    login_as()
+    ready_asset(client, settings)
+    assert client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 202
+    r = client.delete(f"/api/v1/assets/{ASSET}/transcript")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "already_queued"
+
+
 def test_transcript_requires_auth(client):
     assert client.get(f"/api/v1/assets/{ASSET}/transcript").status_code == 401
     assert client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 401
