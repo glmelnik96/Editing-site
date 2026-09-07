@@ -33,7 +33,12 @@ function percent(progress: number): number {
   return Math.round(Math.min(1, Math.max(0, progress)) * 100)
 }
 
-export function mountRender(el: HTMLElement, projectId: string, onBeforeStart: () => Promise<void>) {
+export function mountRender(
+  el: HTMLElement,
+  projectId: string,
+  onBeforeStart: () => Promise<void>,
+  onReady?: () => void,
+) {
   el.innerHTML = `
     <main class="card">
       <h3>Сборка</h3>
@@ -152,7 +157,10 @@ export function mountRender(el: HTMLElement, projectId: string, onBeforeStart: (
     jobId = null
     window.clearTimeout(timer)
     if (job.status === 'failed') showError(job.error || 'Сборка не удалась')
-    if (job.status === 'done') await refresh().catch(showError)
+    if (job.status === 'done') {
+      onReady?.()
+      await refresh().catch(showError)
+    }
   }
 
   async function start(quality: 'draft' | 'final'): Promise<void> {

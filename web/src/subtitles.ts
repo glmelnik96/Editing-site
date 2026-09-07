@@ -18,6 +18,8 @@ export type SubtitleHandlers = {
   onChange: (cues: Cue[], mode?: 'burn' | 'soft') => void
   /** Собранный сервером проект: у него уже новая версия, редактор берёт его целиком. */
   onProject: (project: Project) => void
+  /** Дождаться, пока очередь правок доедет: иначе сборка реплик получит конфликт версий. */
+  flush: () => Promise<void>
   onSeek: (seconds: number) => void
 }
 
@@ -33,6 +35,17 @@ export function cueTrouble(cues: Cue[], index: number, total: number): string {
   if (cue.text.length > 200) return 'длиннее 200 знаков'
   if (cue.text.split('\n').length > 2) return 'больше двух строк'
   return ''
+}
+
+/** Правка клипа реплик не меняет: карточки незачем пересобирать, набор в textarea живёт до блюра. */
+export function sameSubtitleView(a: Project | null, b: Project | null): boolean {
+  const left = a?.doc.subtitles
+  const right = b?.doc.subtitles
+  if (left === right) return true
+  if (!left || !right) return !left && !right
+  return left.source === right.source
+    && left.mode === right.mode
+    && JSON.stringify(left.cues ?? []) === JSON.stringify(right.cues ?? [])
 }
 
 /** Разрезать реплику пополам по времени: текст уезжает в первую половину целиком. */
@@ -217,6 +230,11 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
         poll()
         return
       }
+      if (e instanceof ApiError && e.code === 'transcript_exists') {
+        hasTranscript = true
+        draw()
+        return
+      }
       showError(e)
     }
   }
@@ -266,6 +284,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   async function build(): Promise<void> {
     if (!assetId) return
     try {
+      await handlers.flush()
       const mode = project?.doc.subtitles?.mode ?? 'burn'
       handlers.onProject(await generateSubtitles(projectId, assetId, mode))
     } catch (e) {
@@ -274,10 +293,22 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   }
 
   return {
-    /** Проект изменился: перерисовать карточки. */
+    /** Проект изменился: перерисовать карточки, если реплики или режим другие. */
     setProject(next: Project): void {
+      if (sameSubtitleView(project, next)) {
+        project = next
+        return
+      }
       project = next
       draw()
+    },
+    /**
+     * Подставить документ без перерисовки: текст уже в textarea, а innerHTML стёр бы набор
+     * в соседней карточке. Редактор зовёт это после правки текста, когда число реплик и
+     * времена те же.
+     */
+    adopt(next: Project): void {
+      project = next
     },
     /** Запись, из которой берётся расшифровка. */
     setAsset(id: string | null, transcript: boolean): void {
@@ -299,6 +330,10 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     stop(): void {
       stopped = true
       window.clearTimeout(timer)
+    },
+    /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи. */
+    busy(): boolean {
+      return jobId !== null
     },
     alive,
   }

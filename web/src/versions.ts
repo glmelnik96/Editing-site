@@ -8,7 +8,12 @@ function when(iso: string): string {
   return iso.replace('T', ' ').slice(11, 19)
 }
 
-export function mountVersions(el: HTMLElement, projectId: string, onRestored: (p: Project) => void) {
+export function mountVersions(
+  el: HTMLElement,
+  projectId: string,
+  onRestored: (p: Project) => void,
+  flush: () => Promise<void>,
+) {
   el.innerHTML = `
     <main class="card">
       <h3>Точки сохранения</h3>
@@ -40,6 +45,7 @@ export function mountVersions(el: HTMLElement, projectId: string, onRestored: (p
       b.addEventListener('click', async () => {
         if (!window.confirm(`Вернуться к точке «${b.dataset.title}»? Текущее состояние заменится.`)) return
         try {
+          await flush()
           onRestored(await restoreVersion(projectId, b.dataset.restore ?? ''))
           await refresh()
         } catch (e) {
@@ -54,6 +60,7 @@ export function mountVersions(el: HTMLElement, projectId: string, onRestored: (p
     event.preventDefault()
     const label = String(new FormData(form).get('label') ?? '').trim()
     try {
+      await flush()
       await createCheckpoint(projectId, label)
       form.reset()
       await refresh()

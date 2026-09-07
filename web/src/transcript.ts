@@ -439,7 +439,20 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
   return {
     /** Выбранный в панели исходника файл: тот же самый файл панель не перезагружает. */
     setAsset(next: Asset | null): void {
-      if (next?.id === asset?.id) return
+      if (next?.id === asset?.id) {
+        // Тот же файл, но расшифровка доехала, пока панель была открыта.
+        if (next?.files.transcript && !asset?.files.transcript) {
+          asset = next
+          waiting = false
+          jobId = null
+          window.clearTimeout(timer)
+          jobBox.hidden = true
+          startBox.hidden = true
+          hint.textContent = 'Загружаю текст…'
+          void load()
+        }
+        return
+      }
       asset = next
       reset()
       if (!next) {
@@ -470,6 +483,11 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       const box = textBox.getBoundingClientRect()
       const spot = node.getBoundingClientRect()
       if (spot.top < box.top || spot.bottom > box.bottom) node.scrollIntoView({ block: 'nearest' })
+    },
+
+    /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи. */
+    busy(): boolean {
+      return jobId !== null
     },
 
     /** Остановить опрос: редактор зовёт при уходе с экрана. */

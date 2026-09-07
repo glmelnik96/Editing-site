@@ -5,8 +5,8 @@
  * новый список, перерисовывает и просит сохранить. Ответ сервера заменяет документ целиком:
  * там уже подтянутые резы, флаги подтверждения и новая версия.
  */
-import { api, ApiError } from './api'
-import type { Asset } from './assets'
+import { ApiError } from './api'
+import { POLL_MS, listAssets, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
 import { aspectRatio, musicVolume, seekPlan, stepPlan } from './playback'
@@ -94,6 +94,53 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
   let renders: { stop: () => void } | null = null
+  let assetTimer = 0
+
+  function markNews(name: string): void {
+    if (tab === name) return
+    tabsBar.querySelector<HTMLButtonElement>(`.tab[data-tab="${name}"]`)?.classList.add('news')
+  }
+
+  function applyAssets(list: Asset[]): void {
+    const previous = new Map(assetList.map(a => [a.id, a]))
+    assetList = list
+    assets = new Map(list.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
+    source.setAssets(list)
+    const current = source.current()
+    if (current) {
+      const fresh = list.find(a => a.id === current.id) ?? current
+      const hadTranscript = Boolean(previous.get(current.id)?.files.transcript)
+      const hasTranscript = Boolean(fresh.files.transcript)
+      transcript.setAsset(fresh)
+      subtitles.setAsset(fresh.id, hasTranscript)
+      if (hasTranscript && !hadTranscript) {
+        markNews('transcript')
+        markNews('subtitles')
+      }
+    }
+    if (project?.doc.music) {
+      const musicAsset = list.find(a => a.id === project?.doc.music?.asset_id)
+      if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
+    }
+  }
+
+  function pollAssets(): void {
+    window.clearTimeout(assetTimer)
+    if (stopped) return
+    // Опрос живёт, пока открыт редактор: расшифровку заказывают уже после того, как файлы
+    // дошли до proxy_ready, и без повторного тика вкладка субтитров об этом не узнает.
+    assetTimer = window.setTimeout(() => {
+      void listAssets()
+        .then(r => {
+          if (stopped) return
+          applyAssets(r.assets)
+          pollAssets()
+        })
+        .catch(() => {
+          if (!stopped) pollAssets()
+        })
+    }, POLL_MS)
+  }
 
   /** Запомнить состояние ДО правки: именно к нему вернёт кнопка «Отменить». */
   function remember(): void {
@@ -125,6 +172,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const saver = createSaver({
     onSaved: saved => {
       if (stopped) return
+      errorBox.hidden = true
       project = saved
       render()
     },
@@ -136,7 +184,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       notice('Проект изменился в другом месте, показана свежая версия')
     },
     onInvalid: (errors: FieldError[]) => {
-      notice(`Не сохранено: ${errors.map(e => `${e.field} — ${e.message}`).join('; ')}`)
+      // Причина не гаснет по таймеру: отклонённый документ надо поправить, а не переждать.
+      errorBox.hidden = false
+      errorBox.textContent = `Не сохранено: ${errors.map(e => `${e.field} — ${e.message}`).join('; ')}`
     },
     onError: showError,
     onStateChange: state => (stateBox.textContent = STATE_TEXT[state]),
@@ -280,6 +330,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       render()
       notice('Реплики собраны')
     },
+    flush: async () => {
+      if (project && saver.pending()) await saver.flush(project)
+    },
     onSeek: seconds => {
       timelineTime = Math.max(0, seconds)
       seek(timelineTime)
@@ -300,8 +353,19 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       style: было?.style ?? 'default',
       cues,
     }
+    const previous = было?.cues ?? []
+    // Текст живёт в textarea до блюра: полный render сотрёт набор в соседней карточке.
+    // Времена, режим и число реплик меняют вёрстку — там перерисовка нужна.
+    const textOnly =
+      cues.length === previous.length
+      && subs.mode === (было?.mode ?? 'burn')
+      && cues.every((c, i) => {
+        const prev = previous[i]
+        return prev !== undefined && c.start === prev.start && c.end === prev.end
+      })
     project = { ...project, doc: { ...project.doc, subtitles: subs } }
-    render()
+    if (textOnly) subtitles.adopt(project)
+    else render()
     saver.schedule(project)
   }
 
@@ -335,20 +399,31 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (mounted.has(name) || !booted) return
     mounted.add(name)
     if (name === 'versions') {
-      versions = mountVersions(panels.get('versions') as HTMLElement, projectId, restored => {
-        remember()
-        project = restored
-        timelineTime = 0
-        render()
-        // Документ подменили целиком: играющий клип мог исчезнуть, встаём заново на начало.
-        if (playing) seek(0)
-        notice('Вернулись к сохранённой точке')
-      })
+      versions = mountVersions(
+        panels.get('versions') as HTMLElement,
+        projectId,
+        restored => {
+          remember()
+          project = restored
+          timelineTime = 0
+          render()
+          if (playing) seek(0)
+          notice('Вернулись к сохранённой точке')
+        },
+        async () => {
+          if (project && saver.pending()) await saver.flush(project)
+        },
+      )
     }
     if (name === 'renders') {
-      renders = mountRender(panels.get('renders') as HTMLElement, projectId, async () => {
-        if (project && saver.pending()) await saver.flush(project)
-      })
+      renders = mountRender(
+        panels.get('renders') as HTMLElement,
+        projectId,
+        async () => {
+          if (project && saver.pending()) await saver.flush(project)
+        },
+        () => markNews('renders'),
+      )
     }
   }
 
@@ -523,22 +598,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   async function boot(): Promise<void> {
     const [loaded, list] = await Promise.all([
       loadProject(projectId),
-      api<{ assets: Asset[] }>('/api/v1/assets'),
+      listAssets(),
     ])
     if (stopped) return
     project = loaded
-    assetList = list.assets
-    assets = new Map(list.assets.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
-    source.setAssets(list.assets)
-    if (project.doc.music) {
-      const musicAsset = list.assets.find(a => a.id === project?.doc.music?.asset_id)
-      if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
-    }
+    applyAssets(list.assets)
     stateBox.textContent = STATE_TEXT.idle
     booted = true
-    // Панель открытой вкладки могла ждать загрузки проекта — теперь ей есть с чем работать.
     openPanel(tab)
     render()
+    pollAssets()
   }
 
   void boot().catch(showError)
@@ -546,6 +615,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   return {
     stop(): void {
       stopped = true
+      window.clearTimeout(assetTimer)
       document.removeEventListener('keydown', onKey)
       renders?.stop()
       transcript.stop()

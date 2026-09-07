@@ -98,7 +98,9 @@ export function createSaver(options: SaverOptions = {}) {
     let saved: Project | null = null
     try {
       saved = await request(project)
-      options.onSaved?.(saved)
+      // На экране может лежать более новая правка: отдавать ей предыдущий ответ нельзя.
+      // Версию очередь всё равно возьмёт из saved в finally.
+      if (queued === null) options.onSaved?.(saved)
     } catch (error) {
       lastError = error
       if (error instanceof ApiError && error.status === 409) {
@@ -109,6 +111,7 @@ export function createSaver(options: SaverOptions = {}) {
         else options.onError?.(error)
       } else if (error instanceof ApiError && error.status === 422) {
         queued = null
+        failed = true
         options.onInvalid?.(invalidErrors(error))
       } else {
         // Сеть, 401, 500: правку не выбрасываем, но и повторять сами не будем — следующая

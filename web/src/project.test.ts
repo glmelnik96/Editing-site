@@ -43,6 +43,43 @@ describe('автосохранение', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
+  it('не отдаёт наверх ответ, пока в очереди лежит более новая правка', async () => {
+    // Иначе на экране мигнёт документ, который человек уже успел изменить.
+    let releaseFirst: (p: Project) => void = () => {}
+    let releaseSecond: (p: Project) => void = () => {}
+    const request = vi.fn((_p: Project) =>
+      request.mock.calls.length === 1
+        ? new Promise<Project>(resolve => (releaseFirst = resolve))
+        : new Promise<Project>(resolve => (releaseSecond = resolve)),
+    )
+    const onSaved = vi.fn()
+    const saver = createSaver({ request, delay: 0, onSaved })
+    const first = saver.flush(project(1, [{ id: 'a' }]))
+    const second = saver.flush(project(1, [{ id: 'b' }]))
+    releaseFirst(project(2, [{ id: 'a' }]))
+    await tick()
+    expect(onSaved).not.toHaveBeenCalled()
+    releaseSecond(project(3, [{ id: 'b' }]))
+    await first
+    await second
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(onSaved.mock.calls[0][0].doc.clips).toEqual([{ id: 'b' }])
+  })
+
+  it('после отказа проверки состояние — failed, а не idle', async () => {
+    const states: string[] = []
+    const saver = createSaver({
+      request: async () => {
+        throw new ApiError(422, 'invalid_project', 'плохо', { errors: [{ field: 'clips', message: 'пусто' }] })
+      },
+      delay: 0,
+      onInvalid: () => {},
+      onStateChange: s => states.push(s),
+    })
+    await flushFailing(saver, project(1))
+    expect(states.at(-1)).toBe('failed')
+  })
+
   it('отдаёт наверх нормализованный ответ сервера', async () => {
     const saved = project(7, [{ id: 'server' }])
     const onSaved = vi.fn()

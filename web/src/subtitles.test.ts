@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cueTrouble, plural, splitCue } from './subtitles'
+import type { Project } from './project'
+import { cueTrouble, plural, sameSubtitleView, splitCue } from './subtitles'
 
 const cue = (start: number, end: number, text = 'раз два три четыре') => ({ start, end, text })
 
@@ -55,5 +56,27 @@ describe('подсказка о негодной реплике', () => {
   it('видит перебор по длине и по строкам', () => {
     expect(cueTrouble([cue(0, 1, 'я'.repeat(201))], 0, 10)).toBe('длиннее 200 знаков')
     expect(cueTrouble([cue(0, 1, 'раз\nдва\nтри')], 0, 10)).toBe('больше двух строк')
+  })
+})
+
+describe('когда карточки незачем пересобирать', () => {
+  const view = (cues = [cue(0, 2)], mode: 'burn' | 'soft' = 'burn'): Project =>
+    ({
+      id: 'p', name: 'x', version: 1, status: 'draft', created_at: '', updated_at: '', finished_at: null,
+      doc: {
+        output: { aspect: '16:9', fit: 'pad', fps: 30 }, clips: [], music: null,
+        subtitles: { source: 'cues', asset_id: null, mode, style: 'default', cues },
+      },
+    }) as Project
+
+  it('не перерисовывает карточки, когда изменились только клипы', () => {
+    const a = view()
+    const b = { ...a, version: 2, doc: { ...a.doc, clips: [{ id: 'c1' }] } } as Project
+    expect(sameSubtitleView(a, b)).toBe(true)
+  })
+
+  it('перерисовывает, когда реплики действительно изменились', () => {
+    expect(sameSubtitleView(view([cue(0, 2)]), view([cue(0, 2, 'другое')]))).toBe(false)
+    expect(sameSubtitleView(view([cue(0, 2)], 'burn'), view([cue(0, 2)], 'soft'))).toBe(false)
   })
 })
