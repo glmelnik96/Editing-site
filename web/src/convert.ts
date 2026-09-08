@@ -17,6 +17,7 @@ const CONVERT_JOB_TEXT: Record<string, string> = {
   canceled: 'отменено',
 }
 const READY = new Set(['ready', 'proxy_ready'])
+const CONVERTIBLE = new Set(['video', 'audio'])
 
 export type ConversionCard = {
   id: string
@@ -31,6 +32,11 @@ export type ConversionCard = {
 export function convertFormatsFor(kind: string): string[] {
   const audio = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg']
   return kind === 'audio' ? audio : [...audio, 'mp4', 'webm']
+}
+
+/** Готовое видео или звук: субтитры в конвертер не кладём. */
+export function convertibleAsset(asset: { kind: string; status: string }): boolean {
+  return CONVERTIBLE.has(asset.kind) && READY.has(asset.status)
 }
 
 export function convertHint(): string {
@@ -124,7 +130,7 @@ export function mountConvert(el: HTMLElement) {
   }
 
   function readyList(): Asset[] {
-    return assets.filter(a => READY.has(a.status))
+    return assets.filter(convertibleAsset)
   }
 
   function current(): Asset | undefined {

@@ -4,11 +4,19 @@ import {
   convertHint,
   convertJobText,
   conversionsListHtml,
+  convertibleAsset,
   emptyConvertHtml,
   formatChipsHtml,
 } from './convert'
 
 describe('convert screen helpers', () => {
+  it('берёт только готовые видео и звук, не субтитры', () => {
+    expect(convertibleAsset({ kind: 'video', status: 'ready' })).toBe(true)
+    expect(convertibleAsset({ kind: 'audio', status: 'proxy_ready' })).toBe(true)
+    expect(convertibleAsset({ kind: 'subtitle', status: 'ready' })).toBe(false)
+    expect(convertibleAsset({ kind: 'video', status: 'analyzing' })).toBe(false)
+  })
+
   it('даёт mp4 и webm только видео', () => {
     expect(convertFormatsFor('video')).toEqual([
       'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'mp4', 'webm',
