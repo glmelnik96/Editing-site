@@ -9,6 +9,7 @@ export type Route =
   | { name: 'home' }
   | { name: 'files' }
   | { name: 'new' }
+  | { name: 'convert' }
   | { name: 'projects' }
   | { name: 'settings' }
   | { name: 'admin' }
@@ -30,6 +31,8 @@ export function parseRoute(hash: string): Route {
       return { name: 'files' }
     case '/new':
       return { name: 'new' }
+    case '/convert':
+      return { name: 'convert' }
     case '/projects':
       return { name: 'projects' }
     case '/settings':

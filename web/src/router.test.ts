@@ -10,6 +10,7 @@ test('пустой адрес, «#» и «#/» — это главная', () =>
 test('у каждого экрана свой адрес', () => {
   expect(parseRoute('#/files')).toEqual({ name: 'files' })
   expect(parseRoute('#/new')).toEqual({ name: 'new' })
+  expect(parseRoute('#/convert')).toEqual({ name: 'convert' })
   expect(parseRoute('#/projects')).toEqual({ name: 'projects' })
   expect(parseRoute('#/settings')).toEqual({ name: 'settings' })
   expect(parseRoute('#/admin')).toEqual({ name: 'admin' })
@@ -27,4 +28,5 @@ test('мусор в адресе уводит на главную, а не в р
   expect(parseRoute('#/p/a b')).toEqual({ name: 'home' })
   expect(parseRoute('#/p/a/b')).toEqual({ name: 'home' })
   expect(parseRoute('#/files/')).toEqual({ name: 'home' })
+  expect(parseRoute('#/convert/')).toEqual({ name: 'home' })
 })
