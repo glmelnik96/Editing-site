@@ -2,8 +2,8 @@
  * Записи (ассеты): типы, общее форматирование и запросы к API.
  *
  * Разметка списка записей живёт в `files.ts`, выбор записи — в `newproject.ts`. Здесь остаётся
- * только то, что нужно нескольким экранам сразу: формат размера и времени, состояние обработки,
- * кадр из полоски и память о выбранной записи.
+ * только то, что нужно нескольким экранам сразу: формат размера и времени, состояние обработки
+ * и кадр из полоски.
  */
 import { api } from './api'
 import { assetData, type AssetData } from './strip'
@@ -153,29 +153,11 @@ export function paintFrames(root: ParentNode, cache: Map<string, Promise<AssetDa
   })
 }
 
-/* ═══ Память о выбранной записи ═════════════════════════════════════════════ */
-
-const PICK_KEY = 'newproject:asset'
-
-/**
- * Запомнить запись, выбранную кнопкой «В проект».
- *
- * Через адрес выбор не передать: `parseRoute` разбирает только путь и о параметрах не знает,
- * а трогать маршрутизатор ради одной кнопки дороже, чем положить выбор в сессию вкладки.
- */
-export function rememberPick(assetId: string): void {
-  try {
-    sessionStorage.setItem(PICK_KEY, assetId)
-  } catch {
-    // Приватный режим или запрет на хранилище: экран нового проекта просто спросит выбор заново.
-  }
-}
-
-/** Прочитать и забыть: выбор одноразовый, иначе он всплывёт при следующем заходе на #/new. */
+/** Прочитать и забыть выбранную запись для экрана нового проекта. */
 export function takePick(): string | null {
   try {
-    const id = sessionStorage.getItem(PICK_KEY)
-    sessionStorage.removeItem(PICK_KEY)
+    const id = sessionStorage.getItem('newproject:asset')
+    sessionStorage.removeItem('newproject:asset')
     return id
   } catch {
     return null
