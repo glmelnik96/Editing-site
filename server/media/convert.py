@@ -8,8 +8,10 @@ from __future__ import annotations
 from server.app.config import Settings
 from server.media.run import MediaError, run_tool
 
-FORMATS = ("mp3", "m4a", "wav", "mp4")
+FORMATS = ("mp3", "m4a", "aac", "wav", "flac", "ogg", "mp4", "webm")
 MP3_ENCODER = "libmp3lame"
+WEBM_VIDEO = "libvpx-vp9"
+WEBM_AUDIO = "libopus"
 SHORT_SIDE = 1080
 # Короткая сторона не больше 1080, кадр меньше не растягиваем (min).
 MP4_SCALE = (
@@ -44,8 +46,12 @@ def convert_ext(fmt: str) -> str:
 CONVERT_BYTES_PER_SEC = {
     "mp3": 192_000 // 8,
     "m4a": 192_000 // 8,
+    "aac": 192_000 // 8,
+    "ogg": 192_000 // 8,
     "wav": 48_000 * 2 * 2,
+    "flac": 48_000 * 2 * 2,
     "mp4": 2_000_000 // 8,
+    "webm": 2_000_000 // 8,
 }
 SIZE_SAFETY = 2
 
@@ -63,6 +69,15 @@ def has_mp3_encoder(settings: Settings) -> bool:
         return False
 
 
+def has_webm_encoder(settings: Settings) -> bool:
+    """Есть ли VP9 и Opus. Нет любого — 503, не сырой stderr ffmpeg."""
+    try:
+        listing = run_tool([settings.ffmpeg_path, "-v", "error", "-encoders"], timeout=60)
+        return WEBM_VIDEO in listing and WEBM_AUDIO in listing
+    except MediaError:
+        return False
+
+
 def build_convert_command(
     settings: Settings,
     src: str,
@@ -71,6 +86,7 @@ def build_convert_command(
     fmt: str,
     has_audio: bool = True,
     mp3_encoder: bool = True,
+    webm_encoder: bool = True,
 ) -> list[str]:
     """Список аргументов из белого списка. dst обычно *.part — контейнер задаём явно через -f."""
     if fmt not in FORMATS:
@@ -79,6 +95,11 @@ def build_convert_command(
         raise ConvertUnavailable(
             "encoder_unavailable",
             "В этой сборке ffmpeg нет кодека MP3, выберите m4a или wav",
+        )
+    if fmt == "webm" and not webm_encoder:
+        raise ConvertUnavailable(
+            "encoder_unavailable",
+            "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4",
         )
 
     args = [
@@ -90,8 +111,25 @@ def build_convert_command(
         args += ["-vn", "-c:a", MP3_ENCODER, "-b:a", "192k", "-ar", "44100", "-ac", "2", "-f", "mp3"]
     elif fmt == "m4a":
         args += ["-vn", "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-f", "ipod"]
+    elif fmt == "aac":
+        args += ["-vn", "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-f", "adts"]
     elif fmt == "wav":
         args += ["-vn", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-f", "wav"]
+    elif fmt == "flac":
+        args += ["-vn", "-c:a", "flac", "-f", "flac"]
+    elif fmt == "ogg":
+        args += ["-vn", "-c:a", "libvorbis", "-q:a", "5", "-ac", "2", "-f", "ogg"]
+    elif fmt == "webm":
+        args += [
+            "-vf", MP4_SCALE,
+            "-c:v", WEBM_VIDEO, "-crf", "32", "-b:v", "0",
+            "-deadline", "realtime", "-cpu-used", "8",
+        ]
+        if has_audio:
+            args += ["-c:a", WEBM_AUDIO, "-b:a", "96k"]
+        else:
+            args += ["-an"]
+        args += ["-f", "webm"]
     else:
         args += [
             "-vf", MP4_SCALE,

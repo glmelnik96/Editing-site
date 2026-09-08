@@ -23,7 +23,7 @@ _EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _ASSET_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/([^/]+)$")
 _RENDER_URL_RE = re.compile(r"^/files/([^/]+)/projects/([^/]+)/renders/([^/]+)$")
 _CONVERSION_URL_RE = re.compile(r"^/files/([^/]+)/assets/([^/]+)/conversions/([^/]+)$")
-CONVERT_EXTS = {"mp3", "m4a", "wav", "mp4"}
+CONVERT_EXTS = {"mp3", "m4a", "aac", "wav", "flac", "ogg", "mp4", "webm"}
 
 
 def safe_ext(filename: str) -> str:

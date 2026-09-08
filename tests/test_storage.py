@@ -131,6 +131,12 @@ def test_parse_file_url_understands_conversions():
     assert parse_file_url(url) == (
         "usr_0123456789ab", "ast_0123456789ab", "cnv_0123456789ab.mp3", "conversion"
     )
+    assert parse_file_url(
+        "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions/cnv_0123456789ab.webm"
+    ) == ("usr_0123456789ab", "ast_0123456789ab", "cnv_0123456789ab.webm", "conversion")
+    assert parse_file_url(
+        "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions/cnv_0123456789ab.aac"
+    ) == ("usr_0123456789ab", "ast_0123456789ab", "cnv_0123456789ab.aac", "conversion")
     base = "/files/usr_0123456789ab/assets/ast_0123456789ab/conversions"
     assert parse_file_url(f"{base}/../source.mp4") is None
     assert parse_file_url(f"{base}/evil.exe") is None

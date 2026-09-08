@@ -38,6 +38,7 @@ from server.media.convert import (
     build_convert_command,
     convert_ext,
     estimate_convert_bytes,
+    has_webm_encoder,
 )
 from server.media.probe import probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
@@ -366,6 +367,7 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
             settings, str(_source(settings, asset)), str(tmp),
             fmt=fmt, has_audio=bool(asset["has_audio"]),
             mp3_encoder=mp3_encoder_available(settings) if fmt == "mp3" else True,
+            webm_encoder=has_webm_encoder(settings) if fmt == "webm" else True,
         )
     except ConvertUnavailable as exc:
         raise MediaError(exc.code, exc.message) from exc

@@ -19,12 +19,13 @@ from server.app.jobs import enqueue_job
 from server.app.projects.store import active_renders
 from server.app.util import new_id
 from server.db.core import get_db, transaction
-from server.media.convert import FORMATS, has_mp3_encoder
+from server.media.convert import FORMATS, has_mp3_encoder, has_webm_encoder
 
 router = APIRouter(prefix="/api/v1", tags=["conversions"])
 
 READY = ("ready", "proxy_ready")
-AUDIO_FORMATS = {"mp3", "m4a", "wav"}
+AUDIO_FORMATS = {"mp3", "m4a", "aac", "wav", "flac", "ogg"}
+VIDEO_FORMATS = {"mp4", "webm"}
 
 
 class ConvertRequest(BaseModel):
@@ -74,8 +75,8 @@ def convert(
         raise ApiError(422, "asset_not_ready", "Файл ещё обрабатывается")
     if fmt in AUDIO_FORMATS and not asset["has_audio"]:
         raise ApiError(422, "no_audio", "В файле нет звука")
-    if fmt == "mp4" and asset["kind"] != "video":
-        raise ApiError(422, "not_video", "В mp4 можно собрать только видео")
+    if fmt in VIDEO_FORMATS and asset["kind"] != "video":
+        raise ApiError(422, "not_video", "В этот формат можно собрать только видео")
     duration = float(asset["duration"] or 0)
     settings = request.app.state.settings
     if duration > settings.max_total_duration_sec:
@@ -83,6 +84,10 @@ def convert(
     if fmt == "mp3" and not has_mp3_encoder(settings):
         raise ApiError(
             503, "encoder_unavailable", "В этой сборке ffmpeg нет кодека MP3, выберите m4a или wav"
+        )
+    if fmt == "webm" and not has_webm_encoder(settings):
+        raise ApiError(
+            503, "encoder_unavailable", "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4"
         )
 
     with transaction(conn):

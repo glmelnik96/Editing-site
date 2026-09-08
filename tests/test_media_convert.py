@@ -67,7 +67,7 @@ def test_mp4_without_audio_drops_the_sound_track():
 
 def test_unknown_format_is_invalid():
     with pytest.raises(ConvertInvalid) as exc:
-        build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webm")
+        build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="gif")
     assert exc.value.code == "invalid_format"
 
 
@@ -82,7 +82,58 @@ def test_missing_mp3_encoder_is_unavailable_not_raw_stderr():
 def test_convert_ext_matches_whitelist():
     assert convert_ext("mp3") == "mp3"
     assert convert_ext("m4a") == "m4a"
+    assert convert_ext("aac") == "aac"
     assert convert_ext("wav") == "wav"
+    assert convert_ext("flac") == "flac"
+    assert convert_ext("ogg") == "ogg"
     assert convert_ext("mp4") == "mp4"
+    assert convert_ext("webm") == "webm"
     with pytest.raises(ConvertInvalid):
         convert_ext("gif")
+
+
+def test_aac_is_adts_without_video():
+    args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="aac")
+    assert "-vn" in args
+    assert args[args.index("-c:a") + 1] == "aac"
+    assert args[args.index("-f") + 1] == "adts"
+    assert "libx264" not in args
+
+
+def test_flac_is_flac_without_video():
+    args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="flac")
+    assert "-vn" in args
+    assert args[args.index("-c:a") + 1] == "flac"
+    assert args[args.index("-f") + 1] == "flac"
+
+
+def test_ogg_is_vorbis_without_video():
+    args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="ogg")
+    assert "-vn" in args
+    assert args[args.index("-c:a") + 1] == "libvorbis"
+    assert args[args.index("-f") + 1] == "ogg"
+    assert "libx264" not in args
+
+
+def test_webm_is_vp9_opus_same_scale_as_mp4():
+    args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webm")
+    assert args[args.index("-c:v") + 1] == "libvpx-vp9"
+    assert args[args.index("-c:a") + 1] == "libopus"
+    assert args[args.index("-f") + 1] == "webm"
+    assert "libx264" not in args
+    scale = args[args.index("-vf") + 1]
+    assert "1080" in scale
+
+
+def test_webm_without_audio_drops_the_sound_track():
+    args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webm", has_audio=False)
+    assert "-an" in args
+    assert "-c:a" not in args
+
+
+def test_missing_webm_encoder_is_unavailable_not_raw_stderr():
+    with pytest.raises(ConvertUnavailable) as exc:
+        build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webm", webm_encoder=False)
+    assert exc.value.code == "encoder_unavailable"
+    assert "stderr" not in exc.value.message.lower()
+    assert "mp4" in exc.value.message.lower()

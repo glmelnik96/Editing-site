@@ -51,7 +51,7 @@ def test_unknown_format_is_422(client, login_as, settings):
     login_as()
     me = client.get("/api/v1/me").json()
     seed_asset(settings, me["id"])
-    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webm"})
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "gif"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_format"
 
 
@@ -119,6 +119,41 @@ def test_missing_mp3_encoder_is_503(client, login_as, settings, monkeypatch):
 
     monkeypatch.setattr(conv_routes, "has_mp3_encoder", lambda _s: False)
     r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "mp3"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
+
+
+def test_aac_convert_queues(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "aac"})
+    assert r.status_code == 202, r.text
+
+
+def test_webm_convert_queues_for_video(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webm"})
+    assert r.status_code == 202, r.text
+
+
+def test_audio_cannot_become_webm(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"], kind="audio", name="a.mp3")
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webm"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "not_video"
+
+
+def test_missing_webm_encoder_is_503(client, login_as, settings, monkeypatch):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    from server.app.conversions import routes as conv_routes
+
+    monkeypatch.setattr(conv_routes, "has_webm_encoder", lambda _s: False)
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webm"})
     assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
 
 
