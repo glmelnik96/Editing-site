@@ -172,6 +172,7 @@ def test_list_and_card_and_delete(client, login_as, settings):
         f"/files/{me['id']}/assets/{ASSET}/conversions/{cid}.mp3"
     )
     assert listing["conversions"][0]["expires_at"].startswith("2099")
+    assert listing["conversions"][0]["original_name"] == "встреча.mp4"
     card = client.get(f"/api/v1/conversions/{cid}").json()
     assert card["format"] == "mp3" and card["size"] == 100
 
@@ -226,6 +227,36 @@ def test_conversions_require_auth(client):
     assert client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "mp3"}).status_code == 401
     assert client.get(f"/api/v1/assets/{ASSET}/conversions").status_code == 401
     assert client.get("/api/v1/conversions/cnv_000000000001").status_code == 401
+    assert client.get("/api/v1/conversions").status_code == 401
+
+
+def test_list_all_conversions_is_mine_newest_first(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    a1 = seed_asset(settings, me["id"], asset_id="ast_000000000001", name="встреча.mp4")
+    a2 = seed_asset(settings, me["id"], asset_id="ast_000000000002", name="нарезка.mp4")
+    seed_conversion(
+        settings, me["id"], "cnv_00000000000a",
+        created_at="2026-01-01T00:00:00.000Z", asset_id=a1,
+    )
+    seed_conversion(
+        settings, me["id"], "cnv_00000000000b",
+        created_at="2026-02-01T00:00:00.000Z", asset_id=a2,
+    )
+    listing = client.get("/api/v1/conversions").json()["conversions"]
+    assert [c["id"] for c in listing] == ["cnv_00000000000b", "cnv_00000000000a"]
+    assert listing[0]["original_name"] == "нарезка.mp4"
+    assert listing[1]["original_name"] == "встреча.mp4"
+
+
+def test_list_all_conversions_hides_foreign(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    seed_conversion(settings, me["id"], "cnv_000000000001")
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    assert client.get("/api/v1/conversions").json()["conversions"] == []
 
 
 def test_deleting_an_asset_drops_conversion_files(client, login_as, settings):

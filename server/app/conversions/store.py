@@ -9,6 +9,11 @@ from server.db.core import transaction
 
 MAX_READY = 10
 
+_SELECT = (
+    "SELECT conversions.*, assets.original_name FROM conversions "
+    "JOIN assets ON assets.id = conversions.asset_id "
+)
+
 
 def _row(row: sqlite3.Row) -> dict:
     return {
@@ -19,21 +24,32 @@ def _row(row: sqlite3.Row) -> dict:
         "duration": row["duration"],
         "created_at": row["created_at"],
         "expires_at": row["expires_at"],
+        "original_name": row["original_name"],
         "download": conversion_url(row["user_id"], row["asset_id"], row["id"], row["format"]),
     }
 
 
 def list_conversions(conn: sqlite3.Connection, user_id: str, asset_id: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT * FROM conversions WHERE asset_id = ? AND user_id = ? ORDER BY created_at DESC, id",
+        _SELECT + "WHERE conversions.asset_id = ? AND conversions.user_id = ? "
+        "ORDER BY conversions.created_at DESC, conversions.id",
         (asset_id, user_id),
+    )
+    return [_row(r) for r in rows]
+
+
+def list_conversions_for_user(conn: sqlite3.Connection, user_id: str) -> list[dict]:
+    rows = conn.execute(
+        _SELECT + "WHERE conversions.user_id = ? ORDER BY conversions.created_at DESC, conversions.id",
+        (user_id,),
     )
     return [_row(r) for r in rows]
 
 
 def get_conversion(conn: sqlite3.Connection, user_id: str, conversion_id: str) -> dict | None:
     row = conn.execute(
-        "SELECT * FROM conversions WHERE id = ? AND user_id = ?", (conversion_id, user_id)
+        _SELECT + "WHERE conversions.id = ? AND conversions.user_id = ?",
+        (conversion_id, user_id),
     ).fetchone()
     return _row(row) if row else None
 

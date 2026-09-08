@@ -13,6 +13,7 @@ from server.app.conversions.store import (
     evict_oldest,
     get_conversion,
     list_conversions,
+    list_conversions_for_user,
 )
 from server.app.errors import ApiError
 from server.app.jobs import enqueue_job
@@ -45,6 +46,7 @@ class ConversionView(BaseModel):
     duration: float
     created_at: str
     expires_at: str
+    original_name: str
     download: str
 
 
@@ -118,6 +120,16 @@ def list_(
     _owned_asset(conn, user, asset_id)
     return ConversionList(
         conversions=[ConversionView(**c) for c in list_conversions(conn, user.id, asset_id)]
+    )
+
+
+@router.get("/conversions", response_model=ConversionList)
+def list_mine(
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> ConversionList:
+    return ConversionList(
+        conversions=[ConversionView(**c) for c in list_conversions_for_user(conn, user.id)]
     )
 
 
