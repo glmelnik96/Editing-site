@@ -31,7 +31,7 @@ describe('сводка вкладки Рендер', () => {
     const text = renderSummary(doc, 'final', 720)
     expect(text).toContain('Финал: 1080p, 9:16, поля, 30 к/с')
     expect(text).toContain('Музыка с приглушением под речь')
-    expect(text).toContain('Субтитры вжжены')
+    expect(text).toContain('Субтитры вжжёны в кадр')
     expect(text).toContain('Около 12 мин, если воркер свободен')
     expect(text).not.toContain('ffmpeg')
     expect(text).not.toContain('-filter_complex')

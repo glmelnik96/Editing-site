@@ -54,7 +54,7 @@ function musicLine(doc: ProjectDoc): string | null {
 function subsLine(doc: ProjectDoc): string | null {
   const subs = doc.subtitles
   if (!subs || subs.enabled === false) return null
-  return subs.mode === 'soft' ? 'Субтитры отдельной дорожкой.' : 'Субтитры вжжены.'
+  return subs.mode === 'soft' ? 'Субтитры отдельной дорожкой.' : 'Субтитры вжжёны в кадр.'
 }
 
 export function renderSummary(doc: ProjectDoc, quality: 'draft' | 'final', durationSec: number): string {
