@@ -1,9 +1,8 @@
 /**
  * Записи (ассеты): типы, общее форматирование и запросы к API.
  *
- * Разметка списка записей живёт в `files.ts`, выбор записи — в `newproject.ts`. Здесь остаётся
- * только то, что нужно нескольким экранам сразу: формат размера и времени, состояние обработки
- * и кадр из полоски.
+ * Разметка списка записей живёт в `files.ts`. Здесь остаётся только то, что нужно нескольким
+ * экранам сразу: формат размера и времени, состояние обработки и кадр из полоски.
  */
 import { api } from './api'
 import { assetData, type AssetData } from './strip'
@@ -151,15 +150,4 @@ export function paintFrames(root: ParentNode, cache: Map<string, Promise<AssetDa
       })
       .catch(() => {}) // нет раскладки — карточка живёт с пустой рамкой, это не повод шуметь
   })
-}
-
-/** Прочитать и забыть выбранную запись для экрана нового проекта. */
-export function takePick(): string | null {
-  try {
-    const id = sessionStorage.getItem('newproject:asset')
-    sessionStorage.removeItem('newproject:asset')
-    return id
-  } catch {
-    return null
-  }
 }
