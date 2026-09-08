@@ -277,6 +277,7 @@ pre {
 }
 .btn-key:hover:not(:disabled) {
   background: var(--brand-hover);
+  color: var(--brand-ink);
 }
 .btn-ghost {
   border-color: var(--line);

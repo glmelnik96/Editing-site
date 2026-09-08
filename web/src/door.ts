@@ -10,6 +10,7 @@ import { escapeHtml } from './html'
 
 const TITLE = 'Привет! Это онлайн-редактор видеороликов.'
 const LEAD = 'Загрузите запись, вырежьте лишнее, добавьте музыку и субтитры — заберите готовый файл.'
+export const LOGIN_LABEL = 'Войти'
 
 // Хронометраж первого экрана, мс от загрузки — тот же, что у соседа.
 const WORDS_FROM = 150
@@ -35,7 +36,7 @@ export function mountDoor(el: HTMLElement): void {
       ${error}
       <div class="row" style="margin:0">
         <a class="btn btn-key chip-in" style="--delay:${BUTTON_AT}ms"
-          href="/api/v1/auth/login">Войти через Яндекс</a>
+          href="/api/v1/auth/login">${LOGIN_LABEL}</a>
       </div>
     </main>`
 }
