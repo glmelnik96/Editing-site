@@ -13,7 +13,7 @@ describe('convert menu on a recording card', () => {
     )
   })
 
-  it('draws Скачать иначе only when the asset is ready', () => {
+  it('draws Конвертер only when the asset is ready', () => {
     const html = convertPanelHtml({
       assetId: 'ast_1',
       kind: 'video',
@@ -21,7 +21,7 @@ describe('convert menu on a recording card', () => {
       job: null,
       conversions: [],
     })
-    expect(html).toContain('Скачать иначе')
+    expect(html).toContain('Конвертер')
     expect(html).toContain('data-convert="mp4"')
     expect(html).toContain(convertHint())
     expect(

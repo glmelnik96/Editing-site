@@ -9,7 +9,16 @@ import { ApiError } from './api'
 import { POLL_MS, listAssets, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
-import { aspectRatio, incomingAt, musicVolume, previewClipVolume, seekPlan, stepPlan, type Incoming } from './playback'
+import {
+  aspectRatio,
+  incomingAt,
+  musicVolume,
+  previewClipVolume,
+  previewSpeechGain,
+  seekPlan,
+  stepPlan,
+  type Incoming,
+} from './playback'
 import { createSaver, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
@@ -591,9 +600,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const hidden = active === videoA ? videoB : videoA
     const incoming = incomingAt(clips, timelineTime)
     const mix = incoming?.mix ?? 0
-    active.volume = previewClipVolume(found?.clip.volume ?? 1) * (1 - mix)
+    const speech = previewSpeechGain(project.doc.music)
+    active.volume = previewClipVolume(found?.clip.volume ?? 1, speech) * (1 - mix)
     const incomingClip = incoming ? clips[incoming.index] : clips[playIndex + 1]
-    hidden.volume = previewClipVolume(incomingClip?.volume ?? 1) * (incoming ? mix : 1)
+    hidden.volume = previewClipVolume(incomingClip?.volume ?? 1, speech) * (incoming ? mix : 1)
     const musicDoc = project.doc.music
     if (!musicDoc) {
       music.volume = 0

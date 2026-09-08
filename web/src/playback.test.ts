@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './timeline/model'
-import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, seekPlan, stepPlan } from './playback'
+import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, previewSpeechGain, seekPlan, stepPlan } from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
   return {
@@ -145,5 +145,19 @@ describe('громкость клипа в превью', () => {
     expect(previewClipVolume(0.4)).toBe(0.4)
     expect(previewClipVolume(1)).toBe(1)
     expect(previewClipVolume(1.7)).toBe(1)
+  })
+
+  it('умножает на ползунок речи и тоже режет потолок', () => {
+    expect(previewClipVolume(1, 0.5)).toBe(0.5)
+    expect(previewClipVolume(0.4, 0.5)).toBeCloseTo(0.2)
+    expect(previewClipVolume(2, 0.4)).toBeCloseTo(0.8)
+    expect(previewClipVolume(1.7, 1)).toBe(1)
+  })
+
+  it('без музыки речь не приглушает', () => {
+    expect(previewSpeechGain(null)).toBe(1)
+    expect(previewSpeechGain(undefined)).toBe(1)
+    expect(previewSpeechGain({ speech_volume: 0.3 })).toBe(0.3)
+    expect(previewSpeechGain({})).toBe(1)
   })
 })

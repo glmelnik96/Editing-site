@@ -109,9 +109,22 @@ export function musicVolume(
   return Math.max(0, Math.min(1, gain))
 }
 
-/** HTML video.volume принимает 0…1: усиление выше 1 слышно только в сборке. */
-export function previewClipVolume(volume: number): number {
-  return Math.max(0, Math.min(1, volume))
+/**
+ * HTML video.volume принимает 0…1.
+ * Громкость клипа и ползунок «Речь» считаем вместе: в сборке speech_volume есть
+ * только если есть музыка, и режет уже после volume клипа. Усиление выше 1
+ * в превью не слышно.
+ */
+export function previewClipVolume(volume: number, speechVolume = 1): number {
+  return Math.max(0, Math.min(1, volume * speechVolume))
+}
+
+/** Без музыки ползунок речи в сборке не действует — в превью тоже. */
+export function previewSpeechGain(music: { speech_volume?: number } | null | undefined): number {
+  if (!music) return 1
+  const value = music.speech_volume
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 1
+  return Math.max(0, Math.min(1, value))
 }
 
 const ASPECTS: Record<string, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 }

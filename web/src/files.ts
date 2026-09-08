@@ -127,7 +127,7 @@ export function convertPanelHtml(p: ConvertPanel): string {
     : ''
   return `<div class="stack convert-box" style="gap:8px">
     <details>
-      <summary class="btn btn-ghost">Скачать иначе</summary>
+      <summary class="btn btn-ghost">Конвертер</summary>
       <p class="meta" style="margin:8px 0">${escapeHtml(convertHint())}</p>
       <span class="row" style="margin:0">${menu}</span>
     </details>
