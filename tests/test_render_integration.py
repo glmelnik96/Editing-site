@@ -162,3 +162,30 @@ def test_fade_shortens_the_rendered_file(conn, settings):
     ).fetchone()
     assert row["duration"] == 3.5
     assert probe_file(settings, row["path"]).duration == pytest.approx(3.5, abs=0.3)
+
+
+def test_duck_with_speech_volume_renders(conn, settings):
+    """Ползунок «Речь» не единица: без asplit боевой ffmpeg 6.1 роняет сборку."""
+    project = create_project(conn, settings, USER, name="С дакингом", raw_doc={
+        "output": {"aspect": "1:1", "fit": "crop", "fps": 30},
+        "clips": [
+            {"asset_id": ASSET, "in": 0.0, "out": 2.0, "volume": 1.2},
+            {"asset_id": ASSET, "in": 4.0, "out": 6.0,
+             "transition": {"kind": "fade", "duration": 0.5}},
+        ],
+        "music": {
+            "asset_id": ASSET, "volume": 0.25, "speech_volume": 0.8,
+            "fade_in": 0, "fade_out": 0, "loop": True, "duck": True,
+        },
+    })
+    enqueue_job(conn, user_id=USER, type_="render", target_id=project["id"],
+                params={"quality": "draft"})
+    handlers.handle_render(conn, settings, claim_job(conn, lane="cpu", pid=1))
+    row = conn.execute(
+        "SELECT * FROM renders WHERE project_id = ?", (project["id"],)
+    ).fetchone()
+    assert row is not None
+    assert row["duration"] == 3.5
+    info = probe_file(settings, row["path"])
+    assert info.duration == pytest.approx(3.5, abs=0.3)
+    assert (info.width, info.height) == (720, 720) and info.has_audio is True

@@ -226,14 +226,17 @@ def build_render_command(
         speech = audio_out
         speech_volume = float(music.get("speech_volume", 1))
         if speech_volume != 1:
-            filters.append(f"{speech}volume={speech_volume}[speech]")
-            speech = "[speech]"
+            filters.append(f"{speech}volume={speech_volume}[spk]")
+            speech = "[spk]"
         filters.append(f"[{music_input}:a]{_music_chain(music, total)}[music]")
         if music.get("duck"):
+            # Одна метка — один вход. Повтор [speech] на ffmpeg 6.1 читается как
+            # stream specifier и роняет сборку, если ползунок «Речь» не единица.
+            filters.append(f"{speech}asplit=2[spk_sc][spk_mix]")
             filters.append(
-                f"[music]{speech}sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]"
+                "[music][spk_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]"
             )
-            filters.append(f"{speech}[duck]amix=inputs=2:duration=first:normalize=0[amixed]")
+            filters.append("[spk_mix][duck]amix=inputs=2:duration=first:normalize=0[amixed]")
         else:
             filters.append(f"{speech}[music]amix=inputs=2:duration=first:normalize=0[amixed]")
         audio_out = "[amixed]"

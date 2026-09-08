@@ -181,7 +181,8 @@ class TestПереходы:
                    "loop": True, "duck": True, "speech_volume": 1},
         )))
         assert chain.index("xfade=") < chain.index("sidechaincompress")
-        assert "[music][a]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+        assert "[a]asplit=2[spk_sc][spk_mix]" in chain
+        assert "[music][spk_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
 
     def test_музыка_режется_по_укороченной_длине(self):
         chain = filter_of(build(doc(
@@ -249,15 +250,17 @@ class TestМузыка:
 
     def test_дакинг_сжимает_музыку_речью(self):
         chain = filter_of(build(self.music_doc(duck=True)))
-        assert "[music][a]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
-        assert "[a][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
+        assert "[a]asplit=2[spk_sc][spk_mix]" in chain
+        assert "[music][spk_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+        assert "[spk_mix][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
         assert "[a][music]amix=" not in chain
 
     def test_дакинг_с_громкостью_речи_берёт_подписанную_речь(self):
         chain = filter_of(build(self.music_doc(duck=True, speech_volume=0.7)))
-        assert "[a]volume=0.7[speech]" in chain
-        assert "[music][speech]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
-        assert "[speech][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
+        assert "[a]volume=0.7[spk]" in chain
+        assert "[spk]asplit=2[spk_sc][spk_mix]" in chain
+        assert "[music][spk_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[duck]" in chain
+        assert "[spk_mix][duck]amix=inputs=2:duration=first:normalize=0[amixed]" in chain
 
 
 class TestГромкостьКлипа:
