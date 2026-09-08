@@ -28,6 +28,10 @@ const WAVE_HEIGHT = 22
 const HANDLE_PX = 8
 const CLICK_SLOP_PX = 4 // сдвиг меньше этого — это клик, а не перенос
 
+export function emptyTrackHint(clipCount: number): string {
+  return clipCount === 0 ? 'Добавьте кусок из исходников' : ''
+}
+
 function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(width))
@@ -137,6 +141,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, { from: clip.in, to: clip.out }, Math.round(block.width)), block.width))
       track.appendChild(node)
     })
+    if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
   }
 
   /** Догнать то, что приходило во время переноса. Зовётся, когда drag уже снят. */

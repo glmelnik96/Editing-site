@@ -15,6 +15,12 @@ export type SourceHandlers = {
 const READY = new Set(['ready', 'proxy_ready'])
 const MIN_PIECE = 0.1
 
+export function sourcePoolNote(readyCount: number): string {
+  return readyCount === 0
+    ? 'Нет готового видео. <a href="#/files">Загрузите запись</a>'
+    : ''
+}
+
 export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   el.innerHTML = `
     <main class="card">
@@ -142,7 +148,11 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     playerBox.innerHTML = asset?.files.proxy
       ? `<video class="player" controls preload="metadata" src="${escapeHtml(asset.files.proxy)}"></video>`
       : ''
-    note.textContent = asset && !asset.files.proxy ? 'Прокси ещё готовится: выделять можно будет после обработки.' : ''
+    if (!assets.length) {
+      note.innerHTML = sourcePoolNote(0)
+    } else {
+      note.textContent = asset && !asset.files.proxy ? 'Прокси ещё готовится: выделять можно будет после обработки.' : ''
+    }
     const player = video()
     if (player) {
       player.addEventListener('timeupdate', () => {
@@ -193,6 +203,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
           .join('')
       if (assets.some(a => a.id === keep)) pick.value = keep
       else choose(null)
+      if (!assets.length) note.innerHTML = sourcePoolNote(0)
+      else if (!current || current.files.proxy) note.textContent = ''
     },
     current(): Asset | null {
       return current
