@@ -665,7 +665,6 @@ main.card {
 }
 .burn input { accent-color: var(--brand); }
 
-/* Вкладки субтитров и рендера прячут только свои панели. Исходники и музыка остаются. */
 .tabs {
   display: flex;
   flex-wrap: wrap;
@@ -684,6 +683,11 @@ main.card {
   transition: color 150ms var(--ease), border-color 150ms var(--ease);
 }
 .tab:hover { color: var(--paper); }
+.tab:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.tab:disabled:hover { color: var(--muted); }
 .tab.on {
   color: var(--brand-ink);
   background: var(--brand);
@@ -769,6 +773,9 @@ main.card {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+#ed-source[hidden] {
+  display: none;
 }
 
 /* --- Сцена и плеер --- */

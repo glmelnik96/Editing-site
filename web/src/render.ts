@@ -83,6 +83,7 @@ export function mountRender(
   projectId: string,
   onBeforeStart: () => Promise<void>,
   onReady?: () => void,
+  onCount?: (n: number) => void,
 ) {
   el.innerHTML = `
     <main class="card">
@@ -154,6 +155,7 @@ export function mountRender(
     if (stopped) return
     const { renders } = await listRenders(projectId)
     if (stopped) return
+    onCount?.(renders.length)
     list.innerHTML = renders.map(row).join('') || '<li class="muted">Пока нет</li>'
     list.querySelectorAll<HTMLButtonElement>('button[data-drop]').forEach(b =>
       b.addEventListener('click', async () => {

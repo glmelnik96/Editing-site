@@ -10,5 +10,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["src/style-btn-key.test.ts"]
+  "exclude": ["src/style-btn-key.test.ts", "src/style-editor-tabs.test.ts"]
 }

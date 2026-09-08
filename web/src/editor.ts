@@ -20,12 +20,13 @@ import {
   stepPlan,
   type Incoming,
 } from './playback'
-import { createSaver, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
+import { createSaver, listRenders, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { clampTransitions, clipAt, clipAssetIds, fadeInto, insertClip, maxFade, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountMusic } from './music'
 import { mountRender } from './render'
+import { resolveTab, tabEnabled, type EditorTab } from './editor-tabs'
 import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTimeline, type AssetInfo } from './timeline/view'
@@ -443,16 +444,31 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   /* ═══ Вкладки левой колонки ═══════════════════════════════════════════════
    *
-   * Исходники и музыка всегда на экране: без них не видно, из чего собран ролик.
-   * Субтитры и рендер подставляются под них. Панель рендера монтируется при первом открытии.
+   * Одна вкладка на экране. Исходники и музыка только на «Исходниках».
+   * «Субтитры» и «Рендер» серые, пока нет клипа; рендер жив, если уже есть готовый файл.
    */
   const tabsBar = el.querySelector('#ed-tabs') as HTMLElement
   const panels = new Map<string, HTMLElement>(
     Array.from(el.querySelectorAll<HTMLElement>('[data-panel]')).map(node => [node.dataset.panel ?? '', node]),
   )
   const mounted = new Set<string>(['source'])
-  let tab = 'source'
+  let tab: EditorTab = 'source'
+  let hasReadyRender = false
   let booted = false
+
+  function clipCount(): number {
+    return project?.doc.clips.length ?? 0
+  }
+
+  function syncTabs(): void {
+    const clips = clipCount()
+    tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button => {
+      const name = (button.dataset.tab ?? 'source') as EditorTab
+      button.disabled = !tabEnabled(name, clips, hasReadyRender)
+    })
+    const next = resolveTab(tab, clips, hasReadyRender)
+    if (next !== tab) showTab(next)
+  }
 
   function openPanel(name: string): void {
     if (mounted.has(name) || !booted) return
@@ -465,18 +481,19 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           if (project && saver.pending()) await saver.flush(project)
         },
         () => markNews('renders'),
+        n => {
+          hasReadyRender = n > 0
+          syncTabs()
+        },
       )
       if (project) renders.setDoc(project.doc)
     }
   }
 
-  function showTab(name: string): void {
+  function showTab(name: EditorTab): void {
+    if (!tabEnabled(name, clipCount(), hasReadyRender)) return
     tab = name
     panels.forEach((panel, key) => {
-      if (key === 'source') {
-        panel.hidden = false
-        return
-      }
       panel.hidden = key !== name
     })
     tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button => {
@@ -487,9 +504,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   }
 
   tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>
-    button.addEventListener('click', () => showTab(button.dataset.tab ?? 'source')),
+    button.addEventListener('click', () => {
+      if (button.disabled) return
+      showTab((button.dataset.tab ?? 'source') as EditorTab)
+    }),
   )
-  showTab('source')
+  syncTabs()
 
   function closeSaves(): void {
     savesPanel.hidden = true
@@ -682,6 +702,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     applyPreviewVolumes()
     renders?.setDoc(project.doc)
     void ensureData(project.doc.clips)
+    syncTabs()
   }
 
   el.querySelector('#ed-play')!.addEventListener('click', () => {
@@ -865,16 +886,18 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   document.addEventListener('keydown', onKey)
 
   async function boot(): Promise<void> {
-    const [loaded, list] = await Promise.all([
+    const [loaded, list, ready] = await Promise.all([
       loadProject(projectId),
       listAssets(),
+      listRenders(projectId),
     ])
     if (stopped) return
     project = loaded
+    hasReadyRender = ready.renders.length > 0
     applyAssets(list.assets)
     stateBox.textContent = STATE_TEXT.idle
     booted = true
-    openPanel(tab)
+    syncTabs()
     render()
     pollAssets()
   }
