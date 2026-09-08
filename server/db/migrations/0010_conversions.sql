@@ -1,5 +1,6 @@
 -- jobs.type: SQLite не умеет расширить CHECK, таблицу пересоздаём. Старые строки копируются как есть.
 -- convert конкурирует за полосу cpu с render (спека пакета C).
+-- Номер 0010: на main уже занят 0009 индексом jobs(user_id, status, finished_at).
 CREATE TABLE jobs_new (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -30,6 +31,7 @@ DROP TABLE jobs;
 ALTER TABLE jobs_new RENAME TO jobs;
 CREATE INDEX jobs_queue_idx ON jobs(status, lane, priority DESC, created_at);
 CREATE INDEX jobs_target_idx ON jobs(target_id);
+CREATE INDEX jobs_user_status_idx ON jobs(user_id, status, finished_at);
 
 -- Готовый файл конвертера. Строка появляется только после успеха, как renders.
 CREATE TABLE conversions (

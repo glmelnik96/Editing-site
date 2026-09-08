@@ -160,4 +160,18 @@ describe('uploadFile', () => {
     }
     await expect(uploadFile(fakeFile(0), { request, storage: memStorage(), sleep: noSleep })).rejects.toThrow('Пустой')
   })
+
+  it('останавливается, если сигнал оборвали', async () => {
+    const ac = new AbortController()
+    const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+      if (path === '/api/v1/uploads' && init.method === 'POST') {
+        ac.abort()
+        return { upload_id: 'upl_1', chunk_size: 4, total_chunks: 3, expires_at: 'x' } as T
+      }
+      throw new Error('не должны слать части после abort')
+    }
+    await expect(uploadFile(fakeFile(10), { request, sleep: noSleep, signal: ac.signal })).rejects.toMatchObject({
+      name: 'UploadAborted',
+    })
+  })
 })

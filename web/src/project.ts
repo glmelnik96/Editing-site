@@ -239,7 +239,7 @@ export function listRenders(id: string): Promise<{ renders: RenderCard[] }> {
 
 export type JobListItem = {
   id: string
-  type: 'analyze' | 'proxy' | 'transcribe' | 'render'
+  type: 'analyze' | 'proxy' | 'transcribe' | 'render' | 'convert'
   status: JobView['status']
   progress: number
   error: string | null

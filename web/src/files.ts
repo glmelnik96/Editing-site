@@ -20,10 +20,10 @@ import {
   type Asset,
 } from './assets'
 import { escapeHtml } from './html'
-import { progressText } from './player'
 import { cancelJob, loadJob, type JobView } from './project'
+import type { Shell } from './shell'
 import { type AssetData } from './strip'
-import { uploadFile } from './upload'
+import { UploadAborted, uploadFile } from './upload'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
 const CONVERT_JOB_TEXT: Record<string, string> = {
@@ -137,7 +137,7 @@ export function convertPanelHtml(p: ConvertPanel): string {
 }
 
 /** Экран записей. `onChanged` зовётся после загрузки и удаления — обновить место в шапке. */
-export function mountFiles(el: HTMLElement, onChanged?: () => void) {
+export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell['work']) {
   el.innerHTML = `
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Записи</h1>
@@ -147,14 +147,12 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void) {
         <span class="lead">или нажмите, чтобы выбрать. До 5 ГБ на файл; прерванная загрузка
           продолжится с места разрыва, если выбрать тот же файл снова</span>
       </label>
-      <div id="f-progress" class="stack"></div>
       <div id="f-list" class="stack"></div>
       <pre id="f-error" hidden></pre>
     </div>`
 
   const drop = el.querySelector('#f-drop') as HTMLElement
   const input = el.querySelector('#f-input') as HTMLInputElement
-  const progress = el.querySelector('#f-progress') as HTMLElement
   const list = el.querySelector('#f-list') as HTMLElement
   const errorBox = el.querySelector('#f-error') as HTMLPreElement
   const frames = new Map<string, Promise<AssetData>>()
@@ -175,10 +173,7 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void) {
   }
 
   function card(a: Asset): string {
-    // Подпись рядом с пилюлей нужна, только если добавляет знание: «анализ» дважды подряд —
-    // это шум, а «анализ, 40 %» и текст ошибки сказать стоит.
-    const work = progressText(a.status, a.progress ?? null)
-    const note = a.error ? a.error : work === statusText(a.status) ? '' : work
+    const note = a.error ? a.error : ''
     const state = a.status === 'failed' ? ' pill-bad' : ''
     const ready = a.status === 'ready' || a.status === 'proxy_ready'
     const job = jobs.get(a.id) ?? null
@@ -334,20 +329,22 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void) {
 
   async function take(files: File[]): Promise<void> {
     for (const file of files) {
-      const line = document.createElement('div')
-      line.className = 'stack upload-line'
-      line.innerHTML = `<span class="small">${escapeHtml(file.name)}</span>
-        <div class="progress"><i style="width:0%"></i></div>`
-      progress.appendChild(line)
-      const bar = line.querySelector('i') as HTMLElement
+      const handle = work?.trackUpload(file.name)
       try {
-        await uploadFile(file, { onProgress: (d, t) => (bar.style.width = `${Math.round((d / t) * 100)}%`) })
+        await uploadFile(file, {
+          onProgress: (d, t) => handle?.setProgress(d, t),
+          signal: handle?.signal,
+        })
+        handle?.succeed()
       } catch (e) {
-        line.querySelector('span')!.textContent = `${file.name}: не загрузился`
+        if (e instanceof UploadAborted) {
+          handle?.abort()
+          continue
+        }
+        handle?.fail(e instanceof Error ? e.message : String(e))
         showError(e)
         continue
       }
-      line.remove()
       onChanged?.()
       await refresh().catch(showError)
     }

@@ -3,10 +3,73 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta
 
-from server.app.util import new_id, now_iso
+from server.app.util import iso, new_id, now_iso
 
 LANES = {"analyze": "cpu", "proxy": "cpu", "render": "cpu", "convert": "cpu", "transcribe": "net"}
+RECENT_SEC = 30
+LIST_LIMIT = 50
+ASSET_JOBS = ("analyze", "proxy", "transcribe", "convert")
+
+
+def job_cancelable(type_: str, status: str) -> bool:
+    return type_ in ("transcribe", "render", "convert") and status in ("queued", "running")
+
+
+def job_label(type_: str, asset_name: str | None, project_name: str | None) -> str:
+    if type_ in ASSET_JOBS:
+        return asset_name or "запись удалена"
+    if type_ == "render":
+        return project_name or "проект удалён"
+    return asset_name or project_name or ""
+
+
+def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime) -> list[dict]:
+    cutoff = iso(now - timedelta(seconds=RECENT_SEC))
+    rows = conn.execute(
+        """
+        SELECT jobs.id, jobs.type, jobs.status, jobs.progress, jobs.error, jobs.created_at,
+               jobs.finished_at, jobs.params, jobs.target_id,
+               assets.original_name AS asset_name, projects.name AS project_name
+        FROM jobs
+        LEFT JOIN assets
+          ON assets.id = jobs.target_id AND jobs.type IN ('analyze', 'proxy', 'transcribe', 'convert')
+        LEFT JOIN projects
+          ON projects.id = jobs.target_id AND jobs.type = 'render'
+        WHERE jobs.user_id = ?
+          AND (
+            jobs.status IN ('queued', 'running')
+            OR (
+              jobs.status IN ('done', 'canceled', 'failed')
+              AND jobs.finished_at IS NOT NULL
+              AND jobs.finished_at >= ?
+            )
+          )
+        ORDER BY jobs.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, cutoff, LIST_LIMIT),
+    ).fetchall()
+    out: list[dict] = []
+    for row in rows:
+        params = json.loads(row["params"] or "{}")
+        quality = params.get("quality") if row["type"] == "render" else None
+        out.append(
+            {
+                "id": row["id"],
+                "type": row["type"],
+                "status": row["status"],
+                "progress": row["progress"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+                "finished_at": row["finished_at"],
+                "label": job_label(row["type"], row["asset_name"], row["project_name"]),
+                "cancelable": job_cancelable(row["type"], row["status"]),
+                "quality": quality if quality in ("draft", "final") else None,
+            }
+        )
+    return out
 
 
 def enqueue_job(
