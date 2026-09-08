@@ -69,8 +69,9 @@ def subtitles(client, project, **params):
 
 
 def generate(client, project, **body):
+    payload = {"mode": "burn", **body}
     return client.post(
-        f"/api/v1/projects/{project['id']}/subtitles/generate", json={"asset_id": VIDEO, **body}
+        f"/api/v1/projects/{project['id']}/subtitles/generate", json=payload
     )
 
 
@@ -224,6 +225,50 @@ def test_generate_on_a_foreign_project_is_404(client, login_as, settings):
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
     assert generate(client, project).status_code == 404
+
+
+def test_generate_without_asset_id_uses_the_timeline(client, login_as, settings):
+    login_as()
+    project = with_transcript(client, settings)
+    r = client.post(f"/api/v1/projects/{project['id']}/subtitles/generate", json={})
+    assert r.status_code == 200, r.text
+    assert "Мы поехали" in " ".join(lines_of(cues_of(r)))
+
+
+def test_generate_merges_every_timeline_asset_and_ignores_the_pool(client, login_as, settings):
+    login_as()
+    user_id = me(client)
+    second = "ast_00000000000b"
+    unused = "ast_00000000000c"
+    seed_asset(settings, user_id)
+    seed_asset(settings, user_id, asset_id=second)
+    seed_asset(settings, user_id, asset_id=unused)
+    add_transcript(client, VIDEO)
+    second_words = [
+        {"w": "Альфа", "s": 0.0, "e": 0.3},
+        {"w": "бета", "s": 0.3, "e": 0.6},
+        {"w": "гамма", "s": 0.6, "e": 0.9},
+    ]
+    unused_words = [
+        {"w": "Секретное", "s": 0.0, "e": 0.3},
+        {"w": "слово", "s": 0.3, "e": 0.6},
+    ]
+    assert client.put(
+        f"/api/v1/assets/{second}/transcript",
+        json={"segments": [{"start": 0.0, "end": 0.9, "text": "Альфа бета гамма", "words": second_words}]},
+    ).status_code == 200
+    assert client.put(
+        f"/api/v1/assets/{unused}/transcript",
+        json={"segments": [{"start": 0.0, "end": 0.6, "text": "Секретное слово", "words": unused_words}]},
+    ).status_code == 200
+    project = make_project(client, subtitles=None, clips=[
+        {"asset_id": VIDEO, "in": 0.0, "out": 2.0},
+        {"asset_id": second, "in": 0.0, "out": 2.0},
+    ])
+    text = " ".join(lines_of(cues_of(generate(client, project))))
+    assert "Мы поехали" in text
+    assert "Альфа" in text
+    assert "Секретное" not in text
 
 
 def test_agent_generates_cues_with_a_token(bearer_client, settings):

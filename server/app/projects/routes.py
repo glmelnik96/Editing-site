@@ -313,7 +313,9 @@ def renders(
 
 
 class SubtitlesGenerate(BaseModel):
-    asset_id: str = Field(min_length=1, max_length=64)
+    # asset_id больше не выбирает запись: реплики всегда из клипов шкалы. Поле оставлено, чтобы
+    # старый клиент не получил 422 на знакомом теле запроса.
+    asset_id: str | None = Field(default=None, max_length=64)
     mode: Literal["burn", "soft"] = "burn"
     # Версия необязательна: реплики собираются из документа, который лежит на сервере, и свежую
     # копию для этого держать не нужно. Но если клиент её прислал — правило то же, что у PUT:
@@ -340,7 +342,7 @@ def generate_subtitles(
     try:
         saved = generate_project_cues(
             conn, request.app.state.settings, user.id, project,
-            asset_id=body.asset_id, mode=body.mode,
+            mode=body.mode,
             version=project["version"] if body.version is None else body.version,
         )
     except SubtitlesUnavailable as exc:

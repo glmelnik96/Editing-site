@@ -6,10 +6,11 @@
  * точки сохранения и защита от одновременной работы.
  */
 import { ApiError, isRetryable } from './api'
-import { loadAsset } from './assets'
+import { loadAsset, type Asset } from './assets'
 import { escapeHtml } from './html'
 import { generateSubtitles, loadJob, startTranscribe, type Cue, type Project, type Subtitles } from './project'
 import { formatTimecode, parseTimecode } from './timecode'
+import { clipAssetIds, type Clip } from './timeline/model'
 
 const POLL_MS = 2000
 
@@ -75,6 +76,33 @@ export function patchCues(
   }
 }
 
+export type TimelineSubAsset = {
+  id: string
+  name: string
+  hasTranscript: boolean
+}
+
+/** Записи, которые реально лежат на шкале — в том порядке, в каком появляются в ролике. */
+export function timelineSubtitleAssets(
+  clips: Pick<Clip, 'asset_id'>[],
+  assets: { id: string; original_name: string; files: { transcript?: string | null } }[],
+): TimelineSubAsset[] {
+  const byId = new Map(assets.map(a => [a.id, a]))
+  return clipAssetIds(clips).map(id => {
+    const asset = byId.get(id)
+    return {
+      id,
+      name: asset?.original_name ?? id,
+      hasTranscript: Boolean(asset?.files.transcript),
+    }
+  })
+}
+
+function sameTimeline(a: TimelineSubAsset[], b: TimelineSubAsset[]): boolean {
+  return a.length === b.length && a.every((item, i) =>
+    item.id === b[i].id && item.name === b[i].name && item.hasTranscript === b[i].hasTranscript)
+}
+
 /** Разрезать реплику пополам по времени: текст уезжает в первую половину целиком. */
 export function splitCue(cues: Cue[], index: number): Cue[] {
   const cue = cues[index]
@@ -102,8 +130,8 @@ export function plural(count: number): string {
 export function mountSubtitles(el: HTMLElement, projectId: string, handlers: SubtitleHandlers) {
   let stopped = false
   let project: Project | null = null
-  let assetId: string | null = null // запись, из которой собираются реплики
-  let hasTranscript = false
+  let timelineAssets: TimelineSubAsset[] = []
+  let transcribeId: string | null = null
   let jobId: string | null = null
   let timer: number | undefined
   let time = 0
@@ -112,6 +140,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   const cues = (): Cue[] => project?.doc.subtitles?.cues ?? []
   const total = (): number =>
     (project?.doc.clips ?? []).reduce((sum, clip) => sum + Math.max(0, clip.out - clip.in), 0)
+  const missing = () => timelineAssets.filter(a => !a.hasTranscript)
 
   const showError = (e: unknown) => {
     const box = el.querySelector<HTMLPreElement>('#sub-error')
@@ -138,24 +167,28 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   function draw(): void {
     if (stopped) return
     const list = cues()
-    if (!assetId) {
-      el.innerHTML = shell('<p class="lead" style="margin:0">Выберите запись во вкладке «Исходник»</p>')
-      return
-    }
     if (jobId) {
-      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровываю — ход вверху. Можно уйти
+      const name = timelineAssets.find(a => a.id === transcribeId)?.name
+      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровываю${name ? ` «${escapeHtml(name)}»` : ''} — ход вверху. Можно уйти
         на другую вкладку, работа не прервётся</p>`)
       return
     }
-    if (!hasTranscript) {
-      el.innerHTML = shell(`<p class="lead" style="margin:0">Субтитры берутся из расшифровки записи.
-        Расшифровка занимает несколько минут и делается один раз</p>
+    if (!list.length && timelineAssets.length === 0) {
+      el.innerHTML = shell(`<p class="lead" style="margin:0">Субтитры собираются из кусков на шкале,
+        а не из пула исходников. Добавьте запись в ролик</p>`)
+      return
+    }
+    const need = missing()
+    if (!list.length && need.length) {
+      const names = need.map(a => `«${escapeHtml(a.name)}»`).join(', ')
+      el.innerHTML = shell(`<p class="lead" style="margin:0">На шкале без расшифровки: ${names}.
+        Расшифровка занимает несколько минут и делается один раз на файл</p>
         <button class="btn btn-key" id="sub-transcribe">Расшифровать</button>`)
       el.querySelector('#sub-transcribe')?.addEventListener('click', () => void transcribe())
       return
     }
     if (!list.length) {
-      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровка готова. Соберите из неё
+      el.innerHTML = shell(`<p class="lead" style="margin:0">Расшифровка шкалы готова. Соберите из неё
         реплики — потом их можно будет поправить</p>
         <button class="btn btn-key" id="sub-build">Собрать субтитры</button>`)
       el.querySelector('#sub-build')?.addEventListener('click', () => void build())
@@ -231,9 +264,11 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   }
 
   async function transcribe(): Promise<void> {
-    if (!assetId) return
+    const next = missing()[0]
+    if (!next) return
+    transcribeId = next.id
     try {
-      const started = await startTranscribe(assetId)
+      const started = await startTranscribe(next.id)
       jobId = started.job_id
       draw()
       poll()
@@ -245,10 +280,16 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
         return
       }
       if (e instanceof ApiError && e.code === 'transcript_exists') {
-        hasTranscript = true
+        timelineAssets = timelineAssets.map(a => a.id === next.id ? { ...a, hasTranscript: true } : a)
+        transcribeId = null
+        if (missing().length) {
+          await transcribe()
+          return
+        }
         draw()
         return
       }
+      transcribeId = null
       showError(e)
     }
   }
@@ -260,7 +301,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   }
 
   async function tick(): Promise<void> {
-    if (stopped || !jobId || !assetId) return
+    if (stopped || !jobId || !transcribeId) return
     try {
       // Задание своё — смотрим его; чужое (расшифровку заказали в другой вкладке) видно
       // только по появлению файла у записи.
@@ -268,17 +309,24 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
         const job = await loadJob(jobId)
         if (job.status === 'failed' || job.status === 'canceled') {
           jobId = null
+          transcribeId = null
           draw()
           showError(job.error || 'Расшифровка не удалась')
           return
         }
         if (job.status !== 'done') return poll()
       }
-      const asset = await loadAsset(assetId)
+      const asset = await loadAsset(transcribeId)
       if (stopped) return
       if (asset.files.transcript) {
+        const doneId = transcribeId
         jobId = null
-        hasTranscript = true
+        transcribeId = null
+        timelineAssets = timelineAssets.map(a => a.id === doneId ? { ...a, hasTranscript: true } : a)
+        if (missing().length) {
+          await transcribe()
+          return
+        }
         draw()
         return
       }
@@ -288,16 +336,17 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       if (isRetryable(e)) poll()
       else {
         jobId = null
+        transcribeId = null
         draw()
       }
     }
   }
 
   async function build(): Promise<void> {
-    if (!assetId) return
+    if (!timelineAssets.length || missing().length) return
     try {
       await handlers.flush()
-      handlers.onProject(await generateSubtitles(projectId, assetId, 'burn'))
+      handlers.onProject(await generateSubtitles(projectId, 'burn'))
     } catch (e) {
       showError(e)
     }
@@ -323,11 +372,26 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     adopt(next: Project): void {
       project = next
     },
-    /** Запись, из которой берётся расшифровка. */
-    setAsset(id: string | null, transcript: boolean): void {
-      if (id === assetId && transcript === hasTranscript) return
-      assetId = id
-      hasTranscript = transcript
+    /** Клипы шкалы и пул записей: реплики только из того, что в ролике. */
+    setTimeline(clips: Pick<Clip, 'asset_id'>[], assets: Asset[]): void {
+      const next = timelineSubtitleAssets(clips, assets)
+      const finishedCurrent = Boolean(
+        jobId && transcribeId && next.find(a => a.id === transcribeId)?.hasTranscript,
+      )
+      const same = sameTimeline(timelineAssets, next)
+      timelineAssets = next
+      if (finishedCurrent) {
+        jobId = null
+        transcribeId = null
+        if (missing().length) {
+          void transcribe()
+          return
+        }
+        draw()
+        return
+      }
+      if (same) return
+      if (cues().length > 0 && !jobId) return
       draw()
     },
     /** Время плеера: подсветить реплику, которая сейчас в кадре. */

@@ -80,6 +80,33 @@ export function stepPlan(clips: Clip[], at: { index: number; sourceTime: number 
   }
 }
 
+export type ResumePlan =
+  | { kind: 'play' }
+  | { kind: 'advance'; index: number; assetId: string; time: number; timelineTime: number }
+  | { kind: 'stop'; timelineTime: number }
+
+/**
+ * Что делать по Play/пробелу: продолжить, перейти на следующий клип или остаться на обрезе.
+ *
+ * HTML video знает весь исходник, а не выбранный кусок. После `end` currentTime уже на `out`
+ * или чуть дальше — без этой проверки пробел снова вызвал бы play() и картинка уехала бы
+ * в обрезанный хвост.
+ */
+export function resumePlan(clips: Clip[], at: { index: number; sourceTime: number }): ResumePlan {
+  const step = stepPlan(clips, at)
+  if (step.kind === 'playing') return { kind: 'play' }
+  if (step.kind === 'advance') {
+    return {
+      kind: 'advance',
+      index: step.index,
+      assetId: step.assetId,
+      time: step.time,
+      timelineTime: step.timelineTime,
+    }
+  }
+  return { kind: 'stop', timelineTime: step.timelineTime }
+}
+
 /** Громкость музыки в момент ролика с учётом затуханий. Затухания не перекрывают друг друга. */
 export type Silence = { start: number; end: number }
 export type Ducking = { sourceTime: number; silences: Silence[] }

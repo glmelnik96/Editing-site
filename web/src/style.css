@@ -511,14 +511,22 @@ main.card {
 
 .space-between { justify-content: space-between; }
 
-/* Два шага пути, а не два равных выбора. Первый крупнее и с зелёной рамкой, второй тише:
-   у человека без записей второй шаг делать не с чем, и он не должен звать одинаково. */
+/* Главный путь: загрузка → редактор. Конвертер висит под редактором как шаг 2.1, а не
+   третья равная колонка: иначе казалось бы, что перед склейкой обязательно конвертировать. */
 .steps {
   display: grid;
-  grid-template-columns: 1.25fr auto 1fr;
+  grid-template-columns: 1.25fr auto minmax(0, 1fr);
   align-items: stretch;
   gap: 16px;
 }
+.step-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.step-cluster .step-card { min-height: 0; }
+.step-cluster .step-card:not(.step-side) { flex: 1; }
 /* Карточки одной высоты, а «потом» посередине между ними: разная высота читалась бы как
    разная важность, а разводить шаги нужно порядком, а не размером. */
 .step-then { align-self: center; }
@@ -656,7 +664,7 @@ main.card {
 }
 .burn input { accent-color: var(--brand); }
 
-/* Вкладки: открыта одна панель, остальные скрыты атрибутом hidden. */
+/* Вкладки субтитров и рендера прячут только свои панели. Исходники и музыка остаются. */
 .tabs {
   display: flex;
   flex-wrap: wrap;

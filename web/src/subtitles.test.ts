@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from './project'
-import { burnEnabled, cueTrouble, cuesReady, patchCues, plural, sameSubtitleView, splitCue } from './subtitles'
+import { burnEnabled, cueTrouble, cuesReady, patchCues, plural, sameSubtitleView, splitCue, timelineSubtitleAssets } from './subtitles'
 
 const cue = (start: number, end: number, text = 'раз два три четыре') => ({ start, end, text })
 
@@ -115,5 +115,34 @@ describe('галочка над шкалой', () => {
     const next = patchCues(previous, [cue(0, 2, 'новое')])
     expect(next.enabled).toBe(false)
     expect(next.cues![0].text).toBe('новое')
+  })
+})
+
+describe('субтитры со шкалы', () => {
+  const asset = (id: string, name: string, transcript: boolean) => ({
+    id,
+    original_name: name,
+    files: { transcript: transcript ? `/t/${id}` : null },
+  })
+
+  it('берёт записи в порядке клипов и игнорирует пул', () => {
+    const clips = [
+      { asset_id: 'ast_b' },
+      { asset_id: 'ast_a' },
+      { asset_id: 'ast_b' },
+    ]
+    const pool = [
+      asset('ast_a', 'первая.mp4', true),
+      asset('ast_b', 'вторая.mp4', false),
+      asset('ast_c', 'третья.mp4', true),
+    ]
+    expect(timelineSubtitleAssets(clips, pool)).toEqual([
+      { id: 'ast_b', name: 'вторая.mp4', hasTranscript: false },
+      { id: 'ast_a', name: 'первая.mp4', hasTranscript: true },
+    ])
+  })
+
+  it('пустая шкала — пустой список, даже если в пуле есть файлы', () => {
+    expect(timelineSubtitleAssets([], [asset('ast_a', 'первая.mp4', true)])).toEqual([])
   })
 })

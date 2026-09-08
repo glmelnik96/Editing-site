@@ -1,4 +1,4 @@
-from server.media.timeline import words_through_clips
+from server.media.timeline import clip_asset_ids, words_through_clips
 
 
 def word(text, s, e):
@@ -84,3 +84,14 @@ def test_fade_shifts_words_after_the_overlap():
     assert [x["w"] for x in out] == ["раз", "три"]
     assert out[1]["s"] == 2.5 + (8.0 - 7.0)
     assert out[1]["e"] == 2.5 + (9.0 - 7.0)
+
+
+def test_clip_asset_ids_unique_in_order():
+    clips = [
+        {"asset_id": "ast_b", "in": 0, "out": 1},
+        {"asset_id": "ast_a", "in": 0, "out": 1},
+        {"asset_id": "ast_b", "in": 1, "out": 2},
+        {"asset_id": "ast_c", "in": 0, "out": 1},
+    ]
+    assert clip_asset_ids(clips) == ["ast_b", "ast_a", "ast_c"]
+    assert clip_asset_ids([]) == []

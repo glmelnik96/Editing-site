@@ -307,10 +307,10 @@ export function startTranscribe(assetId: string): Promise<{ job_id: string; lang
   )
 }
 
-/** Собрать реплики из расшифровки в документ проекта: правка как правка, версия растёт. */
-export function generateSubtitles(id: string, assetId: string, mode: 'burn' | 'soft'): Promise<Project> {
+/** Собрать реплики из расшифровок шкалы в документ проекта: правка как правка, версия растёт. */
+export function generateSubtitles(id: string, mode: 'burn' | 'soft' = 'burn'): Promise<Project> {
   return api<Project>(`/api/v1/projects/${encodeURIComponent(id)}/subtitles/generate`, {
     method: 'POST',
-    body: JSON.stringify({ asset_id: assetId, mode }),
+    body: JSON.stringify({ mode }),
   })
 }

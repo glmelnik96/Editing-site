@@ -1,5 +1,5 @@
 /**
- * Панель исходника: выбор готового файла, плеер прокси, выделение куска и кнопка «в шкалу».
+ * Панель исходников: выбор готового файла, плеер прокси, выделение куска и кнопка «в шкалу».
  *
  * Выделение хранится числами, а не в DOM: кнопка отдаёт наверх готовый диапазон, а редактор
  * решает, что с ним делать.
@@ -18,7 +18,7 @@ const MIN_PIECE = 0.1
 export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   el.innerHTML = `
     <main class="card">
-      <h3>Исходник</h3>
+      <h3>Исходники</h3>
       <select id="src-pick"><option value="">— выберите файл —</option></select>
       <div id="src-player"></div>
       <div class="src-strip" id="src-strip" title="Клик — перемотка, ручки — границы куска">
@@ -146,8 +146,18 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     const player = video()
     if (player) {
       player.addEventListener('timeupdate', () => {
+        if (player.currentTime >= to) {
+          if (!player.paused) player.pause()
+          if (player.currentTime > to) player.currentTime = to
+        }
         const total = current?.duration ?? 0
         cursor.style.left = total > 0 ? `${(player.currentTime / total) * 100}%` : '0%'
+      })
+      player.addEventListener('play', () => {
+        if (player.currentTime >= to) {
+          player.pause()
+          player.currentTime = to
+        }
       })
     }
     refreshRange()

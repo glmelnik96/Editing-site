@@ -1,5 +1,5 @@
 /**
- * Кабинет вошедшего: приветствие, два больших выбора и недавние проекты.
+ * Кабинет вошедшего: приветствие, шаги пути и недавние проекты.
  *
  * Карточки — ссылки, а не блоки с обработчиком: клавиатура, средняя кнопка мыши и «открыть в
  * новой вкладке» достаются даром, а не переписываются руками.
@@ -22,24 +22,39 @@ const CARD_STYLE = [
   'text-decoration:none',
 ].join(';')
 
-// Два шага пути, а не два равных выбора: сначала в сервис приносят исходники, потом из них
-// собирают ролик. Равновеликие карточки заставляли бы выбирать там, где выбора нет.
-const STEPS = [
-  {
-    href: '#/files',
-    step: 'Шаг 1',
-    title: 'Загрузить исходники',
-    lead: 'Записи, музыка, готовые субтитры — всё, из чего будет собран ролик',
-    key: true,
-  },
-  {
-    href: '#/new',
-    step: 'Шаг 2',
-    title: 'Открыть редактор',
-    lead: 'Вырезать лишнее, расшифровать речь, собрать готовый файл',
-    key: false,
-  },
-]
+type Step = {
+  href: string
+  step: string
+  title: string
+  lead: string
+  key: boolean
+  compact?: boolean
+}
+
+// Сначала приносят исходники, потом собирают ролик. Конвертер — боковая ветка: тот же экран
+// записей, но без склейки. Его не вставляем между 1 и 2, чтобы путь к редактору не ломался.
+const UPLOAD: Step = {
+  href: '#/files',
+  step: 'Шаг 1',
+  title: 'Загрузить исходники',
+  lead: 'Записи, музыка, готовые субтитры — всё, из чего будет собран ролик',
+  key: true,
+}
+const EDITOR: Step = {
+  href: '#/new',
+  step: 'Шаг 2',
+  title: 'Открыть редактор',
+  lead: 'Вырезать лишнее, расшифровать речь, собрать готовый файл',
+  key: false,
+}
+const CONVERT: Step = {
+  href: '#/files',
+  step: 'Шаг 2.1',
+  title: 'Конвертировать',
+  lead: 'Извлечь звук или другой файл, не собирая нарезку',
+  key: false,
+  compact: true,
+}
 
 const ROW_STYLE = [
   'justify-content:space-between',
@@ -50,10 +65,11 @@ const ROW_STYLE = [
   'text-decoration:none',
 ].join(';')
 
-function card(step: (typeof STEPS)[number], delayMs: number): string {
+function card(step: Step, delayMs: number): string {
+  const height = step.compact ? 'min-height:0;padding:20px 28px' : ''
   return `
-    <a class="card appear step-card${step.key ? ' step-key' : ''}" href="${step.href}"
-      style="${CARD_STYLE};--delay:${delayMs}ms">
+    <a class="card appear step-card${step.key ? ' step-key' : ''}${step.compact ? ' step-side' : ''}"
+      href="${step.href}" style="${CARD_STYLE};${height};--delay:${delayMs}ms">
       <span class="meta step-mark">${step.step}</span>
       <h2 class="display-m" style="margin:0">${step.title}</h2>
       <p class="lead" style="margin:0">${step.lead}</p>
@@ -81,6 +97,18 @@ function recentBlock(projects: ProjectCard[]): string {
     </section>`
 }
 
+export function homeStepsHtml(): string {
+  return `
+      <div class="steps">
+        ${card(UPLOAD, 60)}
+        <span class="step-then meta" aria-hidden="true">потом</span>
+        <div class="step-cluster">
+          ${card(EDITOR, 120)}
+          ${card(CONVERT, 180)}
+        </div>
+      </div>`
+}
+
 export function mountHome(el: HTMLElement, me: Me): { stop: () => void } {
   let stopped = false
   const name = me.name.trim() || me.email
@@ -88,11 +116,7 @@ export function mountHome(el: HTMLElement, me: Me): { stop: () => void } {
   el.innerHTML = `
     <div class="screen stack" style="--stack-gap:32px" id="home-column">
       <h1 class="display-l appear" style="margin:0">Привет, ${escapeHtml(name)}</h1>
-      <div class="steps">
-        ${card(STEPS[0], 60)}
-        <span class="step-then meta" aria-hidden="true">потом</span>
-        ${card(STEPS[1], 120)}
-      </div>
+      ${homeStepsHtml()}
     </div>`
 
   const column = el.querySelector('#home-column') as HTMLElement

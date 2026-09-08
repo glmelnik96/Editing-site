@@ -3,6 +3,7 @@ import type { Clip } from './model'
 import {
   clampTransitions,
   clipAt,
+  clipAssetIds,
   dropTarget,
   fadeInto,
   insertClip,
@@ -67,6 +68,17 @@ describe('время шкалы', () => {
     expect(sourceTime(three, 0)).toEqual({ index: 0, assetId: 'ast_1', time: 0 })
     expect(sourceTime(three, 4.5)).toEqual({ index: 1, assetId: 'ast_1', time: 10.5 })
     expect(sourceTime(three, 100)).toBeNull()
+  })
+
+  it('собирает уникальные записи шкалы в порядке появления', () => {
+    const mixed = [
+      clip('c1', 0, 1, 'ast_a'),
+      clip('c2', 0, 1, 'ast_b'),
+      clip('c3', 2, 3, 'ast_a'),
+      clip('c4', 0, 1, 'ast_c'),
+    ]
+    expect(clipAssetIds(mixed)).toEqual(['ast_a', 'ast_b', 'ast_c'])
+    expect(clipAssetIds([])).toEqual([])
   })
 })
 

@@ -71,6 +71,15 @@ export function sourceTime(clips: Clip[], time: number): { index: number; assetI
   return { index: found.index, assetId: found.clip.asset_id, time: ms(found.clip.in + found.offset) }
 }
 
+/** Уникальные записи шкалы в порядке появления: субтитры собираются только из них. */
+export function clipAssetIds(clips: Pick<Clip, 'asset_id'>[]): string[] {
+  const ids: string[] = []
+  for (const clip of clips) {
+    if (!ids.includes(clip.asset_id)) ids.push(clip.asset_id)
+  }
+  return ids
+}
+
 /**
  * Свободный id клипа: c<n> плюс случайный хвост, чтобы два быстрых разреза не совпали.
  *

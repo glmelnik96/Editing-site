@@ -21,7 +21,7 @@ from server.app.util import new_id, now_iso
 from server.db.core import transaction
 from server.media.cues import build_cues
 from server.media.subs import cues_to_srt, cues_to_vtt
-from server.media.timeline import clips_duration, words_through_clips
+from server.media.timeline import clip_asset_ids, clips_duration, words_through_clips
 
 log = logging.getLogger("video.projects")
 
@@ -424,8 +424,7 @@ def _read_transcript(settings: Settings, owner: str, asset_id: str) -> dict:
 
 
 def cues_from_transcript(settings: Settings, doc: dict, *, owner: str, asset_id: str) -> list[dict]:
-    """Реплики расшифровки в шкале ролика: слова пересчитываются через клипы, текст режется по
-    ширине строки.
+    """Реплики расшифровки одного ассета в шкале ролика.
 
     Транскрипт живёт во времени исходника, а в ролике от исходника остались только выбранные куски
     и стоят они в другом порядке. Возьми слова как есть — и субтитры разъедутся с картинкой.
@@ -434,7 +433,27 @@ def cues_from_transcript(settings: Settings, doc: dict, *, owner: str, asset_id:
     aspect = (doc.get("output") or {}).get("aspect")
     return build_cues(
         words_through_clips(transcript, doc.get("clips") or [], asset_id=asset_id),
-        # Пропорция проверена при сохранении; запасное значение — на испорченный документ.
+        max_chars=SUB_CHARS_BY_ASPECT.get(aspect, SUB_CHARS_BY_ASPECT["16:9"]),
+        max_lines=SUB_LINES,
+        max_dur=SUB_MAX_DUR,
+    )
+
+
+def cues_from_timeline(settings: Settings, doc: dict, *, owner: str) -> list[dict]:
+    """Реплики всех записей, которые лежат на шкале, в порядке ролика.
+
+    Пул исходников сюда не входит: на шкале может быть два файла, а в пуле — десять, и субтитры
+    чужой записи в кадр не попадут.
+    """
+    clips = doc.get("clips") or []
+    aspect = (doc.get("output") or {}).get("aspect")
+    words: list[dict] = []
+    for asset_id in clip_asset_ids(clips):
+        transcript = _read_transcript(settings, owner, asset_id)
+        words.extend(words_through_clips(transcript, clips, asset_id=asset_id))
+    words.sort(key=lambda item: (float(item["s"]), float(item["e"])))
+    return build_cues(
+        words,
         max_chars=SUB_CHARS_BY_ASPECT.get(aspect, SUB_CHARS_BY_ASPECT["16:9"]),
         max_lines=SUB_LINES,
         max_dur=SUB_MAX_DUR,
@@ -463,18 +482,16 @@ def _cues_for_document(cues: list[dict]) -> list[dict]:
 
 def generate_project_cues(
     conn: sqlite3.Connection, settings: Settings, user_id: str, project: dict, *,
-    asset_id: str, mode: str, version: int,
+    mode: str, version: int,
 ) -> dict:
-    """Реплики из расшифровки — в документ проекта, обычным сохранением.
+    """Реплики из расшифровок шкалы — в документ проекта, обычным сохранением.
 
     Сохранение, а не отдельный файл: версия растёт, и на реплики распространяются откат, точки
     сохранения и защита от одновременной правки. Прежний блок субтитров заменяется целиком —
     «собрать заново» и означает отказ от прежних правок.
     """
     doc = project["doc"]
-    cues = _cues_for_document(
-        cues_from_transcript(settings, doc, owner=user_id, asset_id=asset_id)
-    )
+    cues = _cues_for_document(cues_from_timeline(settings, doc, owner=user_id))
     if not cues:
         raise NoCues("В выбранные куски не попало ни одного слова расшифровки")
     return save_project(

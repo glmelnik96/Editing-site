@@ -49,6 +49,16 @@ def _all_words(transcript: dict) -> list[dict]:
     return words
 
 
+def clip_asset_ids(clips: list[dict]) -> list[str]:
+    """Уникальные ассеты шкалы в порядке появления: субтитры собираются только из них."""
+    ids: list[str] = []
+    for clip in clips:
+        asset_id = clip.get("asset_id")
+        if isinstance(asset_id, str) and asset_id not in ids:
+            ids.append(asset_id)
+    return ids
+
+
 def words_through_clips(transcript: dict, clips: list[dict], *, asset_id: str) -> list[dict]:
     """Слова исходника в шкале ролика (спека §10.9).
 

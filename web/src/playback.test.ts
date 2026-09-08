@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './timeline/model'
-import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, previewSpeechGain, seekPlan, stepPlan } from './playback'
+import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, previewSpeechGain, resumePlan, seekPlan, stepPlan } from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
   return {
@@ -53,6 +53,21 @@ describe('переходы между клипами', () => {
 
   it('исчезнувший клип не роняет плеер', () => {
     expect(stepPlan(clips, { index: 9, sourceTime: 1 })).toEqual({ kind: 'end', timelineTime: 9.5 })
+  })
+
+  it('на обрезе последнего клипа пробел больше не играет хвост исходника', () => {
+    expect(resumePlan(clips, { index: 2, sourceTime: 4.5 })).toEqual({ kind: 'stop', timelineTime: 9.5 })
+    expect(resumePlan(clips, { index: 2, sourceTime: 5 })).toEqual({ kind: 'stop', timelineTime: 9.5 })
+  })
+
+  it('внутри клипа пробел продолжает, на шве — следующий кусок', () => {
+    expect(resumePlan(clips, { index: 0, sourceTime: 2.5 })).toEqual({ kind: 'play' })
+    expect(resumePlan(clips, { index: 0, sourceTime: 4 })).toMatchObject({
+      kind: 'advance',
+      index: 1,
+      assetId: 'ast_2',
+      time: 10,
+    })
   })
 
   it('во время fade держит оба клипа и mix', () => {

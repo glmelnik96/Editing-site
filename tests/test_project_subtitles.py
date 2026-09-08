@@ -8,6 +8,7 @@ from server.app.projects.store import (
     SubtitlesUnavailable,
     build_project_subtitles,
     create_project,
+    generate_project_cues,
     save_project,
 )
 from server.app.storage import asset_dir, subs_dir, transcript_path
@@ -298,3 +299,51 @@ class TestКэшИРасшифровка:
         srt = build_project_subtitles(conn, settings, made)
         stamp = srt.stat().st_mtime_ns
         assert build_project_subtitles(conn, settings, made).stat().st_mtime_ns == stamp
+
+
+class TestСборкаСоШкалы:
+    def test_реплики_из_всех_записей_на_шкале(self, conn, settings):
+        add_transcript(settings)
+        add_transcript(
+            settings, asset=OTHER,
+            segments=[{"id": 1, "start": 0.0, "end": 1.2, "text": "Альфа бета гамма",
+                       "words": words("Альфа бета гамма", start=0.0, step=0.3)}],
+        )
+        made = project(conn, settings, subtitles=None, clips=[
+            {"asset_id": ASSET, "in": 0.0, "out": 2.0},
+            {"asset_id": OTHER, "in": 0.0, "out": 1.2},
+        ])
+        saved = generate_project_cues(
+            conn, settings, USER, made, mode="burn", version=made["version"],
+        )
+        text = " ".join(cue["text"] for cue in saved["doc"]["subtitles"]["cues"])
+        assert "Мы поехали" in text
+        assert "Альфа" in text
+
+    def test_запись_из_пула_но_не_со_шкалы_в_реплики_не_попадает(self, conn, settings):
+        add_transcript(settings)
+        add_transcript(
+            settings, asset=OTHER,
+            segments=[{"id": 1, "start": 0.0, "end": 1.0, "text": "Секретное слово",
+                       "words": words("Секретное слово", start=0.0, step=0.3)}],
+        )
+        made = project(conn, settings, subtitles=None, clips=[
+            {"asset_id": ASSET, "in": 0.0, "out": 3.0},
+        ])
+        saved = generate_project_cues(
+            conn, settings, USER, made, mode="burn", version=made["version"],
+        )
+        text = " ".join(cue["text"] for cue in saved["doc"]["subtitles"]["cues"])
+        assert "Секретное" not in text
+        assert "Мы поехали" in text
+
+    def test_без_расшифровки_у_записи_на_шкале_отказ(self, conn, settings):
+        add_transcript(settings)
+        made = project(conn, settings, subtitles=None, clips=[
+            {"asset_id": ASSET, "in": 0.0, "out": 2.0},
+            {"asset_id": OTHER, "in": 0.0, "out": 2.0},
+        ])
+        with pytest.raises(SubtitlesUnavailable):
+            generate_project_cues(
+                conn, settings, USER, made, mode="burn", version=made["version"],
+            )

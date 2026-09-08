@@ -1,5 +1,5 @@
 /**
- * Экран редактора: панель исходника, шкала, плеер склейки, автосохранение.
+ * Экран редактора: панель исходников, шкала, плеер склейки, автосохранение.
  *
  * Состояние — один документ проекта плюс версия. Любая правка идёт через applyClips: он кладёт
  * новый список, перерисовывает и просит сохранить. Ответ сервера заменяет документ целиком:
@@ -15,6 +15,7 @@ import {
   musicVolume,
   previewClipVolume,
   previewSpeechGain,
+  resumePlan,
   seekPlan,
   stepPlan,
   type Incoming,
@@ -22,7 +23,7 @@ import {
 import { createSaver, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
-import { clampTransitions, clipAt, fadeInto, insertClip, maxFade, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
+import { clampTransitions, clipAt, clipAssetIds, fadeInto, insertClip, maxFade, ms, newClipId, removeClip, splitAt, totalDuration, type Clip } from './timeline/model'
 import { mountMusic } from './music'
 import { mountRender } from './render'
 import { mountSource } from './source'
@@ -54,7 +55,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     <div class="editor">
       <section class="side">
         <nav class="tabs" id="ed-tabs">
-          <button type="button" class="tab" data-tab="source">Исходник</button>
+          <button type="button" class="tab" data-tab="source">Исходники</button>
           <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
           <button type="button" class="tab" data-tab="renders">Рендер</button>
         </nav>
@@ -152,13 +153,14 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     assets = new Map(list.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
     source.setAssets(list)
     musicPanel.setAssets(list)
-    const current = source.current()
-    if (current) {
-      const fresh = list.find(a => a.id === current.id) ?? current
-      const hadTranscript = Boolean(previous.get(current.id)?.files.transcript)
-      const hasTranscript = Boolean(fresh.files.transcript)
-      subtitles.setAsset(fresh.id, hasTranscript)
-      if (hasTranscript && !hadTranscript) markNews('subtitles')
+    if (project) {
+      const ids = clipAssetIds(project.doc.clips)
+      for (const id of ids) {
+        const hadTranscript = Boolean(previous.get(id)?.files.transcript)
+        const hasTranscript = Boolean(list.find(a => a.id === id)?.files.transcript)
+        if (hasTranscript && !hadTranscript) markNews('subtitles')
+      }
+      subtitles.setTimeline(project.doc.clips, list)
     }
     if (project?.doc.music) {
       const musicAsset = list.find(a => a.id === project?.doc.music?.asset_id)
@@ -336,6 +338,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       prepareNext(plan.index)
     } else if (plan.kind === 'end') {
       playing = false
+      const clip = project.doc.clips[playIndex]
+      if (clip) active.currentTime = clip.out
       active.pause()
       applyIncoming()
       music.pause()
@@ -437,18 +441,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   burnBox.addEventListener('change', () => applyEnabled(burnBox.checked))
 
-  // О смене файла узнаём по событию из самой панели: change от её списка всплывает до контейнера,
-  // и лезть внутрь чужой панели за её select не приходится. Тот же файл setAsset пропускает,
-  // так что change от полей таймкода панель субтитров не тревожит.
-  sourceMain.addEventListener('change', () => {
-    const asset = source.current()
-    subtitles.setAsset(asset?.id ?? null, Boolean(asset?.files.transcript))
-  })
-
   /* ═══ Вкладки левой колонки ═══════════════════════════════════════════════
    *
-   * Три панели спорили бы за внимание, если показать все сразу. Панель монтируется при
-   * первом открытии своей вкладки и дальше живёт.
+   * Исходники и музыка всегда на экране: без них не видно, из чего собран ролик.
+   * Субтитры и рендер подставляются под них. Панель рендера монтируется при первом открытии.
    */
   const tabsBar = el.querySelector('#ed-tabs') as HTMLElement
   const panels = new Map<string, HTMLElement>(
@@ -476,7 +472,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function showTab(name: string): void {
     tab = name
-    panels.forEach((panel, key) => (panel.hidden = key !== name))
+    panels.forEach((panel, key) => {
+      if (key === 'source') {
+        panel.hidden = false
+        return
+      }
+      panel.hidden = key !== name
+    })
     tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button => {
       button.classList.toggle('on', button.dataset.tab === name)
       if (button.dataset.tab === name) button.classList.remove('news')
@@ -671,6 +673,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     timeline.render({ clips: project.doc.clips, assets, data })
     timeline.setPlayhead(timelineTime)
     subtitles.setProject(project)
+    subtitles.setTimeline(project.doc.clips, assetList)
     musicPanel.setMusic(project.doc.music)
     syncBurn()
     syncClipVolume()
@@ -683,19 +686,45 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   el.querySelector('#ed-play')!.addEventListener('click', () => {
     if (!project || !project.doc.clips.length) return
-    playing = !playing
     if (playing) {
-      if (!active.src) seek(timelineTime)
-      void active.play().catch(showError)
-      if (project.doc.music) void music.play().catch(() => {})
-      applyIncoming(incomingAt(project.doc.clips, timelineTime), true)
-      applyPreviewVolumes()
-    } else {
+      playing = false
       active.pause()
       const hidden = active === videoA ? videoB : videoA
       hidden.pause()
       music.pause()
+      return
     }
+    const plan = resumePlan(project.doc.clips, { index: playIndex, sourceTime: active.currentTime })
+    if (plan.kind === 'stop') {
+      const clip = project.doc.clips[playIndex]
+      if (clip) active.currentTime = clip.out
+      timelineTime = plan.timelineTime
+      timeline.setPlayhead(timelineTime)
+      showTime()
+      applyIncoming()
+      music.pause()
+      return
+    }
+    playing = true
+    if (plan.kind === 'advance') {
+      const src = proxyOf(plan.assetId)
+      if (!src) {
+        playing = false
+        notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
+        return
+      }
+      if (!active.src.endsWith(src)) active.src = src
+      playIndex = plan.index
+      timelineTime = plan.timelineTime
+      active.currentTime = plan.time
+      prepareNext(plan.index)
+    } else if (!active.src) {
+      seek(timelineTime)
+    }
+    void active.play().catch(showError)
+    if (project.doc.music) void music.play().catch(() => {})
+    applyIncoming(incomingAt(project.doc.clips, timelineTime), true)
+    applyPreviewVolumes()
   })
 
   el.querySelector('#ed-split')!.addEventListener('click', () => {
