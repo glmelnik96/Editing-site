@@ -14,4 +14,12 @@ describe('шаги кабинета', () => {
     expect(html.indexOf('Открыть редактор')).toBeLessThan(html.indexOf('Конвертировать'))
     expect(html.indexOf('Загрузить исходники')).toBeLessThan(html.indexOf('Открыть редактор'))
   })
+
+  it('карточка конвертера ведёт на свой экран, не на записи', () => {
+    const html = homeStepsHtml()
+    const convertAt = html.indexOf('Конвертировать')
+    const slice = html.slice(convertAt - 400, convertAt)
+    expect(slice).toContain('href="#/convert"')
+    expect(slice).not.toContain('href="#/files"')
+  })
 })
