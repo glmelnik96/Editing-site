@@ -8,6 +8,7 @@
 import './style.css'
 import { api, ApiError } from './api'
 import { mountAdmin } from './admin'
+import { mountConvert } from './convert'
 import { mountDoor } from './door'
 import { mountEditor } from './editor'
 import { mountFiles } from './files'
@@ -51,6 +52,9 @@ function show(route: Route, me: Me): void {
       return
     case 'new':
       current = mountNewProject(shell.screen)
+      return
+    case 'convert':
+      current = mountConvert(shell.screen)
       return
     case 'projects':
       current = mountProjects(shell.screen)
