@@ -26,6 +26,7 @@ def test_list_returns_own_open_jobs(client, login_as, settings):
     jobs = r.json()["jobs"]
     row = next(j for j in jobs if j["id"] == job_id)
     assert row["type"] == "transcribe" and row["label"] == "a.mp4"
+    assert row["target_id"] == "ast_jobsapi1"
     assert row["cancelable"] is True
     assert "progress" in row
 

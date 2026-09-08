@@ -170,3 +170,4 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
     converting = enqueue_job(conn, user_id=uid, type_="convert", target_id="ast_list1")
     conv = next(r for r in list_jobs_for_user(conn, uid, now=now) if r["id"] == converting)
     assert conv["label"] == "Нарезка.mp4" and conv["cancelable"] is True
+    assert conv["target_id"] == "ast_list1"

@@ -67,6 +67,7 @@ def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime)
                 "label": job_label(row["type"], row["asset_name"], row["project_name"]),
                 "cancelable": job_cancelable(row["type"], row["status"]),
                 "quality": quality if quality in ("draft", "final") else None,
+                "target_id": row["target_id"],
             }
         )
     return out

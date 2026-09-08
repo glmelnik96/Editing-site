@@ -6,7 +6,7 @@
 import { api, ApiError, isRetryable } from './api'
 import { fmtDuration, fmtSize, listAssets, needsPolling, POLL_MS, type Asset } from './assets'
 import { escapeHtml } from './html'
-import { cancelJob, loadJob, type JobView } from './project'
+import { cancelJob, listJobs, loadJob, type JobListItem, type JobView } from './project'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
 const CONVERT_JOB_TEXT: Record<string, string> = {
@@ -47,6 +47,32 @@ export function convertJobText(status: string, progress: number): string {
   const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100)
   if (status === 'running') return `конвертирую, ${pct} %`
   return CONVERT_JOB_TEXT[status] ?? status
+}
+
+/** Идущие convert-задания с GET /jobs: после перезагрузки экрана pending пуст. */
+export function runningConvertsFromJobs(items: JobListItem[]): Array<{ assetId: string; job: JobView }> {
+  return items
+    .filter(job => job.type === 'convert' && CONVERT_RUNNING.has(job.status))
+    .map(job => ({
+      assetId: job.target_id,
+      job: {
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        progress: job.progress,
+        error: job.error,
+      },
+    }))
+}
+
+/** Если идёт конвертация другого файла — показываем его, иначе оставляем выбор. */
+export function pickConvertFile(selectedId: string, readyIds: string[], runningIds: string[]): string {
+  const ready = new Set(readyIds)
+  const live = runningIds.filter(id => ready.has(id))
+  if (live.includes(selectedId)) return selectedId
+  if (live[0]) return live[0]
+  if (ready.has(selectedId)) return selectedId
+  return readyIds[0] ?? ''
 }
 
 function until(iso: string): string {
@@ -175,7 +201,14 @@ export function mountConvert(el: HTMLElement) {
       body.innerHTML = `${emptyConvertHtml()}${conversionsListHtml(conversions)}`
       return
     }
-    if (!ready.some(a => a.id === selectedId)) selectedId = ready[0].id
+    const runningIds = [...jobs.entries()]
+      .filter(([, job]) => CONVERT_RUNNING.has(job.status))
+      .map(([id]) => id)
+    selectedId = pickConvertFile(
+      selectedId,
+      ready.map(a => a.id),
+      runningIds,
+    )
     const asset = current()
     if (!asset) return
     const formats = convertFormatsFor(asset.kind)
@@ -261,24 +294,36 @@ export function mountConvert(el: HTMLElement) {
     )
   }
 
-  async function refresh(): Promise<void> {
-    if (stopped) return
-    const listed = await listAssets()
-    if (stopped) return
-    assets = listed.assets
-    await pollJobs()
-    if (stopped) return
-    const { conversions } = await listMyConversions()
-    if (stopped) return
-    draw(conversions)
-    wire()
-    window.clearTimeout(timer)
-    const live = [...pending.keys()].some(id => {
+  function convertIsLive(): boolean {
+    return [...pending.keys()].some(id => {
       const job = jobs.get(id)
       return Boolean(job && CONVERT_RUNNING.has(job.status))
     })
-    if (!stopped && (needsPolling(assets) || live)) {
-      timer = window.setTimeout(() => void refresh().catch(showError), POLL_MS)
+  }
+
+  async function refresh(): Promise<void> {
+    if (stopped) return
+    try {
+      const listed = await listAssets()
+      if (stopped) return
+      assets = listed.assets
+      const { jobs: listedJobs } = await listJobs()
+      if (stopped) return
+      for (const row of runningConvertsFromJobs(listedJobs)) {
+        pending.set(row.assetId, row.job.id)
+        jobs.set(row.assetId, row.job)
+      }
+      await pollJobs()
+      if (stopped) return
+      const { conversions } = await listMyConversions()
+      if (stopped) return
+      draw(conversions)
+      wire()
+    } finally {
+      window.clearTimeout(timer)
+      if (!stopped && (needsPolling(assets) || convertIsLive())) {
+        timer = window.setTimeout(() => void refresh().catch(showError), POLL_MS)
+      }
     }
   }
 

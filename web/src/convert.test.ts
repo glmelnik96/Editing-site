@@ -7,6 +7,8 @@ import {
   convertibleAsset,
   emptyConvertHtml,
   formatChipsHtml,
+  pickConvertFile,
+  runningConvertsFromJobs,
 } from './convert'
 
 describe('convert screen helpers', () => {
@@ -63,5 +65,62 @@ describe('convert screen helpers', () => {
     expect(convertHint()).toMatch(/звук/)
     expect(convertHint()).toMatch(/mp4/)
     expect(convertJobText('running', 0.4)).toContain('%')
+  })
+
+  it('подхватывает идущую конвертацию после перезагрузки экрана', () => {
+    const rows = runningConvertsFromJobs([
+      {
+        id: 'job_1',
+        type: 'convert',
+        status: 'running',
+        progress: 0.4,
+        error: null,
+        created_at: '',
+        finished_at: null,
+        label: 'a.mp4',
+        cancelable: true,
+        quality: null,
+        target_id: 'ast_1',
+      },
+      {
+        id: 'job_2',
+        type: 'render',
+        status: 'running',
+        progress: 0.1,
+        error: null,
+        created_at: '',
+        finished_at: null,
+        label: 'Ролик',
+        cancelable: true,
+        quality: 'draft',
+        target_id: 'prj_1',
+      },
+      {
+        id: 'job_3',
+        type: 'convert',
+        status: 'done',
+        progress: 1,
+        error: null,
+        created_at: '',
+        finished_at: '',
+        label: 'a.mp4',
+        cancelable: false,
+        quality: null,
+        target_id: 'ast_1',
+      },
+    ])
+    expect(rows).toEqual([
+      {
+        assetId: 'ast_1',
+        job: { id: 'job_1', type: 'convert', status: 'running', progress: 0.4, error: null },
+      },
+    ])
+  })
+
+  it('после перезагрузки открывает файл, который сейчас конвертируется', () => {
+    expect(pickConvertFile('ast_a', ['ast_a', 'ast_b'], ['ast_b'])).toBe('ast_b')
+    expect(pickConvertFile('ast_b', ['ast_a', 'ast_b'], ['ast_b'])).toBe('ast_b')
+    expect(pickConvertFile('ast_a', ['ast_a', 'ast_b'], [])).toBe('ast_a')
+    expect(pickConvertFile('', ['ast_a'], [])).toBe('ast_a')
   })
 })

@@ -122,6 +122,7 @@ def build_convert_command(
     elif fmt == "webm":
         args += [
             "-vf", MP4_SCALE,
+            "-pix_fmt", "yuv420p",
             "-c:v", WEBM_VIDEO, "-crf", "32", "-b:v", "0",
             "-deadline", "realtime", "-cpu-used", "8",
         ]
@@ -133,6 +134,7 @@ def build_convert_command(
     else:
         args += [
             "-vf", MP4_SCALE,
+            "-pix_fmt", "yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
         ]
         if has_audio:

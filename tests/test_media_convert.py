@@ -57,6 +57,7 @@ def test_mp4_caps_short_side_at_1080_without_upscale():
     assert args[args.index("-f") + 1] == "mp4"
     scale = args[args.index("-vf") + 1]
     assert scale == "scale=w='if(gte(iw,ih),-2,min(iw,1080))':h='if(gte(iw,ih),min(ih,1080),-2)'"
+    assert args[args.index("-pix_fmt") + 1] == "yuv420p"
 
 
 def test_mp4_without_audio_drops_the_sound_track():
@@ -123,6 +124,7 @@ def test_webm_is_vp9_opus_same_scale_as_mp4():
     assert "libx264" not in args
     scale = args[args.index("-vf") + 1]
     assert "1080" in scale
+    assert args[args.index("-pix_fmt") + 1] == "yuv420p"
 
 
 def test_webm_without_audio_drops_the_sound_track():

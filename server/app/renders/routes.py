@@ -42,6 +42,7 @@ class JobListItem(BaseModel):
     label: str
     cancelable: bool
     quality: str | None
+    target_id: str
 
 
 class JobList(BaseModel):

@@ -248,6 +248,7 @@ export type JobListItem = {
   label: string
   cancelable: boolean
   quality: 'draft' | 'final' | null
+  target_id: string
 }
 
 export function listJobs(): Promise<{ jobs: JobListItem[] }> {
