@@ -42,7 +42,7 @@ def _migrations_dir(tmp_path, monkeypatch, files):
 def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     conn = connect(tmp_path / "t.db")
     try:
-        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         assert TABLES <= _tables(conn)
         assert migrate(conn) == []
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -170,7 +170,7 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert migrate(conn) == [1]
         assert "yandex_id" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         assert "yandex_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u1', 'a@ya.ru', 'x', '42')"
@@ -224,7 +224,7 @@ def test_jobs_rebuild_keeps_old_rows_and_accepts_convert(tmp_path, monkeypatch):
                 "VALUES ('job_noconvert01', 'usr_000000000001', 'convert', 'cpu', 'queued', 'ast_1', 'x')"
             )
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [9, 10]
+        assert migrate(conn) == [9, 10, 11]
         names = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
         assert "jobs_user_status_idx" in names
         assert conn.execute("SELECT type FROM jobs WHERE id = 'job_oldrender01'").fetchone()[0] == "render"
@@ -237,5 +237,53 @@ def test_jobs_rebuild_keeps_old_rows_and_accepts_convert(tmp_path, monkeypatch):
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversions'"
         ).fetchone()[0]
         assert "asset_id" in sql and "expires_at" in sql
+    finally:
+        conn.close()
+
+
+def test_conversions_rebuild_keeps_old_rows_and_accepts_new_formats(tmp_path, monkeypatch):
+    """CHECK format на conversions нельзя расширить ALTER: таблицу пересоздаём."""
+    conn = connect(tmp_path / "t.db")
+    try:
+        real_discover = migrate_mod.discover
+        monkeypatch.setattr(
+            migrate_mod, "discover", lambda: [item for item in real_discover() if item[0] <= 10]
+        )
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        conn.execute(
+            "INSERT INTO users (id, email, created_at) VALUES ('usr_000000000001', 'a@ya.ru', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status,"
+            " created_at, last_access_at) VALUES"
+            " ('ast_000000000001', 'usr_000000000001', 'video', 'a.mp4', 'mp4', 1,"
+            " 'proxy_ready', 'x', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO conversions"
+            " (id, user_id, asset_id, job_id, format, path, size, duration, created_at, expires_at)"
+            " VALUES ('cnv_oldmp3xxxxx1', 'usr_000000000001', 'ast_000000000001',"
+            " 'job_1', 'mp3', 'p', 1, 1, 'x', 'x')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO conversions"
+                " (id, user_id, asset_id, job_id, format, path, size, duration,"
+                " created_at, expires_at) VALUES ('cnv_aacblocked01',"
+                " 'usr_000000000001', 'ast_000000000001', 'job_2', 'aac', 'p', 1, 1, 'x', 'x')"
+            )
+        monkeypatch.setattr(migrate_mod, "discover", real_discover)
+        assert migrate(conn) == [11]
+        assert (
+            conn.execute("SELECT format FROM conversions WHERE id = 'cnv_oldmp3xxxxx1'").fetchone()[0]
+            == "mp3"
+        )
+        for fmt in ("aac", "flac", "ogg", "webm"):
+            conn.execute(
+                "INSERT INTO conversions "
+                "(id, user_id, asset_id, job_id, format, path, size, duration, created_at, expires_at) "
+                "VALUES (?, 'usr_000000000001', 'ast_000000000001', 'job_x', ?, 'p', 1, 1, 'x', 'x')",
+                (f"cnv_{fmt}00000001", fmt),
+            )
     finally:
         conn.close()
