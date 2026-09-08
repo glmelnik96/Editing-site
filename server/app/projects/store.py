@@ -576,9 +576,12 @@ def delete_render(conn: sqlite3.Connection, user_id: str, render_id: str) -> boo
 
 
 def active_renders(conn: sqlite3.Connection, user_id: str) -> int:
-    """Сколько сборок человек уже запустил: очередь плюс выполняющаяся."""
+    """Сколько сборок и конвертаций человек уже запустил: очередь плюс выполняющееся.
+
+    Лимит общий: иначе конвертация часового файла отодвинет сборку ролика без явного правила.
+    """
     return conn.execute(
-        "SELECT count(*) FROM jobs WHERE user_id = ? AND type = 'render' "
+        "SELECT count(*) FROM jobs WHERE user_id = ? AND type IN ('render', 'convert') "
         "AND status IN ('queued', 'running')",
         (user_id,),
     ).fetchone()[0]

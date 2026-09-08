@@ -572,6 +572,14 @@ main.card {
 .token-name > span:first-child { overflow-wrap: anywhere; }
 .asset-actions { flex: 0 0 auto; gap: 8px; margin: 0; }
 .pill-bad { color: var(--bad); border-color: var(--bad); }
+.convert-box details > summary {
+  list-style: none;
+  display: inline-flex;
+  cursor: pointer;
+}
+.convert-box details > summary::-webkit-details-marker {
+  display: none;
+}
 
 /* Плитки записей и карточки проектов: одна сетка на оба экрана. */
 .tiles {

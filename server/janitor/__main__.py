@@ -24,6 +24,7 @@ def run(settings: Settings, now: datetime | None = None) -> dict[str, int]:
         "uploads_expired": 0,
         "assets_expired": 0,
         "renders_expired": 0,
+        "conversions_expired": 0,
         "orphans": 0,
         "sessions_expired": 0,
         "jobs_requeued": 0,
@@ -37,6 +38,7 @@ def run(settings: Settings, now: datetime | None = None) -> dict[str, int]:
             stats["uploads_expired"] = rules.delete_expired_uploads(conn, now)
             stats["assets_expired"] = rules.delete_expired_assets(conn, settings, now)
             stats["renders_expired"] = rules.delete_expired_renders(conn, now)
+            stats["conversions_expired"] = rules.delete_expired_conversions(conn, now)
             stats["orphans"] = rules.delete_orphans(conn, settings, now)
             stats["sessions_expired"] = rules.delete_expired_sessions(conn, settings, now)
             stats["jobs_requeued"], stats["jobs_failed"] = rules.requeue_stale_jobs(conn, now)

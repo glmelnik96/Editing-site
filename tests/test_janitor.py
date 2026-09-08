@@ -252,6 +252,7 @@ def test_run_returns_stats(conn, settings):
         "uploads_expired": 0,
         "assets_expired": 0,
         "renders_expired": 0,
+        "conversions_expired": 0,
         "orphans": 0,
         "sessions_expired": 0,
         "jobs_requeued": 0,
@@ -330,6 +331,49 @@ def test_expired_render_deleted_by_someone_else_leaves_no_trace(conn, settings):
     conn.execute("DELETE FROM renders")
     assert rules.delete_expired_renders(conn, NOW) == 0
     assert path.exists()
+
+
+def _conversion(conn, settings, expires_at, conversion_id="cnv_000000000001"):
+    from server.app.storage import conversion_dir
+    from server.app.uploads.store import finalize_file
+
+    src = settings.data_dir / f"src-{conversion_id}.mp4"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"x" * 10)
+    asset = finalize_file(conn, settings, user_id=USER, src=src, filename="a.mp4", size=10, kind="video")
+    folder = conversion_dir(settings, USER, asset["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{conversion_id}.mp3"
+    path.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+        "created_at, expires_at) VALUES (?, ?, ?, 'job_1', 'mp3', ?, 10, 5, ?, ?)",
+        (conversion_id, USER, asset["id"], str(path), now_iso(), iso(expires_at)),
+    )
+    return path, asset["id"]
+
+
+def test_expired_conversions_are_deleted_with_files(conn, settings):
+    old, _ = _conversion(conn, settings, NOW - timedelta(minutes=1), "cnv_000000000001")
+    fresh, _ = _conversion(conn, settings, NOW + timedelta(hours=1), "cnv_000000000002")
+    assert rules.delete_expired_conversions(conn, NOW) == 1
+    assert not old.exists() and fresh.exists()
+    assert [r[0] for r in conn.execute("SELECT id FROM conversions")] == ["cnv_000000000002"]
+
+
+def test_deleting_an_asset_removes_conversion_files(conn, settings, tmp_path):
+    """CASCADE снимает строки; файлы убирает тот же rmtree, что рендеры при удалении проекта."""
+    from server.app.storage import asset_dir, conversion_dir
+
+    path, asset_id = _conversion(conn, settings, NOW + timedelta(hours=1))
+    assert path.exists()
+    conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+    assert conn.execute("SELECT count(*) FROM conversions").fetchone()[0] == 0
+    # janitor-путь удаления ассета сносит каталог целиком, как API.
+    from server.janitor.rules import _rmtree
+
+    _rmtree(asset_dir(settings, USER, asset_id))
+    assert not conversion_dir(settings, USER, asset_id).exists()
 
 
 def _project_folder(conn, settings, name="Проект", *, keep_row=True):

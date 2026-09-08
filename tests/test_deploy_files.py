@@ -112,3 +112,10 @@ def test_caddy_serves_renders_as_attachment():
     assert "header Content-Disposition attachment" in caddy
     # Частный маршрут обязан стоять раньше общего /files/*, иначе Caddy отдаст ролик без заголовка.
     assert caddy.index("handle /files/*/projects/*/renders/*") < caddy.index("handle /files/* {")
+
+
+def test_caddy_serves_conversions_as_attachment():
+    caddy = (DEPLOY / "Caddyfile").read_text(encoding="utf-8")
+    assert "handle /files/*/assets/*/conversions/*" in caddy
+    assert "header Content-Disposition attachment" in caddy
+    assert caddy.index("handle /files/*/assets/*/conversions/*") < caddy.index("handle /files/* {")

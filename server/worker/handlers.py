@@ -27,11 +27,18 @@ from server.app.projects.store import (
     build_project_subtitles,
     get_project,
 )
-from server.app.storage import TRANSCRIPT_NAME, asset_dir, render_dir
+from server.app.storage import TRANSCRIPT_NAME, asset_dir, conversion_dir, render_dir
 from server.app.transcribe.provider import ProviderError, TranscribeProvider, build_client
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
 from server.media.audio import analyze_audio, wav_args
+from server.media.convert import (
+    ConvertInvalid,
+    ConvertUnavailable,
+    build_convert_command,
+    convert_ext,
+    estimate_convert_bytes,
+)
 from server.media.probe import probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
 from server.media.render import RenderInvalid, SourceInfo, build_render_command, total_duration
@@ -327,6 +334,75 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
     log.info("render: %s готов (%s, %.1f с)", render_id, quality, duration)
 
 
+def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:
+    """Перекодирует один ассет. Строка conversions появляется только после успеха."""
+    from server.worker.queue import is_canceled, set_progress
+
+    asset = _asset(conn, job)
+    if asset is None:
+        log.info("convert: ассет %s уже удалён, пропускаем", job["target_id"])
+        return
+
+    params = json.loads(job["params"] or "{}")
+    fmt = params.get("format", "")
+    try:
+        ext = convert_ext(fmt)
+    except ConvertInvalid as exc:
+        raise MediaError("invalid_format", exc.message) from exc
+
+    duration = float(asset["duration"] or 0)
+    estimate = estimate_convert_bytes(fmt, duration)
+    if disk_free_bytes(settings.data_dir) < estimate:
+        raise MediaError("disk_low", "на диске мало места для конвертации, освободите его и повторите")
+
+    conversion_id = params.get("conversion_id") or new_id("cnv")
+    folder = conversion_dir(settings, asset["user_id"], asset["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    dst = folder / f"{conversion_id}.{ext}"
+    tmp = dst.with_suffix(dst.suffix + ".part")
+
+    try:
+        args = build_convert_command(
+            settings, str(_source(settings, asset)), str(tmp),
+            fmt=fmt, has_audio=bool(asset["has_audio"]),
+            mp3_encoder=mp3_encoder_available(settings) if fmt == "mp3" else True,
+        )
+    except ConvertUnavailable as exc:
+        raise MediaError(exc.code, exc.message) from exc
+    except ConvertInvalid as exc:
+        raise MediaError(exc.code, exc.message) from exc
+
+    def on_line(line: str) -> None:
+        value = parse_progress(line, total=duration)
+        if value is not None:
+            set_progress(conn, job["id"], value)
+
+    try:
+        run_streaming(
+            args,
+            timeout=settings.render_timeout_sec,
+            on_line=on_line,
+            should_stop=lambda: is_canceled(conn, job["id"]),
+        )
+    except MediaError:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(dst)
+
+    now = utcnow()
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+            "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                conversion_id, job["user_id"], asset["id"], job["id"], fmt, str(dst),
+                dst.stat().st_size, duration, iso(now),
+                iso(now + timedelta(hours=settings.render_ttl_hours)),
+            ),
+        )
+    log.info("convert: %s готов (%s, %.1f с)", conversion_id, fmt, duration)
+
+
 # ── Транскрипция (раздел 10 спеки) ─────────────────────────────────────────────────────────────
 
 # Транскрибировать можно то же, что и монтировать: анализ прошёл, карты пауз лежат на диске.
@@ -605,5 +681,6 @@ HANDLERS = {
     "analyze": handle_analyze,
     "proxy": handle_proxy,
     "render": handle_render,
+    "convert": handle_convert,
     "transcribe": handle_transcribe,
 }
