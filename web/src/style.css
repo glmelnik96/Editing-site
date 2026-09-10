@@ -842,6 +842,13 @@ main.card {
   width: 100%;
 }
 
+/* Подпись масштаба — тише кнопок: она объясняет ползунок, а не зовёт нажать. */
+.zoom-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-left: 4px;
+}
+
 /* --- Складка: два способа отрезать кусок, развёрнут не больше одного --- */
 .fold-head {
   display: flex;
@@ -1036,6 +1043,22 @@ main.card {
   height: 90px;
   background-repeat: no-repeat;
   opacity: 0.4;
+}
+/* Волна и кадры лежат плитками: слой во весь блок и плитки в нём по ~2000 px. Сквозные для
+   указателя — щелчок и перенос по-прежнему достаются самому блоку и его ручкам. */
+.tiles,
+.tile {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.tiles {
+  left: 0;
+  right: 0;
+}
+.tile {
+  overflow: hidden;
 }
 /* Тень под подписью — не глубина, а читаемость: имя клипа лежит поверх кадра из видео. */
 .block .label {

@@ -9,6 +9,7 @@ import type { Sound } from '../project'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
 import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, ZOOM_MAX, ZOOM_MIN, type Clip } from './model'
 import { moveSound, soundBlocks, soundLength, soundsEnd } from './sounds'
+import { tileRange, tileWidth, visibleTiles, type Tile } from './tiles'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -123,25 +124,12 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     return Math.max(0, (clientX - rect.left + track.scrollLeft) / current.pxPerSec)
   }
 
-  function blockHtml(clip: Clip, width: number): string {
-    const asset = current.assets.get(clip.asset_id)
-    const info = current.data.get(clip.asset_id)
-    const frames = sliceThumbs(info?.thumbs ?? null, { from: clip.in, to: clip.out }, width)
-    const sprite = asset?.files.thumbs
-    const cells = sprite
-      ? frames
-          .map(f => {
-            const bg = f.background
-            return `<i class="frame" style="left:${f.left}px;background-image:url('${escapeHtml(sprite)}');
-              background-position:${bg.x}px ${bg.y}px;background-size:${bg.width}px ${bg.height}px"></i>`
-          })
-          .join('')
-      : ''
+  function blockHtml(clip: Clip): string {
     const marks =
       clip.snap_to_pauses && (!clip.in_verified || !clip.out_verified)
         ? '<span class="unverified" title="Граница не подтверждена паузой">!</span>'
         : ''
-    return `${cells}<span class="label">${escapeHtml(clip.id)} · ${(clip.out - clip.in).toFixed(1)} с${marks}</span>
+    return `<span class="label">${escapeHtml(clip.id)} · ${(clip.out - clip.in).toFixed(1)} с${marks}</span>
       <b class="handle handle-in"></b><b class="handle handle-out"></b>`
   }
 
@@ -166,6 +154,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     }).join('')
 
     blocksBox.querySelectorAll('.block').forEach(node => node.remove())
+    strips = []
     blocks.forEach((block, index) => {
       const clip = current.clips[index]
       const node = document.createElement('div')
@@ -178,9 +167,8 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       if (fade > 0) node.style.setProperty('--fade-px', `${Math.max(6, ms(fade * current.pxPerSec))}px`)
       node.dataset.id = clip.id
       node.dataset.index = String(index)
-      node.innerHTML = blockHtml(clip, block.width)
-      const info = current.data.get(clip.asset_id)
-      node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, { from: clip.in, to: clip.out }, Math.round(block.width)), block.width))
+      node.innerHTML = blockHtml(clip)
+      strips.push(strip(node, clip.asset_id, clip.in, clip.out, block.left, block.width, true))
       blocksBox.appendChild(node)
     })
     soundTrack.querySelectorAll('.sound-block').forEach(node => node.remove())
@@ -193,13 +181,99 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       node.style.width = `${block.width}px`
       node.dataset.id = sound.id
       node.innerHTML = `<span class="label">${escapeHtml(sound.id)} · ${soundLength(sound).toFixed(1)} с</span>`
-      const info = current.data.get(sound.asset_id)
-      const bars = barsFor(info?.peaks ?? null, { from: sound.in, to: sound.out }, Math.round(block.width))
-      node.appendChild(waveCanvas(bars, block.width))
+      strips.push(strip(node, sound.asset_id, sound.in, sound.out, block.left, block.width, false))
       soundTrack.appendChild(node)
     })
     if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
+    paintTiles()
   }
+
+  /** Полоса блока: что под ним лежит и где он на шкале. Плитки рисуются по ней лениво. */
+  type Strip = {
+    box: HTMLElement
+    assetId: string
+    from: number
+    to: number
+    left: number
+    width: number
+    frames: boolean
+  }
+  let strips: Strip[] = []
+  let paintQueued = false
+
+  /** Завести полосу блока: пустой слой плиток первым ребёнком, чтобы подпись и ручки были поверх. */
+  function strip(
+    node: HTMLElement, assetId: string, from: number, to: number, left: number, width: number, frames: boolean,
+  ): Strip {
+    const box = document.createElement('div')
+    box.className = 'tiles'
+    node.prepend(box)
+    return { box, assetId, from, to, left, width, frames }
+  }
+
+  /** Одна плитка: кадры своего отрезка и волна шириной с плитку — далеко от предела холста. */
+  function tileNode(s: Strip, tile: Tile): HTMLElement {
+    const node = document.createElement('div')
+    node.className = 'tile'
+    node.dataset.i = String(tile.index)
+    node.style.left = `${tile.x0}px`
+    node.style.width = `${tile.x1 - tile.x0}px`
+    const info = current.data.get(s.assetId)
+    const sprite = current.assets.get(s.assetId)?.files.thumbs
+    if (s.frames && sprite && info?.thumbs) {
+      // Кадры считаются на весь блок разом — это просто числа, — а в плитку попадают свои.
+      node.innerHTML = sliceThumbs(info.thumbs, { from: s.from, to: s.to }, s.width)
+        .filter(f => f.left >= tile.x0 && f.left < tile.x1)
+        .map(f => {
+          const bg = f.background
+          return `<i class="frame" style="left:${f.left - tile.x0}px;background-image:url('${escapeHtml(sprite)}');
+            background-position:${bg.x}px ${bg.y}px;background-size:${bg.width}px ${bg.height}px"></i>`
+        })
+        .join('')
+    }
+    const range = tileRange(tile, s.width, s.from, s.to)
+    const width = tile.x1 - tile.x0
+    node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, range, Math.round(width)), width))
+    return node
+  }
+
+  /**
+   * Дорисовать видимые плитки и убрать далёкие.
+   *
+   * Запас — экран в каждую сторону: прокрутка открывает уже готовое, а не пустоту, пока рисуется.
+   */
+  function paintTiles(): void {
+    const margin = view.clientWidth
+    const from = view.scrollLeft - margin
+    const to = view.scrollLeft + view.clientWidth + margin
+    for (const s of strips) {
+      const info = current.data.get(s.assetId)
+      const size = tileWidth(s.frames ? (info?.thumbs?.width ?? null) : null)
+      const wanted = visibleTiles(s.left, s.width, from, to, size)
+      const keep = new Set(wanted.map(tile => String(tile.index)))
+      s.box.querySelectorAll<HTMLElement>('.tile').forEach(node => {
+        if (!keep.has(node.dataset.i ?? '')) node.remove()
+      })
+      const have = new Set(Array.from(s.box.querySelectorAll<HTMLElement>('.tile'), node => node.dataset.i))
+      for (const tile of wanted) {
+        if (!have.has(String(tile.index))) s.box.appendChild(tileNode(s, tile))
+      }
+    }
+  }
+
+  /** Прокрутка и смена размера шкалы присылают десятки событий в секунду — рисуем раз в кадр. */
+  function schedulePaint(): void {
+    if (paintQueued) return
+    paintQueued = true
+    requestAnimationFrame(() => {
+      paintQueued = false
+      paintTiles()
+    })
+  }
+
+  view.addEventListener('scroll', schedulePaint, { passive: true })
+  // Шкала шире или уже без прокрутки — сворачивание левой панели, окно браузера: видимое меняется.
+  new ResizeObserver(schedulePaint).observe(view)
 
   /** Догнать то, что приходило во время переноса. Зовётся, когда drag уже снят. */
   function flushPending(): void {

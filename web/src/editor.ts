@@ -134,6 +134,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
             <button id="ed-split" type="button" title="Разрезать по курсору (S)">Разрезать</button>
             <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
             <button id="ed-delete" type="button" title="Удалить выбранный клип (Del)">Удалить клип</button>
+            <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
+                 — к громкости, к переходу, — а не к масштабу шкалы. -->
+            <label class="zoom-label" for="ed-zoom">Масштаб</label>
             <button id="ed-zoom-out" type="button" title="Мельче (−)">−</button>
             <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
               title="Масштаб шкалы" />
