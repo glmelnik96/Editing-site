@@ -48,7 +48,7 @@ function show(route: Route, me: Me): void {
       current = mountHome(shell.screen, me)
       return
     case 'files':
-      current = mountFiles(shell.screen, refreshQuota, shell.work)
+      current = mountFiles(shell.screen, refreshQuota, shell.work, me)
       return
     case 'new':
       current = mountNewProject(shell.screen)
@@ -57,7 +57,7 @@ function show(route: Route, me: Me): void {
       current = mountConvert(shell.screen)
       return
     case 'projects':
-      current = mountProjects(shell.screen)
+      current = mountProjects(shell.screen, me)
       return
     case 'settings':
       current = mountSettings(shell.screen)

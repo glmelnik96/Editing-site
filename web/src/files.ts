@@ -20,7 +20,8 @@ import {
   type Asset,
 } from './assets'
 import { escapeHtml } from './html'
-import type { Shell } from './shell'
+import { loadTeamAssets, othersOnly, ownerLabel, type TeamAsset } from './overview'
+import type { Me, Shell } from './shell'
 import { type AssetData } from './strip'
 import { UploadAborted, uploadFile } from './upload'
 
@@ -46,7 +47,8 @@ export function formatRows(formats: Record<string, string[]>): { name: string; e
   }))
 }
 
-export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell['work']) {
+export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell['work'], me?: Me) {
+  const admin = me?.role === 'admin'
   el.innerHTML = `
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Записи</h1>
@@ -63,6 +65,12 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
         <div class="stack" id="f-formats-body" style="--stack-gap:4px"></div>
       </details>
       <div id="f-list" class="stack"></div>
+      ${
+        admin
+          ? `<h2 class="display-m" style="margin:24px 0 0">Записи команды</h2>
+      <div id="f-team" class="stack"><p class="muted" style="margin:0">Загружаю…</p></div>`
+          : ''
+      }
       <pre id="f-error" hidden></pre>
     </div>`
 
@@ -72,6 +80,7 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   const formatsBody = el.querySelector('#f-formats-body') as HTMLElement
   const list = el.querySelector('#f-list') as HTMLElement
   const errorBox = el.querySelector('#f-error') as HTMLPreElement
+  const teamBox = el.querySelector('#f-team') as HTMLElement | null
   const frames = new Map<string, Promise<AssetData>>()
   let timer: number | undefined
   let stopped = false
@@ -197,7 +206,52 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   void showFormats().catch(() => {
     formatsHead.textContent = 'Видео, звук, картинки и субтитры'
   })
+  /** Чужая запись: имя, чья, вес и состояние. Кадра нет — чужую ищут по имени и владельцу. */
+  function teamCard(a: TeamAsset): string {
+    const owner = ownerLabel(a)
+    const state = a.status === 'failed' ? ' pill-bad' : ''
+    return `<article class="card asset-card" style="padding:14px 20px">
+      <div class="row" style="margin:0;align-items:center;gap:16px">
+        <div class="stack asset-name">
+          <span>${escapeHtml(a.original_name)}</span>
+          <span class="meta">${escapeHtml(owner)} · ${a.kind === 'image' ? 'картинка' : fmtDuration(a.duration)} · ${fmtSize(a.size)}</span>
+        </div>
+        <span class="pill${state}">${escapeHtml(statusText(a.status))}</span>
+        <span class="row asset-actions">
+          <button class="btn btn-ghost" data-drop-team="${escapeHtml(a.id)}"
+            data-name="${escapeHtml(a.original_name)}" data-owner="${escapeHtml(owner)}">Удалить</button>
+        </span>
+      </div>
+    </article>`
+  }
+
+  async function refreshTeam(): Promise<void> {
+    if (stopped || !teamBox || !me) return
+    const assets = othersOnly(await loadTeamAssets(), me.email)
+    if (stopped) return
+    teamBox.innerHTML = assets.length
+      ? assets.map(teamCard).join('')
+      : '<p class="muted" style="margin:0">У остальных записей пока нет</p>'
+    teamBox.querySelectorAll<HTMLButtonElement>('button[data-drop-team]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const ask = `Удалить чужую запись «${b.dataset.name}» (${b.dataset.owner}) без возможности восстановления?`
+        if (!window.confirm(ask)) return
+        b.disabled = true
+        try {
+          await deleteAsset(b.dataset.dropTeam ?? '')
+        } catch (e) {
+          // Запись в чужом проекте сервер удалить не даст: отказ показываем как есть.
+          b.disabled = false
+          showError(e)
+          return
+        }
+        await refreshTeam().catch(showError)
+      }),
+    )
+  }
+
   void refresh().catch(showError)
+  void refreshTeam().catch(showError)
 
   return {
     stop(): void {

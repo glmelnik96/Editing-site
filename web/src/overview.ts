@@ -1,15 +1,16 @@
 /**
- * Обзор работы команды: чужие проекты и чужие записи в одном месте.
+ * Работа команды: чужие проекты и чужие записи.
  *
- * Диск на ВМ общий и делится с двумя соседними сервисами, а квота у каждого своя — значит когда
- * место кончается, вопрос «чем оно занято» ни у кого, кроме админа, ответа не имеет. Поэтому здесь
- * не только список, но и итог по людям: он отвечает на этот вопрос первой строкой.
+ * Показываются там, где их ищут: у админа под своими проектами на экране «Проекты» и под своими
+ * записями на экране «Записи». Раньше всё жило в «Кабинете доступа», и чужой проект, лежащий на
+ * сервере, админ не находил: на экране проектов его не было. В кабинете остался итог по людям —
+ * он отвечает на вопрос «чем занят диск», и ему место рядом с доступами.
  *
  * Чужой проект открывается в редакторе как свой. Работает редактор при этом от имени владельца:
  * файлы лежат в его каталоге, и правка уходит ему же, а не заводит копию у админа.
  */
 import { api, ApiError } from './api'
-import { fmtDuration, fmtSize, fmtWhen, statusText } from './assets'
+import { fmtSize } from './assets'
 import { escapeHtml } from './html'
 
 export type TeamProject = {
@@ -61,31 +62,40 @@ export function ownerLabel(owner: { owner_email: string; owner_name: string }): 
   return owner.owner_name.trim() || owner.owner_email
 }
 
+/**
+ * Только чужое. Своё человек и так видит в своём списке сразу над этим, а одно и то же дважды
+ * подряд — шум. Почту сравниваем без регистра и пробелов: так же её хранит сервер.
+ */
+export function othersOnly<T extends { owner_email: string }>(items: T[], myEmail: string): T[] {
+  const me = myEmail.trim().toLowerCase()
+  return items.filter(item => item.owner_email.trim().toLowerCase() !== me)
+}
+
+export function loadTeamProjects(): Promise<TeamProject[]> {
+  return api<{ projects: TeamProject[] }>('/api/v1/admin/projects').then(body => body.projects)
+}
+
+export function loadTeamAssets(): Promise<TeamAsset[]> {
+  return api<{ assets: TeamAsset[] }>('/api/v1/admin/assets').then(body => body.assets)
+}
+
+/** Итог по людям для кабинета: кто сколько занял диска. Сами списки — на экранах проектов и записей. */
 export function mountOverview(el: HTMLElement) {
   el.innerHTML = `
     <section class="card stack">
       <h2 class="display-m" style="margin:0">Работа команды</h2>
-      <div id="ov-use" class="stack" style="--stack-gap:4px"></div>
-      <h3 style="margin:0">Проекты</h3>
-      <ul id="ov-projects" class="versions"><li class="muted">Загружаю…</li></ul>
-      <h3 style="margin:0">Записи</h3>
-      <ul id="ov-assets" class="versions"><li class="muted">Загружаю…</li></ul>
+      <p class="meta" style="margin:0">Чужие проекты — на экране <a href="#/projects">«Проекты»</a>,
+        чужие записи — на экране <a href="#/files">«Записи»</a>, под своими.</p>
+      <div id="ov-use" class="stack" style="--stack-gap:4px"><span class="muted">Загружаю…</span></div>
       <pre id="ov-error" hidden></pre>
     </section>`
 
   const useBox = el.querySelector('#ov-use') as HTMLElement
-  const projectsBox = el.querySelector('#ov-projects') as HTMLElement
-  const assetsBox = el.querySelector('#ov-assets') as HTMLElement
   const errorBox = el.querySelector('#ov-error') as HTMLPreElement
   let stopped = false
 
-  const showError = (e: unknown) => {
-    errorBox.hidden = false
-    errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
-  }
-
   function useHtml(rows: OwnerUse[]): string {
-    if (!rows.length) return ''
+    if (!rows.length) return '<span class="muted">Записей ни у кого нет</span>'
     return rows
       .map(
         row =>
@@ -97,75 +107,15 @@ export function mountOverview(el: HTMLElement) {
       .join('')
   }
 
-  function projectHtml(p: TeamProject): string {
-    return `<li>
-      <span>${escapeHtml(p.name)} · ${escapeHtml(ownerLabel(p))} · ${p.clips_count} кл. ·
-        ${fmtDuration(p.duration)} · ${fmtWhen(p.updated_at)}</span>
-      <span class="render-actions">
-        <a href="#/p/${encodeURIComponent(p.id)}">Открыть</a>
-        <button type="button" data-drop-project="${escapeHtml(p.id)}"
-          data-name="${escapeHtml(p.name)}">Удалить</button>
-      </span></li>`
-  }
-
-  function assetHtml(a: TeamAsset): string {
-    return `<li>
-      <span>${escapeHtml(a.original_name)} · ${escapeHtml(ownerLabel(a))} · ${fmtSize(a.size)} ·
-        ${fmtDuration(a.duration)} · ${escapeHtml(statusText(a.status))}</span>
-      <span class="render-actions">
-        <button type="button" data-drop-asset="${escapeHtml(a.id)}"
-          data-name="${escapeHtml(a.original_name)}">Удалить</button>
-      </span></li>`
-  }
-
-  async function refresh(): Promise<void> {
-    if (stopped) return
-    const [projects, assets] = await Promise.all([
-      api<{ projects: TeamProject[] }>('/api/v1/admin/projects'),
-      api<{ assets: TeamAsset[] }>('/api/v1/admin/assets'),
-    ])
-    if (stopped) return
-    useBox.innerHTML = useHtml(diskByOwner(assets.assets))
-    projectsBox.innerHTML =
-      projects.projects.map(projectHtml).join('') || '<li class="muted">Проектов ни у кого нет</li>'
-    assetsBox.innerHTML =
-      assets.assets.map(assetHtml).join('') || '<li class="muted">Записей ни у кого нет</li>'
-    wire()
-  }
-
-  function drop(button: HTMLButtonElement, ask: string, path: string): void {
-    button.addEventListener('click', async () => {
-      if (!window.confirm(ask)) return
-      button.disabled = true
-      try {
-        await api(path, { method: 'DELETE' })
-      } catch (e) {
-        button.disabled = false
-        showError(e)
-        return
-      }
-      await refresh().catch(showError)
+  void loadTeamAssets()
+    .then(assets => {
+      if (!stopped) useBox.innerHTML = useHtml(diskByOwner(assets))
     })
-  }
-
-  function wire(): void {
-    projectsBox.querySelectorAll<HTMLButtonElement>('button[data-drop-project]').forEach(b =>
-      drop(
-        b,
-        `Удалить чужой проект «${b.dataset.name}»? Его записи освободятся и уйдут по сроку хранения.`,
-        `/api/v1/projects/${encodeURIComponent(b.dataset.dropProject ?? '')}`,
-      ),
-    )
-    assetsBox.querySelectorAll<HTMLButtonElement>('button[data-drop-asset]').forEach(b =>
-      drop(
-        b,
-        `Удалить чужую запись «${b.dataset.name}» без возможности восстановления?`,
-        `/api/v1/assets/${encodeURIComponent(b.dataset.dropAsset ?? '')}`,
-      ),
-    )
-  }
-
-  void refresh().catch(showError)
+    .catch(e => {
+      if (stopped) return
+      errorBox.hidden = false
+      errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
+    })
 
   return {
     stop(): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diskByOwner, ownerLabel, type TeamAsset } from './overview'
+import { diskByOwner, othersOnly, ownerLabel, type TeamAsset } from './overview'
 
 const asset = (over: Partial<TeamAsset> = {}): TeamAsset => ({
   id: 'ast_1',
@@ -37,5 +37,21 @@ describe('подпись владельца', () => {
     expect(ownerLabel({ owner_email: 'one@ya.ru', owner_name: 'Первый' })).toBe('Первый')
     expect(ownerLabel({ owner_email: 'one@ya.ru', owner_name: '   ' })).toBe('one@ya.ru')
     expect(ownerLabel({ owner_email: 'one@ya.ru', owner_name: '' })).toBe('one@ya.ru')
+  })
+})
+
+describe('только чужое', () => {
+  it('убирает своё: оно и так стоит в своём списке прямо над этим', () => {
+    const list = [
+      asset({ id: 'a1', owner_email: 'me@ya.ru' }),
+      asset({ id: 'a2', owner_email: 'two@ya.ru' }),
+      asset({ id: 'a3', owner_email: 'three@ya.ru' }),
+    ]
+    expect(othersOnly(list, 'me@ya.ru').map(a => a.id)).toEqual(['a2', 'a3'])
+  })
+
+  it('почту сравнивает без регистра и пробелов, как её хранит сервер', () => {
+    const list = [asset({ id: 'a1', owner_email: 'Me@Ya.ru' }), asset({ id: 'a2', owner_email: 'two@ya.ru' })]
+    expect(othersOnly(list, ' me@ya.ru ').map(a => a.id)).toEqual(['a2'])
   })
 })
