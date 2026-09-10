@@ -22,6 +22,8 @@ export type SubtitleHandlers = {
   /** Дождаться, пока очередь правок доедет: иначе сборка реплик получит конфликт версий. */
   flush: () => Promise<void>
   onSeek: (seconds: number) => void
+  /** Расшифровка заказана или кончилась: её видит и панель текста в исходниках. */
+  onTranscribe?: (assetId: string, running: boolean) => void
 }
 
 /** Реплика, которая не влезает в ролик или лезет на соседнюю: сервер такую не сохранит. */
@@ -143,6 +145,9 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   let timelineAssets: TimelineSubAsset[] = []
   let transcribeId: string | null = null
   let jobId: string | null = null
+  // Записи, которые сейчас расшифровываются, — общие для обеих панелей. Свой jobId говорит лишь
+  // о том, что задание заказали отсюда; заказанное из «Текста» видно только через этот список.
+  let running = new Set<string>()
   let timer: number | undefined
   let time = 0
 
@@ -152,6 +157,8 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   // больше настоящей, и реплики, выехавшие за конец ролика, не помечались.
   const total = (): number => totalDuration(project?.doc.clips ?? [])
   const missing = () => timelineAssets.filter(a => !a.hasTranscript)
+  /** Какая из записей шкалы сейчас расшифровывается — неважно, кто её заказал. */
+  const busyAsset = () => timelineAssets.find(a => running.has(a.id)) ?? null
 
   const showNote = (text: string) => {
     errorBox.hidden = false
@@ -181,8 +188,9 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   function draw(): void {
     if (stopped) return
     const list = cues()
-    if (jobId) {
-      const name = timelineAssets.find(a => a.id === transcribeId)?.name
+    const busy = busyAsset()
+    if (jobId || busy) {
+      const name = timelineAssets.find(a => a.id === (transcribeId ?? busy?.id))?.name
       paint(`<p class="lead" style="margin:0">Расшифровываю${name ? ` «${escapeHtml(name)}»` : ''} — ход вверху. Можно уйти
         на другую вкладку, работа не прервётся</p>`)
       return
@@ -303,11 +311,13 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     try {
       const started = await startTranscribe(next.id)
       jobId = started.job_id
+      handlers.onTranscribe?.(next.id, true)
       draw()
       poll()
     } catch (e) {
       if (e instanceof ApiError && e.code === 'already_queued') {
         jobId = 'unknown'
+        handlers.onTranscribe?.(next.id, true)
         draw()
         poll()
         return
@@ -450,6 +460,12 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     stop(): void {
       stopped = true
       window.clearTimeout(timer)
+    },
+    /** Кто сейчас расшифровывается: список общий на обе панели, ведёт его редактор. */
+    setTranscribing(ids: Set<string>): void {
+      const was = busyAsset()
+      running = ids
+      if (busyAsset() !== was) draw()
     },
     /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи. */
     busy(): boolean {

@@ -30,6 +30,7 @@ const HANDLE_PX = 8
 // Число живёт внутри слоя .blocks, наружу — к игле и призраку — оно не вылезает.
 const SELECTED_Z = 999
 const CLICK_SLOP_PX = 4 // сдвиг меньше этого — это клик, а не перенос
+const SAY_MS = 6000 // сколько держать сказанное под шкалой
 
 export function emptyTrackHint(clipCount: number): string {
   return clipCount === 0 ? 'Добавьте кусок из исходников' : ''
@@ -67,6 +68,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   const blocksBox = el.querySelector('#tl-blocks') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const ghost = el.querySelector('#tl-drop') as HTMLElement
+  let sayTimer = 0
   const hint = el.querySelector('#tl-hint') as HTMLElement
 
   let current: RenderInput = { clips: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
@@ -308,6 +310,25 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
 
   return {
     render,
+    /**
+     * Сказать что-то под шкалой.
+     *
+     * Отказы про клипы и курсор жили в шапке страницы, в полуэкране от места, где человек их
+     * вызвал: нажал «разрезать» у края клипа — объяснение вспыхнуло вверху и погасло, а вывод
+     * один, что клавиша не работает. Полоса подсказки под шкалой для этого и есть.
+     *
+     * Во время переноса молчим: там она занята номером будущего места, и это важнее.
+     */
+    say(text: string): void {
+      if (drag) return
+      window.clearTimeout(sayTimer)
+      hint.textContent = text
+      if (text) {
+        sayTimer = window.setTimeout(() => {
+          if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
+        }, SAY_MS)
+      }
+    },
     setPlayhead(time: number): void {
       // Двигаем курсор и подтягиваем прокрутку .timeline, если он ушёл за видимую часть.
       const left = time * current.pxPerSec

@@ -197,6 +197,22 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const analysisCache = new Map<string, { start: number; end: number }[] | null>()
   const analysisPending = new Set<string>()
 
+  /**
+   * Кто сейчас расшифровывается — одна правда на обе панели.
+   *
+   * Расшифровка принадлежит записи, а не вкладке: её заказывают и из «Текста» в исходниках, и из
+   * субтитров. Пока каждая панель знала только своё задание, вторая в ту же секунду предлагала
+   * начать заново — и «работало» это лишь потому, что сервер отвечал already_queued.
+   */
+  const transcribing = new Set<string>()
+  function markTranscribing(assetId: string, running: boolean): void {
+    if (running === transcribing.has(assetId)) return
+    if (running) transcribing.add(assetId)
+    else transcribing.delete(assetId)
+    transcript.setTranscribing(transcribing)
+    subtitles.setTranscribing(transcribing)
+  }
+
   function markNews(name: string): void {
     if (tab === name) return
     tabsBar.querySelector<HTMLButtonElement>(`.tab[data-tab="${name}"]`)?.classList.add('news')
@@ -265,6 +281,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   // Таймер держим за ручку: без неё сообщение, показанное секунду назад, гасил чужой таймер от
   // предыдущего — человек видел подсказку меньше секунды и решал, что её не было.
+  /** Сказанное про шкалу говорим под шкалой, а не в шапке: там на это смотрят. */
+  const underTrack = (text: string) => timeline.say(text)
+
   let noticeTimer = 0
   const notice = (text: string) => {
     noticeBox.textContent = text
@@ -374,7 +393,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!plan) return
     const src = proxyOf(plan.assetId)
     if (!src) {
-      notice('Файл ещё обрабатывается, перемотка недоступна')
+      underTrack('Файл ещё обрабатывается, перемотка недоступна')
       return
     }
     playIndex = plan.index
@@ -406,7 +425,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         setPlaying(false)
         active.pause()
         music.pause()
-        notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
+        underTrack('Следующий файл ещё обрабатывается, воспроизведение остановлено')
         return
       }
       swap()
@@ -457,7 +476,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // прокрутку сама, а на сцене сразу первый кадр добавленного.
     selectClip(clip.id)
     seek(timelineStart(next, next.length - 1))
-    notice('Кусок на шкале')
+    underTrack('Кусок на шкале')
   }
 
   const sourceMain = el.querySelector('#ed-source-main') as HTMLElement
@@ -466,6 +485,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   // snap_to_pauses — настоящий рез подтянет сервер по измеренным паузам. С полосы исходника кусок
   // берут по таймкоду, там подтягивать нечего, и snap выключен.
   const transcript = mountTranscript(el.querySelector('#ed-transcript') as HTMLElement, {
+    onTranscribe: markTranscribing,
     onSeek: seconds => source.seek(seconds),
     onTake: (from, to) => {
       const asset = source.current()
@@ -498,6 +518,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       timeline.setPlayhead(timelineTime)
       showTime()
     },
+    onTranscribe: markTranscribing,
   })
 
   /** Правка реплик — обычная правка документа: с откатом, точками сохранения и автосохранением. */
@@ -857,7 +878,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       const src = proxyOf(plan.assetId)
       if (!src) {
         setPlaying(false)
-        notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
+        underTrack('Следующий файл ещё обрабатывается, воспроизведение остановлено')
         return
       }
       if (!active.src.endsWith(src)) active.src = src
@@ -892,13 +913,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function splitHere(): void {
     if (!project) return
     const next = splitAt(project.doc.clips, timelineTime)
-    if (next === project.doc.clips) notice('Здесь резать нечего: курсор на краю клипа')
+    if (next === project.doc.clips) underTrack('Здесь резать нечего: курсор на краю клипа')
     else applyClips(next)
   }
 
   function removeSelected(): void {
     const id = timeline.selected()
-    if (!project || !id) return notice('Сначала выберите клип на шкале')
+    if (!project || !id) return underTrack('Сначала выберите клип на шкале')
     applyClips(removeClip(project.doc.clips, id))
     selectClip(null)
   }
@@ -925,23 +946,23 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function duplicateSelected(): void {
     if (!project) return
     const found = picked()
-    if (!found) return notice('Сначала выберите клип на шкале')
+    if (!found) return underTrack('Сначала выберите клип на шкале')
     const clips = project.doc.clips
     const copy = copyOf(found.clip, clips)
     applyClips(insertClip(clips, copy, found.index + 1))
     selectClip(copy.id)
-    notice('Клип продублирован')
+    underTrack('Клип продублирован')
   }
 
   function copySelected(): void {
     const found = picked()
-    if (!found) return notice('Сначала выберите клип на шкале')
+    if (!found) return underTrack('Сначала выберите клип на шкале')
     clipboard = found.clip
-    notice('Клип скопирован — Ctrl+V поставит копию')
+    underTrack('Клип скопирован — Ctrl+V поставит копию')
   }
 
   function pasteClip(): void {
-    if (!project || !clipboard) return notice('Сначала скопируйте клип: Ctrl+C')
+    if (!project || !clipboard) return underTrack('Сначала скопируйте клип: Ctrl+C')
     const clips = project.doc.clips
     // Вставляем за выбранным, а без выбора — в конец: так же, как кладут кусок из исходников.
     const found = picked()
@@ -960,12 +981,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function trimToPlayhead(edge: 'in' | 'out'): void {
     if (!project) return
     const found = picked()
-    if (!found) return notice('Сначала выберите клип на шкале')
+    if (!found) return underTrack('Сначала выберите клип на шкале')
     const clips = project.doc.clips
     const start = timelineStart(clips, found.index)
     const offset = timelineTime - start
     if (offset <= 0 || offset >= clipDuration(found.clip)) {
-      return notice('Поставьте курсор внутри выбранного клипа')
+      return underTrack('Поставьте курсор внутри выбранного клипа')
     }
     const at = ms(found.clip.in + offset)
     const duration = assets.get(found.clip.asset_id)?.duration ?? undefined
@@ -977,7 +998,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const after = next.find(c => c.id === found.clip.id)
     const got = edge === 'in' ? after?.in : after?.out
     if (got === undefined || Math.abs(got - at) > 0.001) {
-      return notice('Так клип станет короче допустимого')
+      return underTrack('Так клип станет короче допустимого')
     }
     applyClips(next)
   }
@@ -1161,7 +1182,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!project) return
     // Без выбранного клипа отнимать Delete у браузера незачем — и сказать об этом честнее,
     // чем промолчать.
-    if (needsClip(what) && !timeline.selected()) return notice('Сначала выберите клип на шкале')
+    if (needsClip(what) && !timeline.selected()) return underTrack('Сначала выберите клип на шкале')
     if (GRABBED.has(what)) event.preventDefault()
     const total = totalDuration(project.doc.clips)
     const step = event.shiftKey ? 0.1 : 1

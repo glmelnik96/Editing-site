@@ -38,6 +38,12 @@ const JOB_TEXT: Record<string, string> = {
 const RUNNING = new Set(['queued', 'running'])
 
 export type TranscriptHandlers = {
+  /**
+   * Расшифровка заказана или кончилась. Расшифровка принадлежит записи, а не панели: её заказывают
+   * и отсюда, и из субтитров, и обе панели обязаны видеть одно и то же — иначе одна показывает
+   * ход, а вторая в ту же секунду предлагает начать заново.
+   */
+  onTranscribe?: (assetId: string, running: boolean) => void
   /** Перемотать плеер исходника на время слова. */
   onSeek: (seconds: number) => void
   /** Положить кусок на шкалу: времена крайних выделенных слов. */
@@ -124,7 +130,6 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       </div>
       <div id="tr-job" hidden>
         <span class="muted" id="tr-status"></span>
-        <div class="progress"><i id="tr-bar" style="width:0%"></i></div>
       </div>
       <div class="transcript" id="tr-text" hidden></div>
       <!-- Кнопка куска стоит под текстом: появись она над ним, текст съезжал бы вниз прямо
@@ -142,7 +147,6 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
   const runButton = el.querySelector('#tr-run') as HTMLButtonElement
   const jobBox = el.querySelector('#tr-job') as HTMLElement
   const statusBox = el.querySelector('#tr-status') as HTMLElement
-  const bar = el.querySelector('#tr-bar') as HTMLElement
   const takeBox = el.querySelector('#tr-take') as HTMLElement
   const takeButton = el.querySelector('#tr-take-run') as HTMLButtonElement
   const takeNote = el.querySelector('#tr-take-note') as HTMLElement
@@ -171,15 +175,23 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
     errorBox.textContent = ''
   }
 
-  function showJob(text: string, progress: number): void {
+  /**
+   * Что сейчас с расшифровкой. Полосу хода панель не рисует.
+   *
+   * Ход и отмена живут в списке под шапкой — там же, где загрузки, сборки и конвертации. Своя
+   * полоса показывала бы одно задание третий раз: в шапке, здесь и во вкладке субтитров.
+   */
+  function showJob(text: string): void {
     startBox.hidden = true
     jobBox.hidden = false
+    // Пока идёт расшифровка, «Расшифровки ещё нет» лишнее: и так видно, что её делают.
+    hint.textContent = ''
     statusBox.textContent = text
-    bar.style.width = `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%`
   }
 
   /** Ожидание кончилось ничем: опрос гасим, кнопку возвращаем. */
   function release(): void {
+    if (asset) handlers.onTranscribe?.(asset.id, false)
     waiting = false
     jobId = null
     window.clearTimeout(timer)
@@ -276,17 +288,17 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
     const job = await loadJob(id)
     if (stopped || jobId !== id || asset?.id !== assetId) return
     clearError() // опрос снова доходит: жалобу на прошлый оборванный запрос убираем
-    const pct = Math.round(Math.min(1, Math.max(0, job.progress)) * 100)
-    // Под подписью «не расшифровалось» полоса на 80 % врёт: прогресса у сорвавшегося задания нет.
     showJob(
-      job.status === 'running' ? `${JOB_TEXT.running}, ${pct} %` : (JOB_TEXT[job.status] ?? job.status),
-      RUNNING.has(job.status) || job.status === 'done' ? job.progress : 0,
+      RUNNING.has(job.status)
+        ? `${JOB_TEXT[job.status]} — ход и отмена вверху`
+        : (JOB_TEXT[job.status] ?? job.status),
     )
     if (RUNNING.has(job.status)) {
       scheduleNext()
       return
     }
     if (job.status === 'done') {
+      handlers.onTranscribe?.(assetId, false)
       waiting = false
       jobId = null
       jobBox.hidden = true
@@ -342,6 +354,7 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       const { job_id } = await startTranscribe(id)
       if (stopped || asset?.id !== id) return
       jobId = job_id
+      handlers.onTranscribe?.(id, true)
     } catch (e) {
       if (stopped || asset?.id !== id) return
       const code = e instanceof ApiError ? e.code : ''
@@ -363,10 +376,11 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       }
       // Расшифровку уже поставили (другая вкладка или агент), номера задания в отказе нет.
       jobId = null
+      handlers.onTranscribe?.(id, true)
       blindUntil = Date.now() + BLIND_WAIT_MS
     }
     waiting = true
-    showJob(jobId ? JOB_TEXT.queued : 'расшифровка уже идёт', 0)
+    showJob(jobId ? `${JOB_TEXT.queued} — ход и отмена вверху` : 'расшифровка уже идёт')
     scheduleNext()
   }
   runButton.addEventListener('click', () => void run())
@@ -485,6 +499,25 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       if (spot.top < box.top || spot.bottom > box.bottom) node.scrollIntoView({ block: 'nearest' })
     },
 
+    /**
+     * Кто сейчас расшифровывается: список общий на обе панели, ведёт его редактор.
+     *
+     * Своё задание мы знаем по номеру, чужое — только отсюда. Без этого панель предлагала бы
+     * «Расшифровать» файлу, который уже расшифровывается по заказу из субтитров.
+     */
+    setTranscribing(ids: Set<string>): void {
+      const mine = asset ? ids.has(asset.id) : false
+      if (mine === waiting) return
+      if (!mine) {
+        if (!jobId) release()
+        return
+      }
+      // Номера чужого задания у нас нет: ждём текст по карточке записи, как при already_queued.
+      waiting = true
+      blindUntil = Date.now() + BLIND_WAIT_MS
+      showJob('расшифровка уже идёт')
+      scheduleNext()
+    },
     /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи. */
     busy(): boolean {
       return jobId !== null
