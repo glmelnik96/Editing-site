@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from server.app.config import Settings
+from server.app.conversions.store import evict_oldest
 from server.app.jobs import enqueue_job
 from server.app.projects.store import (
     SubtitlesUnavailable,
@@ -426,6 +427,11 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
 
     now = utcnow()
     with transaction(conn):
+        # Вытесняем старые здесь, а не при постановке задания: отменённая или упавшая конвертация
+        # не должна стоить человеку готового файла, которого ей нечем заменить. Второе задание на
+        # тот же файл сервер не принимает (409 already_queued), поэтому лишним может оказаться
+        # ровно один — на время между постановкой и этой строкой.
+        evicted = evict_oldest(conn, asset["id"])
         conn.execute(
             "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
             "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -435,6 +441,9 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
                 iso(now + timedelta(hours=settings.render_ttl_hours)),
             ),
         )
+    # Файлы — после коммита: правило дома, сначала запись, потом файлы.
+    for path in evicted:
+        path.unlink(missing_ok=True)
     log.info("convert: %s готов (%s, %.1f с)", conversion_id, fmt, duration)
 
 

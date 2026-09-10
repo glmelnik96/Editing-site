@@ -142,3 +142,54 @@ def test_cancel_reaches_ffmpeg(conn, settings, monkeypatch):
     monkeypatch.setattr(handlers, "run_streaming", spy)
     handlers.handle_convert(conn, settings, job)
     assert seen["stop"] is True
+
+
+def test_success_evicts_the_oldest_conversion(conn, settings, monkeypatch):
+    """Готовых на файл не больше десяти. Вытесняем в момент успеха, в одной транзакции со вставкой:
+    при постановке задания это стоило бы готового файла даже отменённой конвертации."""
+    monkeypatch.setattr(handlers, "run_streaming", fake_ffmpeg())
+    folder = asset_dir(settings, USER, ASSET) / "conversions"
+    folder.mkdir(parents=True, exist_ok=True)
+    for i in range(10):
+        cid = f"cnv_0000000000{i:02d}"
+        path = folder / f"{cid}.mp3"
+        path.write_bytes(b"x")
+        conn.execute(
+            "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+            "created_at, expires_at) VALUES (?, ?, ?, 'job_old', 'mp3', ?, 1, 1, ?, ?)",
+            (cid, USER, ASSET, str(path), f"2026-01-{i + 1:02d}T00:00:00.000Z", "2030-01-01T00:00:00.000Z"),
+        )
+
+    job = take_convert(conn, fmt="wav", conversion_id="cnv_000000000099")
+    handlers.handle_convert(conn, settings, job)
+
+    ids = {row["id"] for row in conn.execute("SELECT id FROM conversions")}
+    assert len(ids) == 10
+    assert "cnv_000000000099" in ids
+    assert "cnv_000000000000" not in ids
+    assert not (folder / "cnv_000000000000.mp3").exists()
+
+
+def test_failed_conversion_keeps_the_oldest(conn, settings, monkeypatch):
+    """Упало ffmpeg — старая конверсия остаётся на месте: заменить её теперь нечем."""
+    def boom(args, *, timeout, on_line, should_stop=None, stop_check_sec=2.0):
+        raise MediaError("ffmpeg", "не вышло")
+
+    monkeypatch.setattr(handlers, "run_streaming", boom)
+    folder = asset_dir(settings, USER, ASSET) / "conversions"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "cnv_000000000000.mp3"
+    path.write_bytes(b"x")
+    conn.execute(
+        "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
+        "created_at, expires_at) VALUES (?, ?, ?, 'job_old', 'mp3', ?, 1, 1, ?, ?)",
+        ("cnv_000000000000", USER, ASSET, str(path), "2026-01-01T00:00:00.000Z", "2030-01-01T00:00:00.000Z"),
+    )
+
+    job = take_convert(conn, fmt="wav", conversion_id="cnv_000000000099")
+    with pytest.raises(MediaError):
+        handlers.handle_convert(conn, settings, job)
+
+    assert path.exists()
+    assert conn.execute("SELECT count(*) FROM conversions").fetchone()[0] == 1
+

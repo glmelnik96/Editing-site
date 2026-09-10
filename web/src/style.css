@@ -644,6 +644,23 @@ main.card {
   border-radius: 12px;
 }
 
+/* Заголовок панели субтитров и переключатель режимов одной строкой. Режимы мельче вкладок слева
+   намеренно: слева выбирают работу, здесь — взгляд на одну и ту же расшифровку. */
+.sub-head {
+  justify-content: space-between;
+  align-items: baseline;
+}
+.sub-modes .tab {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+/* .stack ставит display:flex и перебивает hidden — ровно та же ловушка, что у #ed-source.
+   Без этого спрятанный режим оставался на экране под открытым. */
+#sub-cards[hidden],
+#sub-words[hidden] {
+  display: none;
+}
+
 .burn {
   display: inline-flex;
   align-items: center;

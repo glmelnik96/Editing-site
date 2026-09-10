@@ -197,7 +197,9 @@ def test_list_and_card_and_delete(client, login_as, settings):
     assert client.delete(f"/api/v1/conversions/{cid}").status_code == 404
 
 
-def test_eleventh_conversion_evicts_the_oldest(client, login_as, settings):
+def test_queueing_the_eleventh_does_not_destroy_the_oldest(client, login_as, settings):
+    """Вытеснение переехало на успех задания: отменённая или упавшая конвертация не должна
+    стоить человеку готового файла, которого ей нечем заменить."""
     login_as()
     me = client.get("/api/v1/me").json()
     seed_asset(settings, me["id"])
@@ -209,10 +211,9 @@ def test_eleventh_conversion_evicts_the_oldest(client, login_as, settings):
         (folder / f"{cid}.mp3").write_bytes(b"x")
     assert client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "wav"}).status_code == 202
     left = client.get(f"/api/v1/assets/{ASSET}/conversions").json()["conversions"]
-    ids = {c["id"] for c in left}
-    assert "cnv_000000000000" not in ids
-    assert not (folder / "cnv_000000000000.mp3").exists()
-    assert len(left) == 9
+    assert len(left) == 10
+    assert "cnv_000000000000" in {c["id"] for c in left}
+    assert (folder / "cnv_000000000000.mp3").exists()
 
 
 def test_foreign_conversion_is_404(client, login_as, settings):

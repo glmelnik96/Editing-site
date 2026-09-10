@@ -438,6 +438,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     flush: async () => {
       if (project && saver.pending()) await saver.flush(project)
     },
+    // Времена слов интерполированы (±0.3 с), поэтому клип ставим со snap_to_pauses: настоящий
+    // рез подтянет сервер по измеренным паузам. Это единственное место, где snap включён —
+    // из «Исходников» кусок берут по таймкоду, там подтягивать нечего.
+    onTake: (assetId, from, to) => addClip(assetId, from, to, true),
     onSeek: seconds => {
       timelineTime = Math.max(0, seconds)
       seek(timelineTime)

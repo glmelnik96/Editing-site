@@ -10,7 +10,6 @@ from server.app.assets.routes import get_asset
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.conversions.store import (
     delete_conversion,
-    evict_oldest,
     get_conversion,
     list_conversions,
     list_conversions_for_user,
@@ -99,16 +98,11 @@ def convert(
             raise ApiError(409, "already_queued", "Конвертация этого файла уже идёт")
         if active_renders(conn, user.id) > settings.max_renders_queued:
             raise ApiError(409, "too_many_renders", "Уже собирается слишком много роликов, подождите")
-        evicted = evict_oldest(conn, asset_id)
         conversion_id = new_id("cnv")
         job_id = enqueue_job(
             conn, user_id=user.id, type_="convert", target_id=asset_id,
             params={"format": fmt, "conversion_id": conversion_id},
         )
-    # Файлы вытесненных — после коммита: сорвись транзакция на постановке задания, строки бы
-    # вернулись, а файлов уже не было.
-    for path in evicted:
-        path.unlink(missing_ok=True)
     return ConvertQueued(job_id=job_id, conversion_id=conversion_id)
 
 
