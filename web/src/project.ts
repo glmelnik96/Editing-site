@@ -26,10 +26,8 @@ export type Project = {
   id: string
   name: string
   version: number
-  status: 'draft' | 'finished'
   created_at: string
   updated_at: string
-  finished_at: string | null
   doc: ProjectDoc
 }
 

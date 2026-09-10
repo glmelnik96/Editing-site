@@ -31,7 +31,7 @@ def test_create_read_list_and_save(client, login_as, settings):
     r = client.post("/api/v1/projects", json={"name": "Подкаст", "doc": doc()})
     assert r.status_code == 201, r.text
     project = r.json()
-    assert project["version"] == 1 and project["status"] == "draft"
+    assert project["version"] == 1
     assert project["doc"]["clips"][0]["id"] == "c1"
     assert project["doc"]["clips"][0]["in_verified"] is False
 
@@ -94,7 +94,6 @@ def test_foreign_project_is_404(client, login_as, settings):
     r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "x", "version": 1, "doc": doc()})
     assert r.status_code == 404
     assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 404
-    assert client.post(f"/api/v1/projects/{p['id']}/finish").status_code == 404
     assert client.get("/api/v1/projects").json()["projects"] == []
 
 
@@ -106,16 +105,15 @@ def test_delete_project(client, login_as, settings):
     assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 404
 
 
-def test_finish_marks_the_project_and_frees_assets(client, login_as, settings):
+def test_deleting_a_project_frees_its_assets(client, login_as, settings):
+    """Освободить записи проекта можно только вместе с ним: отдельного «завершения» больше нет."""
     login_as()
     me = client.get("/api/v1/me").json()
     seed_assets(client, settings, me["id"])
     p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
-    r = client.post(f"/api/v1/projects/{p['id']}/finish")
-    assert r.status_code == 200 and r.json()["status"] == "finished"
-    assert client.get(f"/api/v1/assets/{VIDEO}").status_code == 404
-    r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "Мой", "version": 2, "doc": doc()})
-    assert r.status_code == 422 and r.json()["error"]["details"]["errors"][0]["field"] == "status"
+    assert client.delete(f"/api/v1/assets/{VIDEO}").status_code == 409
+    assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 204
+    assert client.delete(f"/api/v1/assets/{VIDEO}").status_code == 204
 
 
 def test_asset_in_use_cannot_be_deleted(client, login_as, settings):

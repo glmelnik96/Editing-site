@@ -12,7 +12,7 @@ from pathlib import Path
 
 from server.app.config import Settings
 from server.app.jobs import cancel_jobs_for_target
-from server.app.projects.store import assets_in_drafts
+from server.app.projects.store import assets_in_projects
 from server.app.storage import asset_dir
 from server.app.util import iso
 from server.db.core import connect, transaction
@@ -61,7 +61,7 @@ def delete_expired_assets(conn: sqlite3.Connection, settings: Settings, now: dat
     rows = conn.execute("SELECT id, user_id FROM assets WHERE last_access_at < ?", (cutoff,)).fetchall()
     # Файл, стоящий в незавершённом проекте, не удаляем: срок считается от обращений, а к проекту
     # можно не возвращаться неделю, и монтаж от этого не устаревает.
-    protected = assets_in_drafts(conn)
+    protected = assets_in_projects(conn)
     deleted = 0
     for row in rows:
         if row["id"] in protected:

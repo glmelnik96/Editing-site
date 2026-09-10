@@ -21,7 +21,6 @@ from server.app.projects.store import (
     create_checkpoint,
     create_project,
     delete_project,
-    finish_project,
     generate_project_cues,
     get_project,
     list_projects,
@@ -52,10 +51,8 @@ class ProjectView(BaseModel):
     id: str
     name: str
     version: int
-    status: str
     created_at: str
     updated_at: str
-    finished_at: str | None
     doc: dict[str, Any]
 
 
@@ -63,10 +60,8 @@ class ProjectCard(BaseModel):
     id: str
     name: str
     version: int
-    status: str
     created_at: str
     updated_at: str
-    finished_at: str | None
     clips_count: int
     duration: float
 
@@ -161,21 +156,6 @@ def delete(
     if not delete_project(conn, request.app.state.settings, user.id, project_id):
         raise ApiError(404, "not_found", "Проект не найден")
     return Response(status_code=204)
-
-
-@router.post("/{project_id}/finish", response_model=ProjectView)
-def finish(
-    project_id: str,
-    request: Request,
-    user: CurrentUser = Depends(current_user),  # noqa: B008
-    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
-) -> ProjectView:
-    _owned(conn, user, project_id)
-    try:
-        project = finish_project(conn, request.app.state.settings, user.id, project_id)
-    except KeyError as exc:
-        raise ApiError(404, "not_found", "Проект не найден") from exc
-    return ProjectView(**project)
 
 
 class CheckpointCreate(BaseModel):
@@ -286,10 +266,6 @@ def render(
 ) -> RenderQueued:
     """Ставит сборку в очередь. Ход виден в задании, готовый ролик появится в списке рендеров."""
     project = _owned(conn, user, project_id)
-    # Завершение сносит рендеры проекта: ролик, собранный после него, воскрес бы там,
-    # где человек только что всё убрал.
-    if project["status"] != "draft":
-        raise ApiError(422, "project_finished", "Проект завершён, собрать его заново нельзя")
     if not project["doc"].get("clips"):
         raise ApiError(422, "empty_project", "В проекте нет клипов")
     settings = request.app.state.settings

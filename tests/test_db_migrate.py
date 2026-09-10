@@ -42,7 +42,7 @@ def _migrations_dir(tmp_path, monkeypatch, files):
 def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     conn = connect(tmp_path / "t.db")
     try:
-        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         assert TABLES <= _tables(conn)
         assert migrate(conn) == []
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -170,7 +170,7 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert migrate(conn) == [1]
         assert "yandex_id" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         assert "yandex_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u1', 'a@ya.ru', 'x', '42')"
@@ -224,7 +224,7 @@ def test_jobs_rebuild_keeps_old_rows_and_accepts_convert(tmp_path, monkeypatch):
                 "VALUES ('job_noconvert01', 'usr_000000000001', 'convert', 'cpu', 'queued', 'ast_1', 'x')"
             )
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [9, 10, 11]
+        assert migrate(conn) == [9, 10, 11, 12]
         names = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
         assert "jobs_user_status_idx" in names
         assert conn.execute("SELECT type FROM jobs WHERE id = 'job_oldrender01'").fetchone()[0] == "render"
@@ -273,7 +273,7 @@ def test_conversions_rebuild_keeps_old_rows_and_accepts_new_formats(tmp_path, mo
                 " 'usr_000000000001', 'ast_000000000001', 'job_2', 'aac', 'p', 1, 1, 'x', 'x')"
             )
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [11]
+        assert migrate(conn) == [11, 12]
         assert (
             conn.execute("SELECT format FROM conversions WHERE id = 'cnv_oldmp3xxxxx1'").fetchone()[0]
             == "mp3"
@@ -287,3 +287,29 @@ def test_conversions_rebuild_keeps_old_rows_and_accepts_new_formats(tmp_path, mo
             )
     finally:
         conn.close()
+
+
+def test_projects_lose_the_finished_state_and_keep_their_versions(tmp_path):
+    """Состояние «завершён» уходит вместе с колонками, а строки, что ссылались на проекты, живут.
+
+    Пересобрать таблицу здесь нельзя: на projects ссылаются project_versions и renders, и
+    DROP TABLE каскадом снёс бы их. Поэтому DROP COLUMN — и проверяем, что каскад не сработал.
+    """
+    conn = connect(tmp_path / "video.db")
+    migrate(conn)
+    conn.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES ('usr_1', 'a@b.c', 'A', 't')"
+    )
+    conn.execute(
+        "INSERT INTO projects (id, user_id, name, version, doc, created_at, updated_at) "
+        "VALUES ('prj_1', 'usr_1', 'Живой', 1, '{}', 't', 't')"
+    )
+    conn.execute(
+        "INSERT INTO project_versions (id, project_id, user_id, version, name, doc, label, created_at) "
+        "VALUES ('ver_1', 'prj_1', 'usr_1', 1, 'Живой', '{}', 'снимок', 't')"
+    )
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "status" not in columns and "finished_at" not in columns
+    assert conn.execute("SELECT count(*) FROM project_versions").fetchone()[0] == 1
+    conn.close()
+

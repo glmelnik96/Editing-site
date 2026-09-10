@@ -7,10 +7,8 @@ function project(version = 1, clips: unknown[] = []): Project {
     id: 'prj_1',
     name: 'Мой',
     version,
-    status: 'draft',
     created_at: 'x',
     updated_at: 'x',
-    finished_at: null,
     doc: { output: { aspect: '16:9', fit: 'pad', fps: 30 }, clips, music: null, subtitles: null } as never,
   }
 }

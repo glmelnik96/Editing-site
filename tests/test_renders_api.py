@@ -105,34 +105,14 @@ def test_render_delete(client, login_as, settings):
     assert client.delete(f"/api/v1/renders/{render_id}").status_code == 404
 
 
-def test_finishing_a_project_drops_its_renders(client, login_as, settings):
-    """Готовый ролик завершённого проекта не нужен: документ остаётся, ролик пересобирается."""
+def test_deleting_a_project_drops_its_renders(client, login_as, settings):
+    """Готовый ролик удалённого проекта не нужен никому: пересобрать его больше не из чего."""
     login_as()
     me = client.get("/api/v1/me").json()
     project = make_project(client, settings, me["id"])
     render_id = seed_render(settings, project["id"], me["id"])
-    assert client.post(f"/api/v1/projects/{project['id']}/finish").status_code == 200
+    assert client.delete(f"/api/v1/projects/{project['id']}").status_code == 204
     assert client.get(f"/api/v1/renders/{render_id}").status_code == 404
-
-
-def test_finished_project_cannot_be_rendered(client, login_as, settings):
-    """Завершение сносит рендеры: собранный после него ролик воскрес бы в убранном проекте."""
-    login_as()
-    me = client.get("/api/v1/me").json()
-    project = make_project(client, settings, me["id"])
-    assert client.post(f"/api/v1/projects/{project['id']}/finish").status_code == 200
-    r = client.post(f"/api/v1/projects/{project['id']}/render", json={})
-    assert r.status_code == 422 and r.json()["error"]["code"] == "project_finished"
-
-
-def test_finishing_a_project_cancels_its_render(client, login_as, settings):
-    """Сборка живёт дольше проекта: без отмены она допишет ролик уже после уборки рендеров."""
-    login_as()
-    me = client.get("/api/v1/me").json()
-    project = make_project(client, settings, me["id"])
-    job_id = client.post(f"/api/v1/projects/{project['id']}/render", json={}).json()["job_id"]
-    assert client.post(f"/api/v1/projects/{project['id']}/finish").status_code == 200
-    assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "canceled"
 
 
 def test_deleting_a_project_cancels_its_render(client, login_as, settings):

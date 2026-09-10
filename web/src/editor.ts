@@ -120,8 +120,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         </div>
         <!-- Свойства одного клипа: строка появляется по выбору. Висеть серой всё время им незачем,
              к ролику целиком они отношения не имеют. -->
-        <div class="row bar-clip" id="ed-clip-bar" hidden>
-          <span class="meta">Выбранный клип</span>
+        <div class="row bar-clip" id="ed-clip-bar">
+          <span class="meta" id="ed-clip-mark">Клип не выбран</span>
           <label class="clip-vol">Громкость
             <input id="ed-volume" type="range" min="0" max="2" step="0.01" disabled />
             <span id="ed-vol-note" class="muted" hidden>в сборке громче превью</span>
@@ -156,9 +156,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const playButton = el.querySelector('#ed-play') as HTMLButtonElement
-  const playGroup = el.querySelector('#ed-play-group') as HTMLElement
-  const editGroup = el.querySelector('#ed-edit-group') as HTMLElement
-  const clipBar = el.querySelector('#ed-clip-bar') as HTMLElement
+  const clipMark = el.querySelector('#ed-clip-mark') as HTMLElement
+  const splitButton = el.querySelector('#ed-split') as HTMLButtonElement
+  const copyButton = el.querySelector('#ed-copy') as HTMLButtonElement
+  const deleteButton = el.querySelector('#ed-delete') as HTMLButtonElement
+  const zoomInButton = el.querySelector('#ed-zoom-in') as HTMLButtonElement
+  const zoomOutButton = el.querySelector('#ed-zoom-out') as HTMLButtonElement
   const helpButton = el.querySelector('#ed-help') as HTMLButtonElement
   const keysCard = el.querySelector('#ed-keys') as HTMLElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
@@ -740,12 +743,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     music.volume = musicVolume(musicDoc, timelineTime, totalDuration(clips), ducking)
   }
 
-  /** Пустая шкала: играть, резать и удалять нечего. Серые кнопки только сбивают — прячем. */
+  /**
+   * Что сейчас можно, а что нет. Гасим, но не прячем.
+   *
+   * Появляющиеся и исчезающие кнопки переставляют панель под руками и не дают её выучить: место
+   * контрола должно быть постоянным, а доступность — меняться. Серая кнопка ещё и отвечает на
+   * вопрос «почему нельзя» — исчезнувшая не отвечает ни на что.
+   */
   function syncBar(): void {
     const has = clipCount() > 0
-    playGroup.hidden = !has
-    editGroup.hidden = !has
-    clipBar.hidden = !has || !timeline.selected()
+    const chosen = Boolean(timeline.selected())
+    playButton.disabled = !has
+    gotoInput.disabled = !has
+    splitButton.disabled = !has
+    zoomInButton.disabled = !has
+    zoomOutButton.disabled = !has
+    copyButton.disabled = !chosen
+    deleteButton.disabled = !chosen
+    clipMark.textContent = chosen ? 'Выбранный клип' : 'Клип не выбран'
   }
 
   function syncClipVolume(): void {

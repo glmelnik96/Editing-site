@@ -144,8 +144,8 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
         (uid, now_iso(), now_iso()),
     )
     conn.execute(
-        "INSERT INTO projects (id, user_id, name, status, version, doc, created_at, updated_at) "
-        "VALUES ('prj_list1', ?, 'Ролик', 'draft', 1, '{}', ?, ?)",
+        "INSERT INTO projects (id, user_id, name, version, doc, created_at, updated_at) "
+        "VALUES ('prj_list1', ?, 'Ролик', 1, '{}', ?, ?)",
         (uid, now_iso(), now_iso()),
     )
     conn.execute(

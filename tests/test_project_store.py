@@ -8,10 +8,10 @@ from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     ProjectConflict,
     ProjectLimit,
+    assets_in_projects,
     assets_of,
     create_project,
     delete_project,
-    finish_project,
     get_project,
     list_projects,
     projects_using_asset,
@@ -64,11 +64,11 @@ def doc(asset="ast_000000000001", **over) -> dict:
 
 def test_create_returns_a_normalized_project(conn, settings):
     p = create_project(conn, settings, USER, name="Подкаст", raw_doc=doc())
-    assert p["id"].startswith("prj_") and p["version"] == 1 and p["status"] == "draft"
+    assert p["id"].startswith("prj_") and p["version"] == 1
     assert p["name"] == "Подкаст"
     assert p["doc"]["clips"][0]["id"] == "c1"
     assert p["doc"]["output"]["aspect"] == "16:9"
-    assert p["created_at"] == p["updated_at"] and p["finished_at"] is None
+    assert p["created_at"] == p["updated_at"]
 
 
 def test_create_without_a_document_starts_empty(conn, settings):
@@ -210,17 +210,6 @@ def test_failed_delete_leaves_the_jobs_alone(conn, settings):
     assert job_status(conn, job_id) == "queued"
 
 
-def test_finish_cancels_the_jobs_of_the_project(conn, settings):
-    """Иначе у завершённого проекта появится ролик, который человек только что убрал:
-    finish сносит рендеры, а доехавшая сборка кладёт новый уже после этого."""
-    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    job_id = enqueue_job(conn, user_id=USER, type_="render", target_id=p["id"])
-    conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
-
-    finish_project(conn, settings, USER, p["id"])
-    assert job_status(conn, job_id) == "canceled"
-
-
 def test_finished_job_is_not_touched_by_delete(conn, settings):
     """Отмена не переписывает историю: завершённое задание остаётся выполненным."""
     p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
@@ -239,44 +228,6 @@ def test_assets_of_lists_every_referenced_asset(conn, settings):
     }
     p = create_project(conn, settings, USER, name="Мой", raw_doc=raw)
     assert assets_of(p["doc"]) == {"ast_000000000001", "ast_000000000002", "ast_000000000003"}
-
-
-def test_projects_using_asset_ignores_finished_ones(conn, settings):
-    a = create_project(conn, settings, USER, name="Живой", raw_doc=doc())
-    b = create_project(conn, settings, USER, name="Готовый", raw_doc=doc())
-    finish_project(conn, settings, USER, b["id"])
-    using = projects_using_asset(conn, USER, "ast_000000000001")
-    assert [x["id"] for x in using] == [a["id"]]
-
-
-def test_finish_deletes_assets_that_nobody_else_needs(conn, settings):
-    shared = create_project(conn, settings, USER, name="Общий", raw_doc=doc("ast_000000000001"))
-    done = create_project(conn, settings, USER, name="Готовый", raw_doc={
-        "clips": [{"asset_id": "ast_000000000001", "in": 0, "out": 2},
-                  {"asset_id": "ast_000000000002", "in": 0, "out": 2}],
-    })
-    result = finish_project(conn, settings, USER, done["id"])
-    assert result["status"] == "finished" and result["finished_at"]
-    # ast_000000000001 остаётся: он нужен другому незавершённому проекту
-    assert conn.execute("SELECT count(*) FROM assets WHERE id = 'ast_000000000001'").fetchone()[0] == 1
-    assert conn.execute("SELECT count(*) FROM assets WHERE id = 'ast_000000000002'").fetchone()[0] == 0
-    assert not asset_dir(settings, USER, "ast_000000000002").exists()
-    assert get_project(conn, USER, shared["id"])["doc"]["clips"]  # чужой проект цел
-
-
-def test_finishing_twice_is_harmless(conn, settings):
-    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    finish_project(conn, settings, USER, p["id"])
-    again = finish_project(conn, settings, USER, p["id"])
-    assert again["status"] == "finished"
-
-
-def test_finished_project_cannot_be_saved(conn, settings):
-    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    finish_project(conn, settings, USER, p["id"])
-    with pytest.raises(ProjectInvalid) as e:
-        save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=doc(), version=p["version"])
-    assert e.value.errors[0]["field"] == "status"
 
 
 def test_saved_document_always_passes_its_own_validation(tmp_path):
@@ -321,3 +272,22 @@ def test_saved_document_always_passes_its_own_validation(tmp_path):
     )
     assert again["version"] == project["version"] + 1
     c.close()
+
+
+def test_every_project_holds_its_assets_until_it_is_deleted(conn, settings):
+    """Состояния «завершён» больше нет, и отобрать у проекта файлы, оставив его самого, нечем.
+
+    Значит защита janitor распространяется на все проекты: запись, стоящая в монтаже, не должна
+    исчезнуть по сроку последнего обращения, сколько бы человек проект не открывал.
+    """
+    a = create_project(conn, settings, USER, name="Первый", raw_doc=doc("ast_000000000001"))
+    b = create_project(conn, settings, USER, name="Второй", raw_doc=doc("ast_000000000002"))
+    assert assets_in_projects(conn) == {"ast_000000000001", "ast_000000000002"}
+    using = projects_using_asset(conn, USER, "ast_000000000001")
+    assert [x["id"] for x in using] == [a["id"]]
+
+    delete_project(conn, settings, USER, a["id"])
+    assert assets_in_projects(conn) == {"ast_000000000002"}
+    assert projects_using_asset(conn, USER, "ast_000000000001") == []
+    assert get_project(conn, USER, b["id"]) is not None
+

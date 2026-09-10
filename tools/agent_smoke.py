@@ -263,13 +263,12 @@ def smoke(base: str, token: str, file: Path) -> int:
         fail(f"файл отдан без вложения: Content-Disposition={headers.get('content-disposition')!r}")
     say("7/8", f"файл скачан: {len(body)} байт, {headers.get('content-disposition')}")
 
-    finished = call(base, token, "POST", f"/api/v1/projects/{saved['id']}/finish")
-    if finished["status"] != "finished":
-        fail(f"проект остался в статусе {finished['status']}")
-    left = call(base, token, "GET", f"/api/v1/projects/{saved['id']}/renders")["renders"]
+    # Состояния «завершён» нет: убирает за собой удаление проекта — оно же освобождает записи.
+    call(base, token, "DELETE", f"/api/v1/projects/{saved['id']}")
+    left = [p for p in call(base, token, "GET", "/api/v1/projects")["projects"] if p["id"] == saved["id"]]
     if left:
-        fail(f"после завершения проекта осталось роликов: {len(left)}")
-    say("8/8", "проект завершён, ролики убраны")
+        fail("проект пережил удаление")
+    say("8/8", "проект удалён вместе с роликами")
     say("ИТОГ", "весь путь агента пройден")
     return 0
 

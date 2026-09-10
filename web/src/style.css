@@ -1066,16 +1066,13 @@ main.card {
   margin-right: 16px;
   border-left: 1px solid var(--line);
 }
-/* Первая видимая группа идёт без черты: висящая слева линия читалась бы как обрыв. */
-.bar-group:first-of-type,
-.bar-group[hidden] + .bar-group,
-.bar-group[hidden] + .bar-group[hidden] + .bar-group {
+/* Первая группа идёт без черты: висящая слева линия читалась бы как обрыв. */
+.bar-group:first-of-type {
   padding-left: 0;
   border-left: 0;
 }
-.bar-group[hidden] { display: none; }
 /* Настройки вывода уходят вправо: их задают раз на проект, а не в каждой правке. */
-#ed-edit-group:not([hidden]) ~ #ed-out-group {
+#ed-out-group {
   margin-left: auto;
   margin-right: 0;
 }
@@ -1088,7 +1085,6 @@ main.card {
   border: 1px solid var(--line);
   border-radius: 12px;
 }
-.bar-clip[hidden] { display: none; }
 
 .clip-vol {
   display: inline-flex;

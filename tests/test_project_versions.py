@@ -5,7 +5,6 @@ from server.app.projects.doc import ProjectInvalid
 from server.app.projects.store import (
     create_checkpoint,
     create_project,
-    finish_project,
     get_project,
     list_versions,
     restore_version,
@@ -113,14 +112,6 @@ def test_restore_of_a_missing_point_is_an_error(conn, settings):
     p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
     with pytest.raises(KeyError):
         restore_version(conn, settings, USER, p["id"], "pvr_00000000dead")
-
-
-def test_finished_project_takes_no_checkpoints(conn, settings):
-    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    finish_project(conn, settings, USER, p["id"])
-    with pytest.raises(ProjectInvalid) as e:
-        create_checkpoint(conn, settings, USER, p["id"], label="поздно")
-    assert e.value.errors[0]["field"] == "status"
 
 
 def test_deleting_a_project_takes_its_versions(conn, settings):

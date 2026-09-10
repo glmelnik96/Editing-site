@@ -274,8 +274,12 @@ def test_run_backs_up_even_when_a_rule_fails(conn, settings, monkeypatch):
     assert stats["error"] == 1 and stats["backup"] == 1
 
 
-def test_asset_used_by_a_draft_project_survives_its_ttl(conn, settings, tmp_path):
-    """Проект может лежать нетронутым неделю: его файлы не исчезают по сроку обращений."""
+def test_asset_used_by_a_project_survives_its_ttl(conn, settings, tmp_path):
+    """Проект может лежать нетронутым неделю: его файлы не исчезают по сроку обращений.
+
+    Отобрать у проекта записи, оставив сам проект, теперь нечем — состояния «завершён» нет.
+    Освобождает их удаление проекта, и тогда срок обращений снова начинает работать.
+    """
     from server.app.projects.store import create_project
 
     asset = _asset(conn, settings, tmp_path, "used.mp4", last_access=NOW - timedelta(hours=30))
@@ -288,7 +292,9 @@ def test_asset_used_by_a_draft_project_survives_its_ttl(conn, settings, tmp_path
     assert rules.delete_expired_assets(conn, settings, NOW) == 0
     assert asset_dir(settings, USER, asset).exists()
 
-    conn.execute("UPDATE projects SET status = 'finished' WHERE id = ?", (project["id"],))
+    from server.app.projects.store import delete_project
+
+    delete_project(conn, settings, USER, project["id"])
     assert rules.delete_expired_assets(conn, settings, NOW) == 1
     assert not asset_dir(settings, USER, asset).exists()
 

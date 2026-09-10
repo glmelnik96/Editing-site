@@ -16,7 +16,7 @@ from server.app.config import Settings
 from server.app.jobs import cancel_jobs_for_target
 from server.app.projects.doc import AssetInfo, ProjectInvalid, clamp_fades, validate_doc
 from server.app.projects.snap import snap_clips
-from server.app.storage import asset_dir, project_dir, render_dir, render_url, subs_dir, transcript_path
+from server.app.storage import project_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
 from server.media.cues import build_cues
@@ -51,10 +51,8 @@ def _row_to_project(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "name": row["name"],
         "version": row["version"],
-        "status": row["status"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
-        "finished_at": row["finished_at"],
         "doc": json.loads(row["doc"]),
     }
 
@@ -123,20 +121,17 @@ def create_project(
     project_id = new_id("prj")
     with transaction(conn):
         count = conn.execute(
-            "SELECT count(*) FROM projects WHERE user_id = ? AND status = 'draft'", (user_id,)
+            "SELECT count(*) FROM projects WHERE user_id = ?", (user_id,)
         ).fetchone()[0]
         if count >= settings.max_projects_per_user:
             raise ProjectLimit(f"больше {settings.max_projects_per_user} проектов в работе")
         conn.execute(
-            "INSERT INTO projects (id, user_id, name, version, doc, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, 1, ?, 'draft', ?, ?)",
+            "INSERT INTO projects (id, user_id, name, version, doc, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?)",
             (project_id, user_id, name, json.dumps(doc, ensure_ascii=False), now, now),
         )
         _touch_assets(conn, doc)
-    return {
-        "id": project_id, "name": name, "version": 1, "status": "draft",
-        "created_at": now, "updated_at": now, "finished_at": None, "doc": doc,
-    }
+    return {"id": project_id, "name": name, "version": 1, "created_at": now, "updated_at": now, "doc": doc}
 
 
 def get_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> dict | None:
@@ -149,7 +144,7 @@ def get_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> dict
 def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:
     """Карточки без документа: список проектов не должен тащить сотни клипов."""
     rows = conn.execute(
-        "SELECT id, name, version, status, created_at, updated_at, finished_at, doc FROM projects "
+        "SELECT id, name, version, created_at, updated_at, doc FROM projects "
         "WHERE user_id = ? ORDER BY updated_at DESC, id",
         (user_id,),
     )
@@ -158,9 +153,8 @@ def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:
         doc = json.loads(row["doc"])
         clips = doc.get("clips") or []
         out.append({
-            "id": row["id"], "name": row["name"], "version": row["version"], "status": row["status"],
+            "id": row["id"], "name": row["name"], "version": row["version"],
             "created_at": row["created_at"], "updated_at": row["updated_at"],
-            "finished_at": row["finished_at"],
             "clips_count": len(clips),
             "duration": clips_duration(clips),
         })
@@ -174,8 +168,6 @@ def save_project(
     current = get_project(conn, user_id, project_id)
     if current is None:
         raise KeyError(project_id)
-    if current["status"] != "draft":
-        raise ProjectInvalid([{"field": "status", "message": "завершённый проект не редактируется"}])
     if current["version"] != version:
         raise ProjectConflict(current)
     name = _clean_name(name)
@@ -184,20 +176,16 @@ def save_project(
     with transaction(conn):
         cur = conn.execute(
             "UPDATE projects SET name = ?, doc = ?, version = version + 1, updated_at = ? "
-            "WHERE id = ? AND user_id = ? AND version = ? AND status = 'draft'",
+            "WHERE id = ? AND user_id = ? AND version = ?",
             (name, json.dumps(doc, ensure_ascii=False), now, project_id, user_id, version),
         )
         if cur.rowcount == 0:
-            # Кто-то тронул проект между нашей проверкой и записью: либо сохранил (тогда версия
-            # другая), либо завершил (тогда причина не в версии, и клиенту надо сказать именно это).
-            fresh = get_project(conn, user_id, project_id) or current
-            if fresh["status"] != "draft":
-                raise ProjectInvalid([{"field": "status", "message": "завершённый проект не редактируется"}])
-            raise ProjectConflict(fresh)
+            # Проект сохранили между нашей проверкой и записью: версия в базе уже другая.
+            raise ProjectConflict(get_project(conn, user_id, project_id) or current)
         _touch_assets(conn, doc)
     return {
-        "id": project_id, "name": name, "version": version + 1, "status": "draft",
-        "created_at": current["created_at"], "updated_at": now, "finished_at": None, "doc": doc,
+        "id": project_id, "name": name, "version": version + 1,
+        "created_at": current["created_at"], "updated_at": now, "doc": doc,
     }
 
 
@@ -226,14 +214,15 @@ def delete_project(
     return True
 
 
-def assets_in_drafts(conn: sqlite3.Connection) -> set[str]:
-    """Все ассеты, на которые ссылаются незавершённые проекты любого владельца.
+def assets_in_projects(conn: sqlite3.Connection) -> set[str]:
+    """Все ассеты, на которые ссылаются проекты любого владельца.
 
-    Нужен janitor: файл, стоящий в черновике, не должен исчезнуть по сроку последнего обращения.
-    Пользователь мог неделю не открывать проект, но монтаж от этого не перестал существовать.
+    Нужен janitor: файл, стоящий в проекте, не должен исчезнуть по сроку последнего обращения.
+    Человек мог неделю не открывать проект, но монтаж от этого не перестал существовать.
+    Освобождает запись удаление проекта — другого способа отобрать у проекта его файлы нет.
     """
     used: set[str] = set()
-    for row in conn.execute("SELECT doc FROM projects WHERE status = 'draft'"):
+    for row in conn.execute("SELECT doc FROM projects"):
         try:
             used |= assets_of(json.loads(row["doc"]))
         except (json.JSONDecodeError, ValueError, TypeError):
@@ -242,51 +231,13 @@ def assets_in_drafts(conn: sqlite3.Connection) -> set[str]:
 
 
 def projects_using_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) -> list[dict]:
-    """Незавершённые проекты владельца, где встречается ассет. Документов мало, ищем перебором."""
-    rows = conn.execute(
-        "SELECT id, name, doc FROM projects WHERE user_id = ? AND status = 'draft'", (user_id,)
-    )
+    """Проекты владельца, где встречается ассет. Документов мало, ищем перебором."""
+    rows = conn.execute("SELECT id, name, doc FROM projects WHERE user_id = ?", (user_id,))
     return [
         {"id": r["id"], "name": r["name"]}
         for r in rows
         if asset_id in assets_of(json.loads(r["doc"]))
     ]
-
-
-def finish_project(conn: sqlite3.Connection, settings: Settings, user_id: str, project_id: str) -> dict:
-    """Завершение: проект остаётся историей, а его ассеты удаляются, если больше нигде не нужны.
-
-    Рендеры проекта удаляются вместе с файлами: документ сохраняется, ролик пересобирается.
-    """
-    project = get_project(conn, user_id, project_id)
-    if project is None:
-        raise KeyError(project_id)
-    now = now_iso()
-    if project["status"] == "draft":
-        with transaction(conn):
-            conn.execute(
-                "UPDATE projects SET status = 'finished', finished_at = ?, updated_at = ? WHERE id = ?",
-                (now, now, project_id),
-            )
-            # Момент, когда проект перестаёт принимать работу, — он же момент отмены его заданий:
-            # иначе доехавшая сборка положит ролик уже после того, как мы снесли все рендеры.
-            cancel_jobs_for_target(conn, project_id)
-        project = {**project, "status": "finished", "finished_at": now, "updated_at": now}
-    # Рендеры завершённого проекта не нужны никому: они собираются заново из документа.
-    delete_project_renders(conn, settings, user_id, project_id)
-    for asset_id in sorted(assets_of(project["doc"])):
-        with transaction(conn):
-            # Проверяем занятость и удаляем в одной транзакции: иначе ассет успеет попасть
-            # в чужой проект между проверкой и удалением.
-            if projects_using_asset(conn, user_id, asset_id):
-                continue
-            conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
-        folder = asset_dir(settings, user_id, asset_id)
-        shutil.rmtree(folder, ignore_errors=True)
-        if folder.exists():
-            # Записи уже нет, а каталог остался: место займёт janitor, но знать об этом надо.
-            log.warning("не удалось удалить каталог ассета %s", folder)
-    return project
 
 
 MAX_LABEL = 200
@@ -316,8 +267,6 @@ def create_checkpoint(
     project = get_project(conn, user_id, project_id)
     if project is None:
         raise KeyError(project_id)
-    if project["status"] != "draft":
-        raise ProjectInvalid([{"field": "status", "message": "завершённый проект не сохраняется"}])
     row_id = new_id("pvr")
     now = now_iso()
     with transaction(conn):

@@ -68,11 +68,10 @@ function card(step: Step, delayMs: number): string {
 }
 
 function recentRow(p: ProjectCard, i: number): string {
-  const state = p.status === 'finished' ? 'завершён' : 'в работе'
   return `
     <a class="row appear" href="#/p/${encodeURIComponent(p.id)}" style="${ROW_STYLE};--delay:${i * ROW_STEP_MS}ms">
       <span>${escapeHtml(p.name)}</span>
-      <span class="meta">${fmtDuration(p.duration)} · ${state}</span>
+      <span class="meta">${p.clips_count} кл. · ${fmtDuration(p.duration)}</span>
     </a>`
 }
 
