@@ -254,3 +254,21 @@ def test_rotating_admin_email_demotes_old_admin(login_as, settings, tmp_path):
         c2.cookies.set("vsid", cookie)
         assert c2.get("/api/v1/me").json()["role"] == "user"
         assert c2.get("/api/v1/admin/stats").status_code == 403
+
+
+def test_limits_tells_the_client_what_can_be_uploaded(client, login_as):
+    """Подпись на экране записей и проверка на сервере обязаны идти из одного места."""
+    login_as()
+    body = client.get("/api/v1/limits").json()
+    assert body["max_upload_bytes"] > 0
+    assert body["max_still_sec"] > 0
+    assert set(body["formats"]) == {"video", "audio", "image", "subtitle"}
+    assert "mp4" in body["formats"]["video"]
+    assert "png" in body["formats"]["image"] and "jpg" in body["formats"]["image"]
+    assert body["formats"]["subtitle"] == ["srt", "vtt"]
+    # Списки отсортированы: подпись на экране не должна прыгать между загрузками страницы.
+    assert all(group == sorted(group) for group in body["formats"].values())
+
+
+def test_limits_needs_a_session(client):
+    assert client.get("/api/v1/limits").status_code == 401

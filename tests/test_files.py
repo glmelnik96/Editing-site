@@ -239,3 +239,17 @@ def test_render_url_shapes_that_are_not_ours(client, login_as, settings):
         url = f"{base}/{name}"
         assert client.get(url).status_code == 404, name
         assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, name
+
+
+def test_render_url_carries_its_format_and_parses_back():
+    """Ролик в webm и m4a отдаётся тем же путём, что mp4: имя — «{id}.{формат}»."""
+    from server.app.storage import parse_file_url, render_url
+
+    for fmt in ("mp4", "webm", "m4a"):
+        url = render_url("usr_000000000001", "prj_000000000001", "rnd_000000000001", fmt)
+        assert url.endswith(f"/renders/rnd_000000000001.{fmt}")
+        assert parse_file_url(url) == (
+            "usr_000000000001", "prj_000000000001", f"rnd_000000000001.{fmt}", "render"
+        )
+    bad = "/files/usr_000000000001/projects/prj_000000000001/renders/rnd_000000000001.exe"
+    assert parse_file_url(bad) is None

@@ -17,6 +17,14 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 WAL_ATTEMPTS = 10
 WAL_RETRY_STEP_SEC = 0.05
 
+# Пометка в первой строке миграции: выполнить её с выключенными внешними ключами.
+#
+# Нужна там, где пересоздают таблицу, на которую ссылаются с ON DELETE CASCADE. DROP TABLE
+# родителя при включённых ключах делает неявный DELETE FROM и уносит детей: перестройка assets
+# ради нового CHECK стёрла бы все расшифровки и конвертации (проверено на SQLite 3.50).
+# Внутри транзакции PRAGMA foreign_keys молча не действует, поэтому переключаем её снаружи.
+NO_FK_MARK = "-- foreign_keys: off"
+
 
 def enable_wal(conn: sqlite3.Connection) -> None:
     """Включить WAL на файле базы, переживая одновременный старт двух процессов.
@@ -79,8 +87,12 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
     enable_wal(conn)
     applied: list[int] = []
     for version, path in pending(conn):
+        sql = path.read_text(encoding="utf-8-sig")
+        keep_fk = not sql.lstrip().startswith(NO_FK_MARK)
+        if not keep_fk:
+            conn.execute("PRAGMA foreign_keys=OFF")
         try:
-            conn.executescript(_script(version, path.read_text(encoding="utf-8-sig")))
+            conn.executescript(_script(version, sql))
         except sqlite3.IntegrityError:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
@@ -91,8 +103,31 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
+        finally:
+            # Возвращаем ключи после отката: внутри транзакции PRAGMA не подействовала бы, и
+            # соединение осталось бы без проверок до конца жизни процесса.
+            if not keep_fk:
+                conn.execute("PRAGMA foreign_keys=ON")
+        if not keep_fk:
+            _check_foreign_keys(conn, version)
         applied.append(version)
     return applied
+
+
+def _check_foreign_keys(conn: sqlite3.Connection, version: int) -> None:
+    """Не осталось ли висячих ссылок после перестройки таблицы.
+
+    Проверка идёт уже после COMMIT: результат PRAGMA изнутри executescript не прочитать. Значит
+    это не защита, а сигнал — увидев его, восстанавливают базу из резервной копии того же дня.
+    Молчаливая порча была бы хуже: её заметили бы через неделю по пропавшим расшифровкам.
+    """
+    broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if broken:
+        tables = sorted({str(row[0]) for row in broken})
+        raise RuntimeError(
+            f"миграция {version} оставила висячие ссылки в таблицах: {', '.join(tables)}; "
+            "база нуждается в восстановлении из резервной копии"
+        )
 
 
 def main() -> None:

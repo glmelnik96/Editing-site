@@ -32,6 +32,7 @@ from server.app.projects.store import (
     save_project,
 )
 from server.db.core import get_db
+from server.media.convert import missing_encoder
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -251,18 +252,28 @@ def restore(
 
 
 class RenderRequest(BaseModel):
-    quality: Literal["draft", "final"] = "draft"
+    quality: Literal["draft", "final", "preview", "medium", "high", "target"] = "draft"
+    format: Literal["mp4", "webm", "m4a"] = "mp4"
+    # Короткая сторона кадра; длинную даёт пропорция проекта. None — по качеству.
+    short_side: Literal[360, 480, 720, 1080, 1440, 2160] | None = None
+    # Только для целевого качества: средний битрейт видео, кбит/с.
+    bitrate_kbps: int | None = Field(default=None, ge=300, le=50_000)
 
 
 class RenderQueued(BaseModel):
     job_id: str
     quality: str
+    format: str = "mp4"
 
 
 class RenderView(BaseModel):
     id: str
     project_id: str
     quality: str
+    format: str = "mp4"
+    width: int | None = None
+    height: int | None = None
+    video_bitrate: int | None = None
     size: int
     duration: float
     created_at: str
@@ -290,12 +301,24 @@ def render(
     # Предел считает и очередь, и выполняющееся: на слабой машине третий всё равно ждёт.
     if active_renders(conn, owner) > settings.max_renders_queued:
         raise ApiError(409, "too_many_renders", "Уже собирается слишком много роликов, подождите")
+    if body.quality == "target" and body.bitrate_kbps is None:
+        raise ApiError(422, "bitrate_required", "Для целевого качества назовите битрейт")
+    if body.format == "webm":
+        # Без VP9 или Opus сборка упала бы через минуты кодирования сырым stderr — отказ сразу.
+        missing = missing_encoder(settings, "webm")
+        if missing:
+            raise ApiError(503, "encoder_unavailable", missing)
+    params: dict = {"quality": body.quality, "format": body.format}
+    if body.short_side is not None:
+        params["short_side"] = body.short_side
+    if body.bitrate_kbps is not None:
+        params["bitrate_kbps"] = body.bitrate_kbps
     job_id = enqueue_job(
         # Задание и готовый ролик принадлежат владельцу: файл ложится в его каталог, и путь
         # /files/{владелец}/projects/… иначе не сошёлся бы.
-        conn, user_id=owner, type_="render", target_id=project_id, params={"quality": body.quality}
+        conn, user_id=owner, type_="render", target_id=project_id, params=params
     )
-    return RenderQueued(job_id=job_id, quality=body.quality)
+    return RenderQueued(job_id=job_id, quality=body.quality, format=body.format)
 
 
 @router.get("/{project_id}/assets", response_model=AssetList)

@@ -758,17 +758,120 @@ main.card {
   flex-direction: column;
   gap: 12px;
   align-self: start;
+  min-width: 0;
+}
+.side-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.side-head .tabs {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+/* Кнопка сворачивания стоит вне прокручиваемого тела: свернув панель, ею же разворачивают
+   обратно, и уехать вместе с содержимым она не может. */
+.side-fold {
+  flex: none;
+  padding: 6px 11px;
+  line-height: 1.2;
+}
+.side-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   /* Своя прокрутка: в колонке три панели — исходник с плеером, текст расшифровки и музыка, —
      и вместе они выше экрана. Без этого прокрутка страницы уносила сцену и шкалу вверх, а
      монтировать, не видя шкалы, нельзя. */
-  max-height: calc(100vh - 150px);
+  max-height: calc(100vh - 200px);
   overflow-y: auto;
   /* Полосе прокрутки нужен зазор, иначе она ложится на рамки карточек. */
   padding-right: 4px;
 }
+.side-body[hidden] {
+  display: none;
+}
+/* Свёрнутая панель сжимается до своей кнопки, а освободившееся место забирают сцена и шкала:
+   монтируют, глядя на кадр и на шкалу, исходники нужны только когда берут новый кусок. */
+.editor.side-off {
+  grid-template-columns: auto minmax(320px, 1fr);
+}
+.editor.side-off .tabs {
+  display: none;
+}
+.editor.side-off .stage {
+  --stage-h: 68vh;
+}
 .side .card {
   margin: 0;
   max-width: none;
+}
+
+/* Список форматов: полсотни расширений не должны занимать экран, поэтому под вопросом. */
+.formats {
+  margin: 0;
+}
+.formats > summary {
+  cursor: pointer;
+}
+.formats > summary:hover {
+  color: var(--paper);
+}
+.formats > div {
+  padding: 8px 0 0 18px;
+}
+
+/* Настройки сборки сеткой: подпись над полем, по два в ряд — колонка узкая, и четыре поля
+   в одну строку не встают. */
+.render-opts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin: 8px 0 4px;
+}
+.render-opts label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.render-opts select,
+.render-opts input {
+  width: 100%;
+}
+
+/* --- Складка: два способа отрезать кусок, развёрнут не больше одного --- */
+.fold-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  font-family: var(--font-display);
+  font-size: 17px;
+  text-align: left;
+}
+.fold-mark {
+  color: var(--dim);
+  font-size: 12px;
+}
+.fold-head[aria-expanded='true'] .fold-mark {
+  color: var(--brand);
+}
+.fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+}
+.fold-body[hidden] {
+  display: none;
 }
 /* Выбор исходника — во всю ширину панели, а не по длине самого длинного имени файла. */
 #src-pick,
@@ -985,6 +1088,63 @@ main.card {
    оказывается в полосе — там, где по нему и надо попадать. */
 .lane {
   position: relative;
+}
+
+/* --- Звуковая дорожка: своя колея под клипами --- */
+.sound-track {
+  position: relative;
+  height: 52px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--line);
+}
+/* Пустая колея видна всегда — появляющаяся переставляла бы шкалу под руками, — и подпись в ней
+   говорит, откуда сюда класть. Сквозная для указателя: щелчок по пустому месту перематывает. */
+.sound-track.empty::before {
+  content: attr(data-empty);
+  position: absolute;
+  left: 8px;
+  top: 17px;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Звук — родственник клипа, но с другим фоном: с одного взгляда видно, что это не картинка,
+   а то, что звучит поверх неё. */
+.sound-block {
+  position: absolute;
+  top: 3px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brand) 22%, var(--panel));
+  border: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  z-index: 1;
+}
+.sound-block.selected {
+  outline: 2px solid var(--brand-hover);
+  z-index: 2;
+}
+.sound-block.dragging {
+  cursor: grabbing;
+  opacity: 0.85;
+}
+.sound-block .label {
+  position: absolute;
+  left: 6px;
+  top: 3px;
+  font-size: 11px;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+  z-index: 1;
+}
+.sound-block .wave {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 /* Красная риска текущего кадра — конвенция монтажных программ; другого красного

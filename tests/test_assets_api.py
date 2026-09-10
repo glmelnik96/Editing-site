@@ -16,7 +16,8 @@ def _row(**over):
     base = {
         "id": "ast_0123456789ab", "user_id": "usr_0123456789ab", "kind": "video", "original_name": "a.mp4",
         "ext": "mp4", "size": 1, "status": "uploaded", "duration": None, "width": None, "height": None,
-        "fps": None, "has_audio": None, "video_codec": None, "audio_codec": None, "error": None,
+        "fps": None, "has_audio": None, "video_codec": None, "audio_codec": None,
+        "bit_rate": None, "error": None,
         "created_at": "2026-09-04T00:00:00.000Z", "last_access_at": "2026-09-04T00:00:00.000Z",
     }
     return {**base, **over}
@@ -38,6 +39,11 @@ def test_view_links_follow_status():
     assert v.files.proxy.endswith("/proxy.mp4")
     v = asset_view(_row(kind="audio", status="proxy_ready"))
     assert v.files.proxy.endswith("/proxy.m4a") and v.files.thumbs is None
+    # У картинки прокси — неподвижный ролик, а раскадровка из одной клетки: сцена и шкала
+    # показывают её тем же путём, что и видео.
+    v = asset_view(_row(kind="image", status="proxy_ready"))
+    assert v.files.proxy.endswith("/proxy.mp4")
+    assert v.files.thumbs.endswith("/thumbs.jpg") and v.files.thumbs_meta.endswith("/thumbs.json")
     v = asset_view(_row(kind="subtitle", status="ready"))
     assert v.files.peaks is None and v.files.proxy is None
     assert v.files.vtt == "/files/usr_0123456789ab/assets/ast_0123456789ab/subs.vtt"
@@ -80,7 +86,7 @@ def test_small_upload_limits(client, login_as):
     assert r.status_code == 413 and r.json()["error"]["code"] == "too_large"
     r = _upload_small(client, name="e.srt", data=b"")
     assert r.status_code == 422 and r.json()["error"]["code"] == "empty_file"
-    r = _upload_small(client, kind="image")
+    r = _upload_small(client, kind="гифка")
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_kind"
     assert client.get("/api/v1/assets").json()["assets"] == []
 

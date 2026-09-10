@@ -14,6 +14,11 @@ export type Asset = {
   size: number
   status: string
   duration: number | null
+  /** Размер кадра: по нему панель сборки предупреждает, что выбранное больше исходников. */
+  width?: number | null
+  height?: number | null
+  /** Битрейт исходника, бит/с. У старых записей его нет: колонку завели позже анализа. */
+  bit_rate?: number | null
   progress?: number | null
   error: string | null
   files: {
@@ -103,11 +108,27 @@ export function needsPolling(assets: { status: string }[]): boolean {
 
 /** Годится ли запись в клип: длительность известна, обработка дошла хотя бы до звука и полоски. */
 export function isReady(a: Asset): boolean {
-  return READY.has(a.status) && a.duration !== null && a.duration > 0
+  if (!READY.has(a.status)) return false
+  // У картинки своей длительности нет и не будет: сколько она висит в кадре, решают при
+  // добавлении. Требовать длительность от картинки значило бы не пускать её на шкалу никогда.
+  if (a.kind === 'image') return true
+  return a.duration !== null && a.duration > 0
 }
 
 export function listAssets(): Promise<{ assets: Asset[] }> {
   return api<{ assets: Asset[] }>('/api/v1/assets')
+}
+
+/** Что и какого размера принимает сервер. Держать копию списка в браузере нельзя: разойдясь
+ * с сервером, подпись пообещала бы формат, который уже не принимают. */
+export type Limits = {
+  max_upload_bytes: number
+  max_still_sec: number
+  formats: Record<string, string[]>
+}
+
+export function loadLimits(): Promise<Limits> {
+  return api<Limits>('/api/v1/limits')
 }
 
 /**

@@ -88,7 +88,7 @@ def test_create_rejects_bad_input(conn, settings):
         create_upload(conn, settings, USER, filename="a.mp4", size=9_000, kind=None)
     assert e.value.code == "too_large"
     with pytest.raises(UploadError) as e:
-        create_upload(conn, settings, USER, filename="a.mp4", size=100, kind="image")
+        create_upload(conn, settings, USER, filename="a.mp4", size=100, kind="гифка")
     assert e.value.code == "bad_kind"
     with pytest.raises(UploadError) as e:
         create_upload(conn, settings, USER, filename="   ", size=100, kind=None)

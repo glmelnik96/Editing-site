@@ -11,6 +11,7 @@ import sqlite3
 from pydantic import BaseModel
 
 from server.app.storage import file_url
+from server.media.proxy import PROXY_BY_KIND
 
 
 class AssetFiles(BaseModel):
@@ -36,6 +37,7 @@ class AssetView(BaseModel):
     has_audio: bool | None
     video_codec: str | None
     audio_codec: str | None
+    bit_rate: int | None
     error: str | None
     created_at: str
     last_access_at: str
@@ -50,11 +52,11 @@ def asset_files(row: dict | sqlite3.Row, *, has_transcript: bool = False) -> Ass
     elif status in ("ready", "proxy_ready"):
         files.peaks = file_url(user_id, asset_id, "peaks.json")
         files.analysis = file_url(user_id, asset_id, "analysis.json")
-        if kind == "video":
+        if kind in ("video", "image"):
             files.thumbs = file_url(user_id, asset_id, "thumbs.jpg")
             files.thumbs_meta = file_url(user_id, asset_id, "thumbs.json")
         if status == "proxy_ready":
-            files.proxy = file_url(user_id, asset_id, "proxy.mp4" if kind == "video" else "proxy.m4a")
+            files.proxy = file_url(user_id, asset_id, PROXY_BY_KIND[kind][0])
     if has_transcript:
         # Ссылка на API, а не на /files/: transcript.json наружу файлом не отдаётся (PUBLIC_FILES),
         # а ручка тем же адресом выдаёт ещё и SRT с VTT. Наличие приходит извне: оно живёт в базе,
@@ -78,6 +80,7 @@ def asset_view(row: dict | sqlite3.Row, *, has_transcript: bool = False) -> Asse
         has_audio=None if has_audio is None else bool(has_audio),
         video_codec=row["video_codec"],
         audio_codec=row["audio_codec"],
+        bit_rate=row["bit_rate"],
         error=row["error"],
         created_at=row["created_at"],
         last_access_at=row["last_access_at"],

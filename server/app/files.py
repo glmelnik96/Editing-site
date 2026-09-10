@@ -21,7 +21,14 @@ from fastapi.responses import FileResponse
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.config import Settings
 from server.app.errors import ApiError
-from server.app.storage import PUBLIC_FILES, asset_dir, conversion_dir, parse_file_url, render_dir
+from server.app.storage import (
+    PUBLIC_FILES,
+    RENDER_MEDIA_TYPES,
+    asset_dir,
+    conversion_dir,
+    parse_file_url,
+    render_dir,
+)
 from server.app.util import iso, utcnow
 from server.db.core import get_db
 
@@ -50,7 +57,7 @@ def authorize_file(
     if user_id != user.id and user.role != "admin":
         raise ApiError(404, "not_found", "Файл не найден")
     if kind == "render":
-        render_id = name[: -len(".mp4")]
+        render_id = name.rsplit(".", 1)[0]
         row = conn.execute(
             "SELECT id FROM renders WHERE id = ? AND project_id = ? AND user_id = ?",
             (render_id, owner_id, user_id),
@@ -132,8 +139,11 @@ def serve_render(
     row = conn.execute(
         "SELECT name FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
     ).fetchone()
+    # Тип называем сами: по расширению .m4a стандартная таблица Python тип не находит, и
+    # звук ушёл бы как text/plain.
     return FileResponse(
         path,
+        media_type=RENDER_MEDIA_TYPES.get(name.rsplit(".", 1)[-1]),
         headers={
             "Cache-Control": FILE_CACHE,
             "Content-Disposition": download_disposition(row["name"] if row else "", name),

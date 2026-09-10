@@ -28,7 +28,7 @@ from server.app.projects.store import (
     build_project_subtitles,
     get_project,
 )
-from server.app.storage import TRANSCRIPT_NAME, asset_dir, conversion_dir, render_dir
+from server.app.storage import RENDER_FORMATS, TRANSCRIPT_NAME, asset_dir, conversion_dir, render_dir
 from server.app.transcribe.provider import ProviderError, TranscribeProvider, build_client
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
@@ -46,9 +46,15 @@ from server.media.convert import (
 )
 from server.media.probe import probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
-from server.media.render import RenderInvalid, SourceInfo, build_render_command, total_duration
+from server.media.render import (
+    RenderInvalid,
+    SourceInfo,
+    build_render_command,
+    render_dimensions,
+    total_duration,
+)
 from server.media.run import MediaError, run_streaming, run_tool
-from server.media.thumbs import grid_layout, thumbs_args, thumbs_meta
+from server.media.thumbs import grid_layout, still_layout, thumbs_args, thumbs_meta
 from server.media.transcribe import (
     CHUNK_CODEC,
     CHUNK_RATE,
@@ -93,8 +99,14 @@ def extract_wav(settings: Settings, src: Path, dst: Path) -> None:
     run_tool(wav_args(settings, str(src), str(dst)), timeout=settings.analyze_timeout_sec)
 
 
-def build_thumbs(settings: Settings, src: Path, dst: Path, *, duration: float, width, height) -> dict:
-    layout = grid_layout(settings, duration=duration, width=width, height=height)
+def build_thumbs(
+    settings: Settings, src: Path, dst: Path, *, duration: float | None, width, height, still: bool = False,
+) -> dict:
+    layout = (
+        still_layout(settings, width=width, height=height)
+        if still
+        else grid_layout(settings, duration=duration or 0.0, width=width, height=height)
+    )
     run_tool(thumbs_args(settings, str(src), str(dst), layout), timeout=settings.analyze_timeout_sec)
     return thumbs_meta(layout)
 
@@ -134,15 +146,17 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
         raise
     conn.execute(
         "UPDATE assets SET kind = ?, duration = ?, width = ?, height = ?, fps = ?, has_audio = ?, "
-        "video_codec = ?, audio_codec = ? WHERE id = ?",
+        "video_codec = ?, audio_codec = ?, bit_rate = ? WHERE id = ?",
         (
             info.kind, info.duration, info.width, info.height, info.fps, int(info.has_audio),
-            info.video_codec, info.audio_codec, asset_id,
+            info.video_codec, info.audio_codec, info.bit_rate, asset_id,
         ),
     )
     set_progress(conn, job["id"], PROGRESS_AFTER_PROBE)
     _stop_if_canceled(conn, job)
 
+    # У картинки звука нет по определению, поэтому файлы пишутся пустыми: панелям и шкале
+    # проще прочитать пустую волну, чем разбирать 404.
     peaks = {"rate": settings.peaks_per_sec, "peaks": []}
     analysis = {
         "duration": info.duration, "speech_level_db": None, "threshold_db": None,
@@ -164,11 +178,14 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
     set_progress(conn, job["id"], PROGRESS_AFTER_AUDIO)
     _stop_if_canceled(conn, job)
 
-    if info.kind == "video":
+    # У картинки раскадровка из одной клетки: по ней её узнают на шкале и в списке записей
+    # тем же кодом, что и ролик по кадрам.
+    if info.kind in ("video", "image"):
         try:
             meta = build_thumbs(
                 settings, _source(settings, asset), folder / "thumbs.jpg",
                 duration=info.duration, width=info.width, height=info.height,
+                still=info.kind == "image",
             )
         except MediaError as exc:
             _set_asset_failed(conn, asset_id, exc.message)
@@ -190,7 +207,9 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
         enqueue_job(
             conn, user_id=job["user_id"], type_="proxy", target_id=asset_id, priority=PROXY_PRIORITY
         )
-    log.info("analyze: %s готов (%s, %.1f с)", asset_id, info.kind, info.duration)
+    # У картинки длительности нет — «%.1f с» на None падает прямо в конце удачного анализа.
+    length = "без длительности" if info.duration is None else f"{info.duration:.1f} с"
+    log.info("analyze: %s готов (%s, %s)", asset_id, info.kind, length)
 
 
 def handle_proxy(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:
@@ -234,7 +253,12 @@ def handle_proxy(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row)
 RENDER_READY_STATUSES = ("ready", "proxy_ready")
 # Грубая оценка веса результата: точно не посчитать, но порядок величины отсекает
 # заведомо безнадёжный запуск до того, как ffmpeg заполнит диск.
-BITRATE_BY_QUALITY = {"draft": 2_000_000, "final": 5_000_000}
+# Порядок величины битрейта по качеству — только для оценки места до запуска.
+BITRATE_BY_QUALITY = {
+    "draft": 2_000_000, "final": 5_000_000,
+    "preview": 1_500_000, "medium": 4_000_000, "high": 12_000_000,
+}
+AUDIO_ONLY_RATE = 192_000
 SIZE_SAFETY = 2
 
 
@@ -259,10 +283,17 @@ def _sources_for(
             raise MediaError("asset_not_ready", f"файл {row['original_name']} ещё обрабатывается")
         folder = asset_dir(settings, row["user_id"], row["id"])
         name = "subs.vtt" if row["kind"] == "subtitle" else f"source.{row['ext']}"
+        bit_rate = row["bit_rate"]
+        if bit_rate is None and row["kind"] == "video" and row["duration"]:
+            # Записи, разобранные до колонки bit_rate: оценка по весу файла. В неё входят звук
+            # и обвязка контейнера, но как потолок для «высокого» она годится.
+            bit_rate = int(row["size"] * 8 / row["duration"])
         sources[asset_id] = SourceInfo(
             path=str(folder / name),
             duration=float(row["duration"] or 0),
             has_audio=bool(row["has_audio"]),
+            still=row["kind"] == "image",
+            bit_rate=bit_rate,
         )
     return sources
 
@@ -278,12 +309,23 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
 
     params = json.loads(job["params"] or "{}")
     quality = params.get("quality", "draft")
+    fmt = params.get("format", "mp4")
+    short_side = params.get("short_side")
+    bitrate_kbps = params.get("bitrate_kbps")
+    if fmt not in RENDER_FORMATS:
+        raise MediaError("bad_format", f"неизвестный формат ролика: {fmt}")
     duration = total_duration(project["doc"])
     if duration <= 0:
         raise MediaError("empty_project", "в проекте нет клипов")
 
     sources = _sources_for(conn, settings, project, job["user_id"])
-    estimate = int(BITRATE_BY_QUALITY.get(quality, 5_000_000) / 8 * duration * SIZE_SAFETY)
+    if fmt == "m4a":
+        rate = AUDIO_ONLY_RATE
+    elif quality == "target" and bitrate_kbps:
+        rate = int(bitrate_kbps) * 1000
+    else:
+        rate = BITRATE_BY_QUALITY.get(quality, 5_000_000)
+    estimate = int(rate / 8 * duration * SIZE_SAFETY)
     if disk_free_bytes(settings.data_dir) < estimate:
         raise MediaError("disk_low", "на диске мало места для сборки, освободите его и повторите")
 
@@ -303,13 +345,16 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
     render_id = new_id("rnd")
     folder = render_dir(settings, job["user_id"], project["id"])
     folder.mkdir(parents=True, exist_ok=True)
-    dst = folder / f"{render_id}.mp4"
+    dst = folder / f"{render_id}.{fmt}"
     tmp = dst.with_suffix(dst.suffix + ".part")
 
     try:
         args = build_render_command(
             project["doc"], sources=sources, quality=quality, settings=settings, out_path=str(tmp),
-            subtitles_path=subtitles_path,
+            subtitles_path=subtitles_path, fmt=fmt, short_side=short_side, bitrate_kbps=bitrate_kbps,
+        )
+        size = render_dimensions(
+            project["doc"], quality=quality, settings=settings, fmt=fmt, short_side=short_side
         )
     except RenderInvalid as exc:
         raise MediaError("bad_project", str(exc)) from exc
@@ -342,11 +387,14 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
         ).fetchone()
         if alive is not None:
             conn.execute(
-                "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
-                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO renders (id, project_id, user_id, job_id, quality, format, width, height, "
+                "video_bitrate, path, size, duration, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    render_id, project["id"], job["user_id"], job["id"], quality, str(dst),
-                    dst.stat().st_size, duration, iso(now),
+                    render_id, project["id"], job["user_id"], job["id"], quality, fmt,
+                    size[0] if size else None, size[1] if size else None,
+                    int(bitrate_kbps) * 1000 if quality == "target" and bitrate_kbps else None,
+                    str(dst), dst.stat().st_size, duration, iso(now),
                     iso(now + timedelta(hours=settings.render_ttl_hours)),
                 ),
             )
@@ -356,7 +404,7 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
         dst.unlink(missing_ok=True)
         log.info("render: %s отброшен — проект завершён или сборку отменили", render_id)
         return
-    log.info("render: %s готов (%s, %.1f с)", render_id, quality, duration)
+    log.info("render: %s готов (%s, %s, %.1f с)", render_id, quality, fmt, duration)
 
 
 def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:

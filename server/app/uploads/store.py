@@ -16,7 +16,7 @@ from pathlib import Path
 from server.app.config import Settings
 from server.app.health import disk_free_pct_safe
 from server.app.jobs import enqueue_job
-from server.app.storage import KINDS, asset_dir, kind_from_ext, safe_ext, upload_path
+from server.app.storage import KINDS, asset_dir, kind_from_ext, known_exts, safe_ext, upload_path
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
 from server.media.subtitles import SubtitleInvalid, to_vtt
@@ -83,12 +83,39 @@ def clean_filename(filename: str) -> str:
     return name
 
 
+def _formats_line() -> str:
+    """Список форматов одной строкой — тот же, по которому идёт проверка."""
+    groups = known_exts()
+    return "; ".join(
+        f"{name}: {', '.join(groups[key])}"
+        for key, name in (
+            ("video", "видео"), ("audio", "звук"),
+            ("image", "картинки"), ("subtitle", "субтитры"),
+        )
+    )
+
+
 def resolve_kind(filename: str, kind: str | None) -> str:
+    """Вид записи до анализа: по названному виду, иначе по расширению.
+
+    Незнакомое расширение — отказ, а не «пусть будет видео». Раньше именно так: файл любого
+    вида принимался целиком, все пять гигабайт ехали на диск, и только анализ отвечал «В файле
+    нет ни видео, ни звука». Отказ до начала загрузки честнее и дешевле; кто точно знает, что
+    внутри, называет вид параметром kind.
+    """
     if kind is not None:
         if kind not in KINDS:
-            raise UploadError(422, "bad_kind", "kind: video, audio или subtitle")
+            raise UploadError(422, "bad_kind", f"kind: {', '.join(KINDS)}")
         return kind
-    return kind_from_ext(safe_ext(filename)) or "video"
+    resolved = kind_from_ext(safe_ext(filename))
+    if resolved is None:
+        raise UploadError(
+            422,
+            "bad_format",
+            f"Не знаю такой формат. Загрузить можно {_formats_line()}",
+            {"formats": known_exts()},
+        )
+    return resolved
 
 
 def reserve_file(path: Path, size: int) -> None:

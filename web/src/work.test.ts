@@ -29,6 +29,15 @@ describe('подписи', () => {
     expect(jobTitle(job({ type: 'transcribe' }))).toBe('Расшифровка «Нарезка.mp4»')
     expect(jobTitle(job({ type: 'render', quality: 'draft', label: 'Ролик' }))).toBe('Сборка черновика «Ролик»')
     expect(jobTitle(job({ type: 'render', quality: 'final', label: 'Ролик' }))).toBe('Сборка финала «Ролик»')
+    // Новые качества из панели сборки называются своими словами, а не «черновиком».
+    expect(jobTitle(job({ type: 'render', quality: 'preview', label: 'Ролик' }))).toBe('Сборка превью «Ролик»')
+    expect(jobTitle(job({ type: 'render', quality: 'high', label: 'Ролик' }))).toBe(
+      'Сборка в высоком качестве «Ролик»',
+    )
+    expect(jobTitle(job({ type: 'render', quality: 'target', label: 'Ролик' }))).toBe(
+      'Сборка с заданным битрейтом «Ролик»',
+    )
+    expect(jobTitle(job({ type: 'render', quality: null, label: 'Ролик' }))).toBe('Сборка черновика «Ролик»')
     expect(jobTitle(job({ type: 'convert', label: 'утренний.mp3' }))).toBe('Конвертер «утренний.mp3»')
   })
 })

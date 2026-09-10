@@ -4,6 +4,7 @@
  * Здесь нет DOM: функции решают, что делать, а драйвер в редакторе двигает элементы video и audio.
  * Так логика шва проверяется тестами, а не глазами.
  */
+import type { Sound } from './project'
 import { clipAt, clipDuration, fadeInto, ms, timelineStart, totalDuration, type Clip } from './timeline/model'
 
 export type SeekPlan = { index: number; assetId: string; time: number; timelineTime: number; incoming?: Incoming }
@@ -159,4 +160,25 @@ const ASPECTS: Record<string, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1':
 /** Пропорция кадра вывода числом; неизвестное значение считаем широким. */
 export function aspectRatio(aspect: string): number {
   return ASPECTS[aspect] ?? ASPECTS['16:9']
+}
+
+export type SoundCue = { id: string; assetId: string; time: number; volume: number }
+
+/**
+ * Какие звуки дорожки звучат в момент ролика и с какого места своей записи.
+ *
+ * Хвост, свисающий за конец ролика, не звучит и в превью: сборка его обрезает (amix
+ * duration=first), и услышать в браузере то, чего не будет в файле, хуже, чем не услышать.
+ * Конец звука не входит — как у клипов, иначе на стыке двух звуков звучали бы оба.
+ */
+export function soundPlan(sounds: Sound[], timelineTime: number, total: number): SoundCue[] {
+  if (timelineTime >= total) return []
+  return sounds
+    .filter(sound => timelineTime >= sound.at && timelineTime < sound.at + (sound.out - sound.in))
+    .map(sound => ({
+      id: sound.id,
+      assetId: sound.asset_id,
+      time: ms(sound.in + (timelineTime - sound.at)),
+      volume: sound.volume,
+    }))
 }

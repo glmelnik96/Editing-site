@@ -18,6 +18,8 @@ SOURCES = {
     "ast_2": SourceInfo(path="/d/u/assets/ast_2/source.mp4", duration=60.0, has_audio=False),
     "ast_m": SourceInfo(path="/d/u/assets/ast_m/source.mp3", duration=200.0, has_audio=True),
     "ast_s": SourceInfo(path="/d/u/assets/ast_s/subs.vtt", duration=0.0, has_audio=False),
+    "ast_p": SourceInfo(path="/d/u/assets/ast_p/source.png", duration=0.0, has_audio=False,
+                        still=True),
 }
 
 
@@ -122,6 +124,8 @@ class TestФильтры:
         chain = filter_of(build(doc(output={"aspect": "16:9", "fit": "pad", "fps": 50})))
         assert "fps=50" in chain
         assert "setsar=1" in chain and "format=yuv420p" in chain
+        # Общая шкала времени: без неё xfade между зацикленной картинкой и видео не настраивается.
+        assert "settb=AVTB" in chain
 
     def test_звук_каждого_сегмента_приводится_к_общему_виду(self):
         chain = filter_of(build())
@@ -409,3 +413,170 @@ class TestКодирование:
     def test_команда_начинается_с_ffmpeg_из_настроек(self):
         args = build()
         assert args[0] == S.ffmpeg_path
+
+
+class TestКартинка:
+    """Картинку не мотают, её повторяют: у одного кадра нет ни времени внутри, ни звука."""
+
+    def test_картинка_приходит_циклом_на_нужное_число_секунд(self):
+        args = build(doc(clips=[clip(asset="ast_p", start=0.0, end=4.0)]))
+        text = joined(args)
+        assert "-loop 1 -t 4.0 -i /d/u/assets/ast_p/source.png" in text
+        # -ss у картинки бессмысленно: кадр один и тот же в любой момент, а лишний поиск по
+        # png_pipe ffmpeg встречает предупреждением.
+        assert "-ss" not in args
+
+    def test_у_картинки_появляется_тишина_вместо_дорожки(self):
+        args = build(doc(clips=[clip(asset="ast_p", start=0.0, end=4.0)]))
+        text = joined(args)
+        assert "anullsrc" in text
+        assert "-f lavfi -t 4.0" in text
+
+    def test_картинка_и_видео_рядом_складываются_в_один_ролик(self):
+        args = build(doc(clips=[
+            clip(asset="ast_p", start=0.0, end=3.0),
+            {"id": "c2", "asset_id": "ast_1", "in": 1.0, "out": 4.0,
+             "snap_to_pauses": False, "in_verified": False, "out_verified": False},
+        ]))
+        text = joined(args)
+        assert "-loop 1 -t 3.0 -i /d/u/assets/ast_p/source.png" in text
+        assert "-ss 1.0 -t 3.0 -i /d/u/assets/ast_1/source.mp4" in text
+        # Обоим кускам ставится одна шкала времени — иначе переход между ними не собирается.
+        assert text.count("settb=AVTB") == 2
+
+
+def snd(asset="ast_m", at=2.5, start=10.0, end=14.0, **over):
+    return {"id": "s1", "asset_id": asset, "at": at, "in": start, "out": end, "volume": 1, **over}
+
+
+class TestЗвуковаяДорожка:
+    """Звук поверх речи клипов: свой кусок записи, своё место на шкале через задержку."""
+
+    def test_звук_приходит_своим_куском_и_встаёт_на_место_задержкой(self):
+        text = joined(build(doc(sounds=[snd()])))
+        assert "-ss 10.0 -t 4.0 -i /d/u/assets/ast_m/source.mp3" in text
+        assert "adelay=2500|2500[s0]" in text
+        # Длина по склейке клипов: свисающий хвост звука обрезается, а не удлиняет ролик.
+        assert "[a][s0]amix=inputs=2:duration=first:normalize=0[speech]" in text
+        assert "-map [speech]" in text
+
+    def test_громкость_звука_ставится_до_задержки(self):
+        text = joined(build(doc(sounds=[snd(volume=0.5)])))
+        assert "volume=0.5,adelay=2500|2500[s0]" in text
+
+    def test_звук_вливается_в_речь_до_музыки_и_приглушает_её_как_речь(self):
+        music = {"asset_id": "ast_1", "volume": 0.3, "fade_in": 0, "fade_out": 0,
+                 "loop": True, "duck": True, "speech_volume": 1}
+        text = joined(build(doc(sounds=[snd()], music=music)))
+        assert "[speech]asplit=2[spk_sc][spk_mix]" in text
+
+    def test_видеозапись_без_звука_в_дорожку_ничего_не_даёт(self):
+        """[N:a] у записи без звука уронил бы всю сборку, а вклада у неё и так нет."""
+        text = joined(build(doc(sounds=[snd(asset="ast_2", start=0.0, end=3.0)])))
+        assert "/d/u/assets/ast_2/source.mp4" not in text.split("-filter_complex")[0].split(
+            "-i /d/u/assets/ast_1/source.mp4"
+        )[1]
+        assert "amix" not in text
+
+    def test_пропавший_звуковой_ассет_роняет_сборку_внятно(self):
+        with pytest.raises(RenderInvalid):
+            build(doc(sounds=[snd(asset="ast_нет")]))
+
+
+def value_after(args, flag):
+    return args[args.index(flag) + 1]
+
+
+VIDEO_8M = {
+    **SOURCES,
+    "ast_1": SourceInfo(path="/d/u/assets/ast_1/source.mp4", duration=120.0, has_audio=True,
+                        bit_rate=8_000_000),
+    "ast_2": SourceInfo(path="/d/u/assets/ast_2/source.mp4", duration=60.0, has_audio=False,
+                        bit_rate=3_000_000),
+}
+
+
+def build_opts(document=None, quality="medium", **opts):
+    return build_render_command(document or doc(), sources=opts.pop("sources", SOURCES),
+                                quality=quality, settings=S, out_path="/d/out.part", **opts)
+
+
+class TestНастройкиСборки:
+    """Формат, качество, разрешение и битрейт — то, что человек выбирает в панели сборки."""
+
+    def test_прежние_черновик_и_финал_собираются_как_раньше(self):
+        # Их по-прежнему присылает агент: команда не должна поменяться ни на символ.
+        text = joined(build())
+        assert "-c:v libx264 -preset ultrafast -crf 26 -pix_fmt yuv420p -c:a aac -b:a 128k" in text
+        assert "-movflags +faststart -f mp4 /d/out.mp4.part" in text
+
+    def test_разрешение_берётся_по_пропорции_проекта(self):
+        wide = joined(build_opts(short_side=720))
+        assert "scale=1280:720:" in wide
+        tall = joined(build_opts(doc(output={"aspect": "9:16", "fit": "pad", "fps": 30}), short_side=1080))
+        assert "scale=1080:1920:" in tall
+        # Без названного разрешения — по качеству: превью меньше, чтобы собиралось быстро.
+        assert "scale=854:480:" in joined(build_opts(quality="preview"))
+
+    def test_незнакомое_разрешение_отвергается(self):
+        with pytest.raises(RenderInvalid):
+            build_opts(short_side=999)
+
+    def test_высокое_упирается_в_битрейт_самого_плотного_исходника(self):
+        """Не хуже исходника, но и не раздуваем файл сверх него."""
+        document = doc(clips=[clip(), {**clip(asset="ast_2"), "id": "c2"}])
+        args = build_opts(document, quality="high", sources=VIDEO_8M)
+        assert value_after(args, "-crf") == "18"
+        assert value_after(args, "-maxrate") == "8000000"
+        assert value_after(args, "-bufsize") == "16000000"
+
+    def test_высокое_без_известного_битрейта_потолка_не_ставит(self):
+        # Потолок, взятый с потолка, резал бы качество ни за что.
+        assert "-maxrate" not in build_opts(quality="high")
+
+    def test_целевое_держит_названный_битрейт_с_запасом_на_сложные_сцены(self):
+        args = build_opts(quality="target", bitrate_kbps=4000)
+        assert value_after(args, "-b:v") == "4000k"
+        assert value_after(args, "-maxrate") == "6000k"
+        assert "-crf" not in args
+        with pytest.raises(RenderInvalid):
+            build_opts(quality="target")
+
+    def test_webm_кодируется_vp9_и_opus(self):
+        args = build_opts(fmt="webm")
+        assert value_after(args, "-c:v") == "libvpx-vp9"
+        assert value_after(args, "-crf") == "33" and value_after(args, "-b:v") == "0"
+        assert value_after(args, "-c:a") == "libopus"
+        assert args[-3:] == ["-f", "webm", "/d/out.part"]
+        # «Высокое» в VP9 — то же постоянное качество, но с потолком вместо нуля.
+        high = build_opts(quality="high", fmt="webm", sources=VIDEO_8M)
+        assert value_after(high, "-b:v") == "8000000"
+
+    def test_мягкие_субтитры_в_webm_идут_webvtt(self):
+        subs = {"source": "file", "asset_id": "ast_s", "mode": "soft", "enabled": True}
+        assert value_after(build_opts(doc(subtitles=subs), fmt="webm"), "-c:s") == "webvtt"
+        assert value_after(build_opts(doc(subtitles=subs)), "-c:s") == "mov_text"
+
+    def test_только_звук_не_строит_картинку_вовсе(self):
+        """ffmpeg иначе декодировал и масштабировал бы весь ролик, чтобы выбросить его на выходе."""
+        args = build_opts(doc(clips=[clip(), {**clip(start=10.0, end=12.0), "id": "c2"}]), fmt="m4a")
+        text = joined(args)
+        assert "[0:v]" not in text and "scale=" not in text
+        assert "[a0][a1]concat=n=2:v=0:a=1[a]" in text
+        assert args[-8:] == ["-map", "[a]", "-vn", "-c:a", "aac", "-b:a", "192k", "-f"][:8] or "-vn" in args
+        assert args[-3:] == ["-f", "ipod", "/d/out.part"]
+
+    def test_только_звук_с_переходом_склеивает_одним_acrossfade(self):
+        second = {**clip(start=10.0, end=14.0), "id": "c2", "transition": {"kind": "fade", "duration": 0.5}}
+        text = joined(build_opts(doc(clips=[clip(), second]), fmt="m4a"))
+        assert "[a0][a1]acrossfade=d=0.5[a]" in text
+        assert "xfade" not in text
+
+    def test_у_только_звука_нет_субтитров(self):
+        subs = {"source": "file", "asset_id": "ast_s", "mode": "burn", "enabled": True}
+        text = joined(build_opts(doc(subtitles=subs), fmt="m4a"))
+        assert "subtitles=" not in text and "-c:s" not in text
+
+    def test_незнакомый_формат_отвергается(self):
+        with pytest.raises(RenderInvalid):
+            build_opts(fmt="avi")

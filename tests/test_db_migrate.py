@@ -42,7 +42,7 @@ def _migrations_dir(tmp_path, monkeypatch, files):
 def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     conn = connect(tmp_path / "t.db")
     try:
-        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert migrate(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert TABLES <= _tables(conn)
         assert migrate(conn) == []
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -170,7 +170,7 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path, monkeypatch)
         assert migrate(conn) == [1]
         assert "yandex_id" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert "yandex_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}
         conn.execute(
             "INSERT INTO users (id, email, created_at, yandex_id) VALUES ('u1', 'a@ya.ru', 'x', '42')"
@@ -224,7 +224,7 @@ def test_jobs_rebuild_keeps_old_rows_and_accepts_convert(tmp_path, monkeypatch):
                 "VALUES ('job_noconvert01', 'usr_000000000001', 'convert', 'cpu', 'queued', 'ast_1', 'x')"
             )
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [9, 10, 11, 12]
+        assert migrate(conn) == [9, 10, 11, 12, 13, 14]
         names = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
         assert "jobs_user_status_idx" in names
         assert conn.execute("SELECT type FROM jobs WHERE id = 'job_oldrender01'").fetchone()[0] == "render"
@@ -273,7 +273,7 @@ def test_conversions_rebuild_keeps_old_rows_and_accepts_new_formats(tmp_path, mo
                 " 'usr_000000000001', 'ast_000000000001', 'job_2', 'aac', 'p', 1, 1, 'x', 'x')"
             )
         monkeypatch.setattr(migrate_mod, "discover", real_discover)
-        assert migrate(conn) == [11, 12]
+        assert migrate(conn) == [11, 12, 13, 14]
         assert (
             conn.execute("SELECT format FROM conversions WHERE id = 'cnv_oldmp3xxxxx1'").fetchone()[0]
             == "mp3"
@@ -313,3 +313,73 @@ def test_projects_lose_the_finished_state_and_keep_their_versions(tmp_path):
     assert conn.execute("SELECT count(*) FROM project_versions").fetchone()[0] == 1
     conn.close()
 
+
+
+def test_assets_rebuild_keeps_transcripts_and_conversions(tmp_path, monkeypatch):
+    """Перестройка assets ради вида «картинка» не должна унести детей по каскаду.
+
+    На assets ссылаются transcripts и conversions с ON DELETE CASCADE, а DROP TABLE родителя при
+    включённых внешних ключах делает неявный DELETE FROM: расшифровки и готовые конвертации всех
+    пользователей исчезли бы молча. Спасает пометка «-- foreign_keys: off» в первой строке
+    миграции — без неё этот тест падает на нулях.
+    """
+    conn = connect(tmp_path / "t.db")
+    try:
+        real_discover = migrate_mod.discover
+        monkeypatch.setattr(
+            migrate_mod, "discover", lambda: [item for item in real_discover() if item[0] <= 12]
+        )
+        migrate(conn)
+        conn.execute(
+            "INSERT INTO users (id, email, created_at) VALUES ('usr_000000000001', 'a@ya.ru', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status,"
+            " duration, created_at, last_access_at) VALUES"
+            " ('ast_000000000001', 'usr_000000000001', 'video', 'a.mp4', 'mp4', 700, 'ready',"
+            " 70.0, 'x', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO transcripts (asset_id, user_id, provider, model, language, duration,"
+            " segments, stats, created_at) VALUES ('ast_000000000001', 'usr_000000000001',"
+            " 'whisper', 'large', 'ru', 70.0, 12, '{}', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO conversions"
+            " (id, user_id, asset_id, job_id, format, path, size, duration, created_at, expires_at)"
+            " VALUES ('cnv_oldmp3xxxxx1', 'usr_000000000001', 'ast_000000000001',"
+            " 'job_1', 'mp3', 'p', 1, 1, 'x', 'x')"
+        )
+
+        monkeypatch.setattr(migrate_mod, "discover", real_discover)
+        assert migrate(conn) == [13, 14]
+
+        assert conn.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM conversions").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 1
+        # Ключи вернулись включёнными, иначе соединение доживёт без проверок до конца процесса.
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        # Ради этого всё и затевалось: картинка проходит CHECK, а битрейт есть куда записать.
+        conn.execute(
+            "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status,"
+            " bit_rate, created_at, last_access_at) VALUES"
+            " ('ast_000000000002', 'usr_000000000001', 'image', 'z.jpg', 'jpg', 5, 'ready',"
+            " NULL, 'x', 'x')"
+        )
+        conn.execute(
+            "UPDATE assets SET bit_rate = 8000000 WHERE id = 'ast_000000000001'"
+        )
+        assert conn.execute(
+            "SELECT bit_rate FROM assets WHERE id = 'ast_000000000001'"
+        ).fetchone()[0] == 8_000_000
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status,"
+                " created_at, last_access_at) VALUES"
+                " ('ast_000000000003', 'usr_000000000001', 'глупость', 'z.bin', 'bin', 5,"
+                " 'ready', 'x', 'x')"
+            )
+    finally:
+        conn.close()

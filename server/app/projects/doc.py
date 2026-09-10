@@ -20,6 +20,12 @@ SUB_SOURCES = ("file", "transcript", "cues")
 SUB_MODES = ("burn", "soft")
 SUB_STYLES = ("default",)
 CLIP_READY_STATUSES = ("ready", "proxy_ready")
+# Что можно положить в клип. У картинки своей длительности нет: сколько она висит в кадре,
+# решают при добавлении, поэтому верхней границей ей служит не длительность файла, а предел
+# из настроек — иначе один кадр растянули бы на весь допустимый ролик.
+CLIP_KINDS = ("video", "image")
+# Чем можно озвучить: звуковой файл или звук видеозаписи — у последней берётся только дорожка.
+SOUND_KINDS = ("audio", "video")
 TRANSITION_KINDS = ("fade",)
 TIME_DIGITS = 3
 MAX_CLIP_ID = 64  # идентификатор клипа хранится в документе: без предела клиент раздует его сотней клипов
@@ -115,6 +121,10 @@ def _validate_clip_time(
     end_ok = end is not None
     if not end_ok:
         errors.add(f"{where}.out", "out должен быть числом секунд")
+    elif asset is not None and asset.kind == "image":
+        if end > settings.max_still_sec + 1e-6:
+            errors.add(f"{where}.out", f"картинка держится в кадре не дольше {settings.max_still_sec} с")
+            end_ok = False
     elif asset is not None and asset.duration is not None and end > asset.duration + 1e-6:
         errors.add(f"{where}.out", "out за пределами длительности ассета")
         end_ok = False
@@ -230,12 +240,12 @@ def _validate_clip(
     asset = assets.get(asset_id) if isinstance(asset_id, str) else None
     if asset is None:
         errors.add(f"{where}.asset_id", "нет такого ассета")
-    elif asset.kind != "video":
-        errors.add(f"{where}.asset_id", "в клип идёт только видеоассет")
+    elif asset.kind not in CLIP_KINDS:
+        errors.add(f"{where}.asset_id", "в клип идёт видеоассет или картинка")
     elif asset.status not in CLIP_READY_STATUSES:
         errors.add(f"{where}.asset_id", "ассет ещё не готов")
         asset = None
-    elif asset.duration is None:
+    elif asset.duration is None and asset.kind != "image":
         errors.add(f"{where}.asset_id", "у ассета неизвестна длительность")
         asset = None
 
@@ -307,6 +317,76 @@ def _validate_music(raw: object, assets: dict[str, AssetInfo], errors: _Errors) 
         "duck": duck,
         "speech_volume": round(speech, 3),
     }
+
+
+def _validate_sounds(
+    raw: object, clip_ids: set[str], assets: dict[str, AssetInfo], settings: Settings, errors: _Errors,
+) -> list[dict]:
+    """Звуковая дорожка: куски звука, положенные под картинку с точного места шкалы.
+
+    Звук идёт поверх речи клипов, а не встаёт в их очередь: озвучка между кусками дала бы чёрный
+    кадр. Поэтому у звука своё время на шкале — at — и клипы он не сдвигает.
+
+    Свисать за конец ролика звуку можно, сборка его обрежет. Отвергать такой документ значило бы
+    ломать сохранение всякий раз, когда человек укорачивает видео под уже положенной озвучкой.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        errors.add("sounds", "sounds должен быть списком")
+        return []
+    if len(raw) > settings.max_clips:
+        errors.add("sounds", f"звуков больше {settings.max_clips}")
+        return []
+    sounds: list[dict] = []
+    # Выделение на шкале одно на клипы и звуки: общий id сделал бы его неоднозначным.
+    seen = set(clip_ids)
+    for index, item in enumerate(raw):
+        where = f"sounds[{index}]"
+        if not isinstance(item, dict):
+            errors.add(where, "звук должен быть объектом")
+            continue
+        sound_id = item.get("id")
+        if sound_id is None:
+            sound_id = f"s{index + 1}"
+        elif not isinstance(sound_id, str) or not sound_id.strip() or len(sound_id) > MAX_CLIP_ID:
+            errors.add(f"{where}.id", f"id звука: непустая строка не длиннее {MAX_CLIP_ID} знаков")
+            continue
+        if sound_id in seen:
+            errors.add(f"{where}.id", "id звука повторяется или совпадает с id клипа")
+            continue
+        seen.add(sound_id)
+        asset_id = item.get("asset_id")
+        asset = assets.get(asset_id) if isinstance(asset_id, str) else None
+        if asset is None or asset.kind not in SOUND_KINDS:
+            errors.add(f"{where}.asset_id", "звуком может быть звуковой или видеоассет владельца")
+            continue
+        if asset.status not in CLIP_READY_STATUSES or asset.duration is None:
+            errors.add(f"{where}.asset_id", "ассет ещё не готов")
+            continue
+        at = _number(item.get("at"))
+        if at is None or at < 0:
+            errors.add(f"{where}.at", "at — неотрицательное число секунд")
+            continue
+        if at > settings.max_total_duration_sec:
+            errors.add(f"{where}.at", f"at дальше {settings.max_total_duration_sec} с")
+            continue
+        volume = _number(item.get("volume", 1))
+        if volume is None or not 0.0 <= volume <= 2.0:
+            errors.add(f"{where}.volume", "volume от 0 до 2")
+            continue
+        start, end = _validate_clip_time(where, item, asset, settings, errors)
+        if start is None or end is None:
+            continue
+        sounds.append({
+            "id": sound_id,
+            "asset_id": asset_id,
+            "at": _round(at),
+            "in": _round(start),
+            "out": _round(end),
+            "volume": round(volume, 3),
+        })
+    return sounds
 
 
 def _validate_cue_text(raw: object, where: str, errors: _Errors) -> str | None:
@@ -420,7 +500,7 @@ def _validate_subtitles(
 def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Settings) -> dict:
     """Нормализованный документ или ProjectInvalid со списком ошибок.
 
-    Возвращает ровно четыре ключа: неизвестные поля отбрасываются, чтобы клиент не мог протащить
+    Возвращает ровно пять ключей: неизвестные поля отбрасываются, чтобы клиент не мог протащить
     что-то в хранимый документ и получить обратно при чтении.
     """
     errors = _Errors()
@@ -448,7 +528,8 @@ def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Setting
                 errors.add("clips", f"ролик длиннее {settings.max_total_duration_sec} с")
 
     music = _validate_music(raw.get("music"), assets, errors)
+    sounds = _validate_sounds(raw.get("sounds"), {c["id"] for c in clips}, assets, settings, errors)
     subtitles = _validate_subtitles(raw.get("subtitles"), assets, settings, errors)
     if errors:
         raise ProjectInvalid(errors.items)
-    return {"output": output, "clips": clips, "music": music, "subtitles": subtitles}
+    return {"output": output, "clips": clips, "sounds": sounds, "music": music, "subtitles": subtitles}

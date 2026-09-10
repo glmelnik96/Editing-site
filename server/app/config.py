@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Пределы проекта (раздел 4 спеки) и подтяжка резов к паузам (раздел 10.6).
     max_clips: int = Field(default=100, ge=1, le=1000)
     max_total_duration_sec: int = Field(default=3 * 3600, ge=1)
+    # Сколько картинка может висеть в кадре. Своей длительности у неё нет, а без предела один
+    # кадр растянули бы на весь допустимый ролик — и кодировался бы он часами ради заставки.
+    max_still_sec: int = Field(default=600, ge=1)
     min_clip_sec: float = Field(default=0.1, gt=0)
     snap_window_sec: float = Field(default=0.35, ge=0.0, le=5.0)
     snap_buffer_sec: float = Field(default=0.3, ge=0.0, le=5.0)

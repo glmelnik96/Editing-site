@@ -123,3 +123,103 @@ def test_probe_file_rejects_non_json(monkeypatch):
     with pytest.raises(MediaError) as e:
         probe_file(Settings(_env_file=None), "/x/source.mp4")
     assert e.value.reason == "bad_probe"
+
+
+# Ответы ffprobe сняты с настоящих файлов (ffmpeg 7.x), а не придуманы: у JPEG длительность
+# приходит правдоподобной, у PNG её нет вовсе, а gif бывает и картинкой, и анимацией.
+JPEG_JSON = {
+    "format": {"format_name": "image2", "duration": "0.040000", "bit_rate": "6054600"},
+    "streams": [{
+        "codec_type": "video", "codec_name": "mjpeg", "width": 800, "height": 600,
+        "avg_frame_rate": "25/1", "duration": "0.040000",
+    }],
+}
+PNG_JSON = {
+    "format": {"format_name": "png_pipe"},
+    "streams": [{
+        "codec_type": "video", "codec_name": "png", "width": 1280, "height": 720,
+        "avg_frame_rate": "25/1",
+    }],
+}
+
+
+def test_still_image_has_no_duration_and_no_bitrate():
+    """У картинки нет длительности: сколько она висит в кадре, решают на шкале.
+
+    Битрейта у неё тоже нет по смыслу — «6 Мбит/с» у JPEG это его вес, делённый на выдуманные
+    ffprobe 0.04 секунды. Записать такое в assets значило бы потом предложить это число как
+    «качество исходника» в рендере.
+    """
+    for data in (JPEG_JSON, PNG_JSON):
+        info = parse_probe(data)
+        assert info.kind == "image"
+        assert info.still is True
+        assert info.duration is None
+        assert info.bit_rate is None
+        assert info.fps is None
+        assert info.has_audio is False
+    assert parse_probe(JPEG_JSON).width == 800
+    assert parse_probe(PNG_JSON).height == 720
+
+
+def test_animated_gif_stays_a_video_but_a_single_frame_gif_is_a_picture():
+    """gif — единственный контейнер картинок, который бывает анимацией. Различает число кадров."""
+    def gif(frames: str, duration: str) -> dict:
+        return {
+            "format": {"format_name": "gif", "duration": duration},
+            "streams": [{
+                "codec_type": "video", "codec_name": "gif", "width": 160, "height": 120,
+                "avg_frame_rate": "10/1", "duration": duration, "nb_frames": frames,
+            }],
+        }
+
+    moving = parse_probe(gif("22", "2.200000"))
+    assert moving.kind == "video"
+    assert moving.duration == 2.2
+
+    frozen = parse_probe(gif("1", "0.040000"))
+    assert frozen.kind == "image"
+    assert frozen.duration is None
+
+
+def test_video_keeps_its_bitrate_and_prefers_the_stream_over_the_container():
+    """Битрейт видеопотока точнее общего: в общий входят звук и обвязка контейнера."""
+    both = parse_probe({
+        "format": {"format_name": "mov,mp4", "duration": "10", "bit_rate": "9000000"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+             "avg_frame_rate": "30/1", "bit_rate": "8000000"},
+            {"codec_type": "audio", "codec_name": "aac", "bit_rate": "160000"},
+        ],
+    })
+    assert both.bit_rate == 8_000_000
+    assert both.kind == "video"
+
+    # В mkv и webm битрейта потока обычно нет — тогда берём общий по файлу.
+    container_only = parse_probe({
+        "format": {"format_name": "matroska,webm", "duration": "10", "bit_rate": "5000000"},
+        "streams": [{"codec_type": "video", "codec_name": "vp9", "width": 1280, "height": 720,
+                     "avg_frame_rate": "25/1"}],
+    })
+    assert container_only.bit_rate == 5_000_000
+
+    nothing = parse_probe({
+        "format": {"format_name": "matroska", "duration": "10"},
+        "streams": [{"codec_type": "video", "codec_name": "vp9", "width": 1280, "height": 720,
+                     "avg_frame_rate": "25/1"}],
+    })
+    assert nothing.bit_rate is None
+
+
+def test_a_picture_with_sound_is_not_a_picture():
+    """Обложка звукового файла приходит видеопотоком, и контейнер у неё бывает image2."""
+    info = parse_probe({
+        "format": {"format_name": "image2", "duration": "180"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "mjpeg", "width": 500, "height": 500,
+             "avg_frame_rate": "25/1"},
+            {"codec_type": "audio", "codec_name": "mp3", "duration": "180"},
+        ],
+    })
+    assert info.kind != "image"
+    assert info.duration == 180.0

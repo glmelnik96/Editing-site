@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.app.config import Settings
+from server.app.storage import RENDER_FORMATS
 from server.media.timeline import clip_length, clips_duration, fade_into
 
 ASPECT_RATIOS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
@@ -20,10 +21,23 @@ AUDIO_CHAIN = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
 SILENCE = "anullsrc=channel_layout=stereo:sample_rate=48000"
 SUBTITLE_STYLE = "FontName=DejaVu Sans,FontSize=24,OutlineColour=&H80000000,BorderStyle=3"
 
+# Качество сборки. Прежние draft и final остаются для агента и старых вызовов: разрешение у них
+# из настроек. Остальные выбирает человек в панели и разрешение называет сам.
+# crf — для H.264, vp9 — для VP9 (у него своя шкала, 0–63), audio — битрейт звука.
+# Пресет x264 у всех не медленнее veryfast: ВМ двухъядерная и общая с соседями, и «высокое»
+# добирает качество низким crf, а не часами кодирования.
 QUALITY = {
-    "draft": {"preset": "ultrafast", "crf": "26", "audio": "128k"},
-    "final": {"preset": "veryfast", "crf": "20", "audio": "160k"},
+    "draft": {"preset": "ultrafast", "crf": "26", "vp9": "36", "audio": "128k"},
+    "final": {"preset": "veryfast", "crf": "20", "vp9": "30", "audio": "160k"},
+    "preview": {"preset": "ultrafast", "crf": "30", "vp9": "40", "audio": "96k"},
+    "medium": {"preset": "veryfast", "crf": "23", "vp9": "33", "audio": "128k"},
+    "high": {"preset": "veryfast", "crf": "18", "vp9": "28", "audio": "192k"},
+    "target": {"preset": "veryfast", "crf": "", "vp9": "", "audio": "160k"},
 }
+# Разрешение по умолчанию, когда его не назвали. У draft и final — из настроек, как было.
+DEFAULT_SHORT_SIDE = {"preview": 480, "medium": 720, "high": 1080, "target": 1080}
+SHORT_SIDES = (360, 480, 720, 1080, 1440, 2160)
+AUDIO_ONLY_BITRATE = "192k"
 # Источники субтитров, у которых файла на диске ещё нет: его собирает вызывающий и передаёт путём.
 BUILT_SOURCES = ("transcript", "cues")
 
@@ -33,6 +47,9 @@ class SourceInfo:
     path: str
     duration: float
     has_audio: bool
+    still: bool = False
+    # Битрейт видео исходника: потолок для «высокого». None — неизвестен (у картинки его нет).
+    bit_rate: int | None = None
 
 
 class RenderInvalid(Exception):
@@ -60,6 +77,79 @@ def output_size(aspect: str, short_side: int) -> tuple[int, int]:
     return _even(short_side), _even(short_side * height_ratio / width_ratio)
 
 
+def render_short_side(quality: str, settings: Settings, short_side: int | None) -> int:
+    """Короткая сторона кадра: названная, иначе по качеству, иначе из настроек."""
+    if short_side is not None:
+        if short_side not in SHORT_SIDES:
+            raise RenderInvalid(f"неизвестное разрешение: {short_side}")
+        return short_side
+    if quality in DEFAULT_SHORT_SIDE:
+        return DEFAULT_SHORT_SIDE[quality]
+    return settings.final_short_side if quality == "final" else settings.draft_short_side
+
+
+def render_dimensions(
+    doc: dict, *, quality: str, settings: Settings, fmt: str = "mp4", short_side: int | None = None
+) -> tuple[int, int] | None:
+    """Размер кадра будущего ролика. None — картинки нет вовсе: «только звук»."""
+    if fmt == "m4a":
+        return None
+    return output_size(doc["output"]["aspect"], render_short_side(quality, settings, short_side))
+
+
+def source_bitrate_cap(clips: list[dict], sources: dict[str, SourceInfo]) -> int | None:
+    """Самый большой битрейт среди видеоисходников клипов — потолок для «высокого».
+
+    Картинки не в счёт: битрейта у кадра нет. Неизвестный битрейт тоже: потолок, взятый
+    с потолка, резал бы качество ни за что.
+    """
+    rates = [
+        source.bit_rate
+        for clip in clips
+        if (source := sources.get(clip["asset_id"])) is not None and not source.still and source.bit_rate
+    ]
+    return max(rates) if rates else None
+
+
+def _video_codec_args(
+    fmt: str, quality: str, preset: dict, bitrate_kbps: int | None, cap: int | None
+) -> list[str]:
+    """Кодек, режим битрейта и контейнер.
+
+    «Высокое» — постоянное качество (crf) с потолком по исходнику: не хуже того, что сняли, но
+    и не раздуваем файл сверх него — 4K-исходник на 40 Мбит/с при выводе в 1080p упёрся бы в
+    потолок, а crf сам остановится там, где картинке больше не нужно. «Целевое» — средний
+    битрейт с запасом на сложные сцены (maxrate в полтора раза).
+    """
+    if fmt == "webm":
+        speed = "8" if quality in ("draft", "preview") else "6"
+        if quality == "target":
+            rate = ["-b:v", f"{bitrate_kbps}k"]
+        else:
+            # У VP9 постоянное качество — это crf вместе с -b:v 0; с числом вместо нуля тот же
+            # режим становится «качество, но не больше» — ровно то, что обещает «высокое».
+            ceiling = str(cap) if quality == "high" and cap else "0"
+            rate = ["-crf", preset["vp9"], "-b:v", ceiling]
+        return [
+            "-c:v", "libvpx-vp9", *rate, "-deadline", "realtime", "-cpu-used", speed, "-row-mt", "1",
+            "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", preset["audio"], "-f", "webm",
+        ]
+    if quality == "target":
+        rate = ["-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps * 3 // 2}k",
+                "-bufsize", f"{bitrate_kbps * 2}k"]
+    else:
+        rate = ["-crf", preset["crf"]]
+        if quality == "high" and cap:
+            rate += ["-maxrate", str(cap), "-bufsize", str(cap * 2)]
+    return [
+        "-c:v", "libx264", "-preset", preset["preset"], *rate,
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", preset["audio"],
+        "-movflags", "+faststart",
+        # Временный файл называется .part: по такому имени ffmpeg контейнер не угадывает.
+        "-f", "mp4",
+    ]
+
+
 def total_duration(doc: dict) -> float:
     # Начальное значение 0.0 держит сумму float: клипы могут прийти с целыми секундами (int),
     # а склейка ниже форматирует длительности строго как "10.0", а не "10".
@@ -75,7 +165,11 @@ def _video_chain(width: int, height: int, fit: str, fps: int) -> str:
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
         )
-    return f"fps={fps},{fitting},setsar=1,format=yuv420p"
+    # settb=AVTB приводит шкалу времени к общей (1/1000000). Без неё xfade между зацикленной
+    # картинкой (её шкала 1/30) и видео (1/1000000) отказывается настраиваться: «First input link
+    # main timebase do not match». Ставим всем клипам одинаково — разбираться, откуда пришёл
+    # кусок, фильтру переходов не должно быть нужно.
+    return f"fps={fps},{fitting},setsar=1,settb=AVTB,format=yuv420p"
 
 
 def _music_chain(music: dict, total: float) -> str:
@@ -95,14 +189,22 @@ def _music_chain(music: dict, total: float) -> str:
     return ",".join(parts)
 
 
-def _join_clips(clips: list[dict], video_out: str, audio_out: str) -> list[str]:
+def _join_clips(
+    clips: list[dict], video_out: str, audio_out: str, with_video: bool = True
+) -> list[str]:
     """Склеить сегменты: concat встык, xfade+acrossfade на переходах.
+
+    with_video=False — «только звук»: картинку не строим вовсе, иначе ffmpeg декодировал бы
+    и масштабировал весь ролик ради того, чтобы выбросить его на выходе.
 
     Без переходов остаётся одна склейка concat — так же, как до пакета B, чтобы команда
     и тесты микса не менялись. Смешанный список (стык и fade) собирается попарно по порядку.
     """
     count = len(clips)
     if not any(fade_into(clip, index) > 0 for index, clip in enumerate(clips)):
+        if not with_video:
+            labels = "".join(f"[a{index}]" for index in range(count))
+            return [f"{labels}concat=n={count}:v=0:a=1{audio_out}"]
         labels = "".join(f"[v{index}][a{index}]" for index in range(count))
         return [f"{labels}concat=n={count}:v=1:a=1{video_out}{audio_out}"]
 
@@ -119,11 +221,15 @@ def _join_clips(clips: list[dict], video_out: str, audio_out: str) -> list[str]:
         length = clip_length(clips[index])
         if fade > 0:
             offset = round(acc_len - fade, 3)
-            filters.append(
-                f"{video_acc}[v{index}]xfade=transition=fade:duration={fade}:offset={offset}{video_next}"
-            )
+            if with_video:
+                filters.append(
+                    f"{video_acc}[v{index}]xfade=transition=fade:duration={fade}:offset={offset}{video_next}"
+                )
             filters.append(f"{audio_acc}[a{index}]acrossfade=d={fade}{audio_next}")
             acc_len = round(acc_len + length - fade, 3)
+        elif not with_video:
+            filters.append(f"{audio_acc}[a{index}]concat=n=2:v=0:a=1{audio_next}")
+            acc_len = round(acc_len + length, 3)
         else:
             filters.append(
                 f"{video_acc}{audio_acc}[v{index}][a{index}]concat=n=2:v=1:a=1{video_next}{audio_next}"
@@ -164,20 +270,27 @@ def build_render_command(
     settings: Settings,
     out_path: str,
     subtitles_path: Path | None = None,
+    fmt: str = "mp4",
+    short_side: int | None = None,
+    bitrate_kbps: int | None = None,
 ) -> list[str]:
     """Полная командная строка ffmpeg для сборки проекта."""
     preset = QUALITY.get(quality)
     if preset is None:
         raise RenderInvalid(f"неизвестное качество: {quality}")
+    if fmt not in RENDER_FORMATS:
+        raise RenderInvalid(f"неизвестный формат: {fmt}")
+    if quality == "target" and not bitrate_kbps:
+        raise RenderInvalid("для целевого качества нужен битрейт")
+    audio_only = fmt == "m4a"
     clips = doc.get("clips") or []
     if not clips:
         raise RenderInvalid("в проекте нет клипов")
 
     output = doc["output"]
-    short_side = settings.final_short_side if quality == "final" else settings.draft_short_side
-    width, height = output_size(output["aspect"], short_side)
+    size = render_dimensions(doc, quality=quality, settings=settings, fmt=fmt, short_side=short_side)
     total = total_duration(doc)
-    video_chain = _video_chain(width, height, output["fit"], int(output["fps"]))
+    video_chain = _video_chain(size[0], size[1], output["fit"], int(output["fps"])) if size else ""
 
     args: list[str] = [settings.ffmpeg_path, "-v", "error", "-y", "-progress", "pipe:1", "-nostats"]
     filters: list[str] = []
@@ -190,9 +303,14 @@ def build_render_command(
         start = float(clip["in"])
         # float(): клип может прийти с целыми секундами (int), а ffmpeg-аргумент нужен как "1.0".
         length = round(float(clip["out"]) - start, 3)
-        # -ss перед -i: поиск идёт по смещению до декодирования, полминуты из пятигигабайтной
-        # записи вырезаются мгновенно.
-        args += ["-ss", str(start), "-t", str(length), "-i", source.path]
+        if source.still:
+            # Картинку не мотают, её повторяют: -loop 1 крутит единственный кадр, -t говорит
+            # сколько. Смещение -ss тут смысла не имеет — кадр один и тот же в любой момент.
+            args += ["-loop", "1", "-t", str(length), "-i", source.path]
+        else:
+            # -ss перед -i: поиск идёт по смещению до декодирования, полминуты из пятигигабайтной
+            # записи вырезаются мгновенно.
+            args += ["-ss", str(start), "-t", str(length), "-i", source.path]
         video_input = index
         index += 1
         if source.has_audio:
@@ -201,7 +319,8 @@ def build_render_command(
             args += ["-f", "lavfi", "-t", str(length), "-i", SILENCE]
             audio_input = index
             index += 1
-        filters.append(f"[{video_input}:v]{video_chain}[v{number}]")
+        if not audio_only:
+            filters.append(f"[{video_input}:v]{video_chain}[v{number}]")
         volume = float(clip.get("volume", 1))
         audio_chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
         filters.append(f"[{audio_input}:a]{audio_chain}[a{number}]")
@@ -212,7 +331,35 @@ def build_render_command(
         subtitles = None
 
     video_out, audio_out = "[v]", "[a]"
-    filters.extend(_join_clips(clips, video_out, audio_out))
+    filters.extend(_join_clips(clips, video_out, audio_out, with_video=not audio_only))
+
+    # Звуковая дорожка вливается в речь до музыки: озвучка — такая же речь, и приглушение
+    # музыки должно слышать и её. duration=first держит длину по склейке клипов, поэтому звук,
+    # свисающий за конец ролика, обрезается здесь, а не делает ролик длиннее картинки.
+    sound_labels: list[str] = []
+    for number, sound in enumerate(doc.get("sounds") or []):
+        source = sources.get(sound["asset_id"])
+        if source is None:
+            raise RenderInvalid(f"звуковой ассет {sound['asset_id']} недоступен")
+        if not source.has_audio:
+            continue  # у видеозаписи без звука брать нечего, а [N:a] уронил бы сборку
+        start = float(sound["in"])
+        length = round(float(sound["out"]) - start, 3)
+        args += ["-ss", str(start), "-t", str(length), "-i", source.path]
+        sound_input = index
+        index += 1
+        delay = round(float(sound["at"]) * 1000)
+        volume = float(sound.get("volume", 1))
+        chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
+        # Задержка на обе стороны стерео: AUDIO_CHAIN уже привёл звук к двум каналам.
+        filters.append(f"[{sound_input}:a]{chain},adelay={delay}|{delay}[s{number}]")
+        sound_labels.append(f"[s{number}]")
+    if sound_labels:
+        filters.append(
+            f"{audio_out}{''.join(sound_labels)}"
+            f"amix=inputs={len(sound_labels) + 1}:duration=first:normalize=0[speech]"
+        )
+        audio_out = "[speech]"
 
     if music:
         source = sources.get(music["asset_id"])
@@ -242,7 +389,8 @@ def build_render_command(
         audio_out = "[amixed]"
 
     subtitle_input: int | None = None
-    if subtitles:
+    # У «только звука» нет кадра, куда вжигать, а мягкую дорожку m4a не держит.
+    if subtitles and not audio_only:
         subtitle_file = _subtitles_file(subtitles, sources, subtitles_path)
         if subtitles["mode"] == "burn":
             escaped = escape_for_filter(subtitle_file)
@@ -253,14 +401,14 @@ def build_render_command(
             subtitle_input = index
             index += 1
 
-    args += ["-filter_complex", ";".join(filters), "-map", video_out, "-map", audio_out]
+    args += ["-filter_complex", ";".join(filters)]
+    if audio_only:
+        return [*args, "-map", audio_out, "-vn", "-c:a", "aac", "-b:a", AUDIO_ONLY_BITRATE,
+                "-f", "ipod", out_path]
+    args += ["-map", video_out, "-map", audio_out]
     if subtitle_input is not None:
-        args += ["-map", f"{subtitle_input}:s", "-c:s", "mov_text", "-metadata:s:s:0", "language=rus"]
-    args += [
-        "-c:v", "libx264", "-preset", preset["preset"], "-crf", preset["crf"],
-        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", preset["audio"],
-        "-movflags", "+faststart",
-        # Временный файл называется .part: по такому имени ffmpeg контейнер не угадывает.
-        "-f", "mp4", out_path,
-    ]
-    return args
+        # Мягкие субтитры в webm — это WebVTT: mov_text живёт только в mp4.
+        codec = "webvtt" if fmt == "webm" else "mov_text"
+        args += ["-map", f"{subtitle_input}:s", "-c:s", codec, "-metadata:s:s:0", "language=rus"]
+    cap = source_bitrate_cap(clips, sources) if quality == "high" else None
+    return [*args, *_video_codec_args(fmt, quality, preset, bitrate_kbps, cap), out_path]

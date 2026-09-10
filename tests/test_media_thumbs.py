@@ -1,5 +1,5 @@
 from server.app.config import Settings
-from server.media.thumbs import GridLayout, grid_layout, thumbs_args, thumbs_meta
+from server.media.thumbs import GridLayout, grid_layout, still_layout, thumbs_args, thumbs_meta
 
 
 def s(**over) -> Settings:
@@ -43,3 +43,25 @@ def test_meta_describes_the_sprite():
     assert thumbs_meta(layout) == {
         "count": 6, "cols": 10, "rows": 1, "interval": 2.0, "width": 160, "height": 90,
     }
+
+
+def test_still_gets_one_cell_and_no_time_sampling():
+    """Раскадровка картинки — одна клетка, и без фильтра fps.
+
+    Фильтр fps выбрасывает единственный кадр картинки: у кадра нет длительности, и ffmpeg
+    заканчивает с «Nothing was written… received no packets». Сетку в одну колонку ставим
+    сами — общая дала бы спрайт в десять клеток, девять из них чёрные.
+    """
+    settings = Settings(_env_file=None)
+    layout = still_layout(settings, width=1280, height=720)
+    assert (layout.count, layout.cols, layout.rows, layout.still) == (1, 1, 1, True)
+    assert (layout.frame_width, layout.frame_height) == (160, 90)
+    chain = thumbs_args(settings, "/d/src.png", "/d/thumbs.jpg", layout)[
+        thumbs_args(settings, "/d/src.png", "/d/thumbs.jpg", layout).index("-vf") + 1
+    ]
+    assert "fps=" not in chain
+    assert chain == "scale=160:-2,tile=1x1"
+    # У ролика отбор по времени остаётся: без него в сетку легли бы первые кадры подряд.
+    video = grid_layout(settings, duration=60.0, width=1280, height=720)
+    video_chain = thumbs_args(settings, "/d/src.mp4", "/d/thumbs.jpg", video)
+    assert any(part.startswith("fps=1/") for part in video_chain)

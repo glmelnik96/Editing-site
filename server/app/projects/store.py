@@ -29,6 +29,7 @@ MAX_NAME = 200
 EMPTY_DOC = {
     "output": {"aspect": "16:9", "fit": "pad", "fps": 30},
     "clips": [],
+    "sounds": [],
     "music": None,
     "subtitles": None,
 }
@@ -70,8 +71,9 @@ def _assets_index(conn: sqlite3.Connection, user_id: str) -> dict[str, AssetInfo
 
 
 def assets_of(doc: dict) -> set[str]:
-    """Все ассеты, на которые ссылается документ: клипы, музыка, субтитры."""
+    """Все ассеты, на которые ссылается документ: клипы, звуки, музыка, субтитры."""
     used = {c["asset_id"] for c in doc.get("clips") or []}
+    used |= {s["asset_id"] for s in doc.get("sounds") or []}
     for key in ("music", "subtitles"):
         block = doc.get(key)
         if isinstance(block, dict) and block.get("asset_id"):
@@ -525,11 +527,15 @@ def _render_row(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "project_id": row["project_id"],
         "quality": row["quality"],
+        "format": row["format"],
+        "width": row["width"],
+        "height": row["height"],
+        "video_bitrate": row["video_bitrate"],
         "size": row["size"],
         "duration": row["duration"],
         "created_at": row["created_at"],
         "expires_at": row["expires_at"],
-        "download": render_url(row["user_id"], row["project_id"], row["id"]),
+        "download": render_url(row["user_id"], row["project_id"], row["id"], row["format"]),
     }
 
 

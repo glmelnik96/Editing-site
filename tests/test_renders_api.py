@@ -177,3 +177,73 @@ def test_agent_can_render_with_a_token(bearer_client, settings):
 def test_renders_require_auth(client):
     assert client.get("/api/v1/renders/rnd_000000000001").status_code == 401
     assert client.get("/api/v1/jobs/job_1").status_code == 401
+
+
+def test_render_options_travel_to_the_job(client, login_as, settings):
+    """Формат, разрешение и битрейт уходят в задание: собирает по ним воркер, а не маршрут."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project = make_project(client, settings, me["id"])
+    body = {"quality": "target", "format": "mp4", "short_side": 480, "bitrate_kbps": 1500}
+    r = client.post(f"/api/v1/projects/{project['id']}/render", json=body)
+    assert r.status_code == 202, r.text
+    assert r.json()["format"] == "mp4" and r.json()["quality"] == "target"
+    conn = sqlite3.connect(str(settings.db_path))
+    params = conn.execute("SELECT params FROM jobs WHERE id = ?", (r.json()["job_id"],)).fetchone()[0]
+    conn.close()
+    import json
+
+    assert json.loads(params) == body
+
+
+def test_target_quality_needs_a_bitrate(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project = make_project(client, settings, me["id"])
+    r = client.post(f"/api/v1/projects/{project['id']}/render", json={"quality": "target"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bitrate_required"
+
+
+def test_render_rejects_unknown_format_and_size(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project = make_project(client, settings, me["id"])
+    url = f"/api/v1/projects/{project['id']}/render"
+    assert client.post(url, json={"format": "avi"}).status_code == 422
+    assert client.post(url, json={"short_side": 999}).status_code == 422
+    assert client.post(url, json={"quality": "target", "bitrate_kbps": 10}).status_code == 422
+
+
+def test_webm_without_vp9_is_refused_before_queueing(client, login_as, settings, monkeypatch):
+    """Без VP9 сборка упала бы через минуты кодирования сырым stderr — отказ нужен сразу."""
+    from server.app.projects import routes
+
+    monkeypatch.setattr(routes, "missing_encoder", lambda _settings, _fmt: "нет VP9")
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project = make_project(client, settings, me["id"])
+    r = client.post(f"/api/v1/projects/{project['id']}/render", json={"format": "webm"})
+    assert r.status_code == 503 and r.json()["error"]["message"] == "нет VP9"
+    assert client.get("/api/v1/jobs").json()["jobs"] == []
+
+
+def test_render_card_tells_format_and_size(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    project = make_project(client, settings, me["id"])
+    conn = sqlite3.connect(str(settings.db_path))
+    conn.execute(
+        "INSERT INTO renders (id, project_id, user_id, job_id, quality, format, width, height, path, "
+        "size, duration, created_at, expires_at) VALUES ('rnd_00000000000a', ?, ?, 'job_1', 'high', "
+        "'webm', 1280, 720, '/x.webm', 100, 5, ?, '2099-01-01T00:00:00.000Z')",
+        (project["id"], me["id"], now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    seed_render(settings, project["id"], me["id"])  # старая строка: формат по умолчанию mp4
+    cards = {c["id"]: c for c in client.get(f"/api/v1/projects/{project['id']}/renders").json()["renders"]}
+    webm = cards["rnd_00000000000a"]
+    assert (webm["format"], webm["width"], webm["height"]) == ("webm", 1280, 720)
+    assert webm["download"].endswith("/renders/rnd_00000000000a.webm")
+    old = cards["rnd_000000000001"]
+    assert old["format"] == "mp4" and old["width"] is None and old["download"].endswith(".mp4")

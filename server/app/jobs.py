@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 
 from server.app.util import iso, new_id, now_iso
 
+# Качества сборки, которые шапка умеет назвать. Совпадают с QUALITY в server/media/render.py.
+RENDER_QUALITIES = ("draft", "final", "preview", "medium", "high", "target")
+
 LANES = {"analyze": "cpu", "proxy": "cpu", "render": "cpu", "convert": "cpu", "transcribe": "net"}
 RECENT_SEC = 30
 LIST_LIMIT = 50
@@ -66,7 +69,7 @@ def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime)
                 "finished_at": row["finished_at"],
                 "label": job_label(row["type"], row["asset_name"], row["project_name"]),
                 "cancelable": job_cancelable(row["type"], row["status"]),
-                "quality": quality if quality in ("draft", "final") else None,
+                "quality": quality if quality in RENDER_QUALITIES else None,
                 "target_id": row["target_id"],
             }
         )

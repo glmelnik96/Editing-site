@@ -20,7 +20,24 @@ export type Subtitles = {
   enabled?: boolean
   cues?: Cue[]
 }
-export type ProjectDoc = { output: Output; clips: Clip[]; music: Music | null; subtitles: Subtitles | null }
+/**
+ * Кусок звука на своей дорожке под картинкой. В отличие от клипа, у него своё место на шкале —
+ * at: озвучка идёт поверх речи клипов и не встаёт в их очередь.
+ */
+export type Sound = { id: string; asset_id: string; at: number; in: number; out: number; volume: number }
+export type ProjectDoc = {
+  output: Output
+  clips: Clip[]
+  /** У документов, сохранённых до звуковой дорожки, ключа нет вовсе — читать через soundsOf. */
+  sounds?: Sound[]
+  music: Music | null
+  subtitles: Subtitles | null
+}
+
+/** Звуки документа. Старый документ ключа не знает, и пустая дорожка честнее падения. */
+export function soundsOf(doc: ProjectDoc): Sound[] {
+  return doc.sounds ?? []
+}
 
 export type Project = {
   id: string
@@ -205,10 +222,26 @@ export function restoreVersion(id: string, versionId: string): Promise<Project> 
   })
 }
 
+/** Качество сборки. draft и final — прежние, их по-прежнему присылает агент; остальные выбирает человек. */
+export type RenderQuality = 'draft' | 'final' | 'preview' | 'medium' | 'high' | 'target'
+export type RenderFormat = 'mp4' | 'webm' | 'm4a'
+/** Что человек выбрал в панели сборки. Битрейт значим только у целевого качества. */
+export type RenderOptions = {
+  quality: RenderQuality
+  format: RenderFormat
+  short_side: number
+  bitrate_kbps: number
+}
+
 export type RenderCard = {
   id: string
   project_id: string
-  quality: 'draft' | 'final'
+  quality: RenderQuality
+  /** У роликов, собранных до выбора формата, поля нет: они все mp4 без записанного размера. */
+  format?: RenderFormat
+  width?: number | null
+  height?: number | null
+  video_bitrate?: number | null
   size: number
   duration: number
   created_at: string
@@ -224,11 +257,22 @@ export type JobView = {
   error: string | null
 }
 
-export function startRender(id: string, quality: 'draft' | 'final'): Promise<{ job_id: string; quality: string }> {
-  return api<{ job_id: string; quality: string }>(`/api/v1/projects/${encodeURIComponent(id)}/render`, {
-    method: 'POST',
-    body: JSON.stringify({ quality }),
-  })
+export function startRender(
+  id: string,
+  options: RenderOptions,
+): Promise<{ job_id: string; quality: string; format: string }> {
+  // Разрешение у «только звука» ничего не значит, а битрейт — у всех, кроме целевого: не шлём
+  // лишнего, сервер проверяет пределы у всего, что пришло.
+  const body = {
+    quality: options.quality,
+    format: options.format,
+    short_side: options.format === 'm4a' ? undefined : options.short_side,
+    bitrate_kbps: options.quality === 'target' ? options.bitrate_kbps : undefined,
+  }
+  return api<{ job_id: string; quality: string; format: string }>(
+    `/api/v1/projects/${encodeURIComponent(id)}/render`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
 }
 
 export function listRenders(id: string): Promise<{ renders: RenderCard[] }> {
@@ -245,7 +289,7 @@ export type JobListItem = {
   finished_at: string | null
   label: string
   cancelable: boolean
-  quality: 'draft' | 'final' | null
+  quality: RenderQuality | null
   target_id: string
 }
 

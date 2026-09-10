@@ -7,7 +7,7 @@
  */
 import { POLL_MS } from './assets'
 import { escapeHtml } from './html'
-import { cancelJob, listJobs, type JobListItem } from './project'
+import { cancelJob, listJobs, type JobListItem, type RenderQuality } from './project'
 
 export const FLASH_MS = 2000
 
@@ -19,7 +19,7 @@ export type WorkJob = {
   error: string | null
   label: string
   cancelable: boolean
-  quality: 'draft' | 'final' | null
+  quality: RenderQuality | null
 }
 
 export type UploadWork = {
@@ -63,9 +63,20 @@ const VERB: Record<WorkJob['type'], string> = {
   convert: 'Конвертер',
 }
 
+// Родительный падеж: «Сборка черновика «Ролик»». Без качества — как раньше, «черновика»: так
+// шапка называла сборку, пока качеств было два.
+const QUALITY_OF: Record<RenderQuality, string> = {
+  draft: 'черновика',
+  final: 'финала',
+  preview: 'превью',
+  medium: 'в среднем качестве',
+  high: 'в высоком качестве',
+  target: 'с заданным битрейтом',
+}
+
 export function jobTitle(job: WorkJob): string {
   if (job.type === 'render') {
-    const kind = job.quality === 'final' ? 'финала' : 'черновика'
+    const kind = QUALITY_OF[job.quality ?? 'draft'] ?? QUALITY_OF.draft
     return `Сборка ${kind} «${job.label}»`
   }
   return `${VERB[job.type]} «${job.label}»`

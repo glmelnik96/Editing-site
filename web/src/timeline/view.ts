@@ -5,19 +5,24 @@
  * списком клипов: считает её модель (model.ts), а не эта обвязка.
  */
 import { escapeHtml } from '../html'
+import type { Sound } from '../project'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
 import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, ZOOM_MAX, ZOOM_MIN, type Clip } from './model'
+import { moveSound, soundBlocks, soundLength, soundsEnd } from './sounds'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
 export type TimelineHandlers = {
   onChange: (clips: Clip[]) => void
+  /** Правка звуковой дорожки: готовый список звуков, как onChange для клипов. */
+  onSoundsChange: (sounds: Sound[]) => void
   onSeek: (time: number) => void
   onSelect: (id: string | null) => void
 }
 
 export type RenderInput = {
   clips: Clip[]
+  sounds: Sound[]
   assets: Map<string, AssetInfo>
   data: Map<string, AssetData>
   pxPerSec: number
@@ -66,6 +71,11 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       <div class="lane" id="tl-lane">
         <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
         <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
+        <!-- Звуковая дорожка — своя колея под клипами: звук лежит по своему времени и клипы не
+             сдвигает. Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу
+             под руками, а подпись в ней объясняет, откуда туда класть. -->
+        <div class="sound-track empty" id="tl-sounds"
+          data-empty="Звуковая дорожка: озвучка и шумы поверх речи. Положите звук из «Исходников»"></div>
         <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
       </div>
     </div>
@@ -76,12 +86,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   const lane = el.querySelector('#tl-lane') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
   const blocksBox = el.querySelector('#tl-blocks') as HTMLElement
+  const soundTrack = el.querySelector('#tl-sounds') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const ghost = el.querySelector('#tl-drop') as HTMLElement
   let sayTimer = 0
   const hint = el.querySelector('#tl-hint') as HTMLElement
 
-  let current: RenderInput = { clips: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
+  let current: RenderInput = { clips: [], sounds: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
   let selected: string | null = null
   let drag: {
     id: string
@@ -90,6 +101,16 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     startX: number
     clips: Clip[]
     moved: boolean
+  } | null = null
+  // Перенос звука. Отдельно от переноса клипа: у звука нет ни очереди, ни ручек, он просто
+  // едет по своей колее, и смешивать два состояния значило бы проверять вид куска на каждом шаге.
+  let soundDrag: {
+    id: string
+    startX: number
+    at: number
+    sounds: Sound[]
+    moved: boolean
+    node: HTMLElement
   } | null = null
   // Пришло, пока человек тянул блок. Во время переноса шкалу не пересобираем, иначе блок теряет
   // подсветку и уезжает не туда: автосохранение отвечает свежим документом ровно посреди
@@ -125,14 +146,18 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   }
 
   function render(input?: Partial<RenderInput>): void {
-    if (drag) {
+    if (drag || soundDrag) {
       pending = { ...(pending ?? {}), ...input }
       return
     }
     current = { ...current, ...input }
     const blocks = layout(current.clips, current.pxPerSec)
-    const width = Math.max(200, totalDuration(current.clips) * current.pxPerSec)
+    // Шкала дотягивается и до звука, свисающего за конец ролика: сборка его хвост обрежет, но
+    // увидеть и схватить его, чтобы вернуть назад, человек должен.
+    const end = Math.max(totalDuration(current.clips), soundsEnd(current.sounds))
+    const width = Math.max(200, end * current.pxPerSec)
     track.style.width = `${width}px`
+    soundTrack.style.width = `${width}px`
     lane.style.width = `${width}px`
     ruler.style.width = `${width}px`
     ruler.innerHTML = Array.from({ length: Math.ceil(width / (current.pxPerSec * 5)) + 1 }, (_, i) => {
@@ -157,6 +182,21 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       const info = current.data.get(clip.asset_id)
       node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, { from: clip.in, to: clip.out }, Math.round(block.width)), block.width))
       blocksBox.appendChild(node)
+    })
+    soundTrack.querySelectorAll('.sound-block').forEach(node => node.remove())
+    soundTrack.classList.toggle('empty', current.sounds.length === 0)
+    soundBlocks(current.sounds, current.pxPerSec).forEach((block, index) => {
+      const sound = current.sounds[index]
+      const node = document.createElement('div')
+      node.className = `sound-block${sound.id === selected ? ' selected' : ''}`
+      node.style.left = `${block.left}px`
+      node.style.width = `${block.width}px`
+      node.dataset.id = sound.id
+      node.innerHTML = `<span class="label">${escapeHtml(sound.id)} · ${soundLength(sound).toFixed(1)} с</span>`
+      const info = current.data.get(sound.asset_id)
+      const bars = barsFor(info?.peaks ?? null, { from: sound.in, to: sound.out }, Math.round(block.width))
+      node.appendChild(waveCanvas(bars, block.width))
+      soundTrack.appendChild(node)
     })
     if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
   }
@@ -219,6 +259,9 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       const mine = node.dataset.id === selected
       node.classList.toggle('selected', mine)
       node.style.zIndex = mine ? String(SELECTED_Z) : String(Number(node.dataset.index ?? 0) + 1)
+    })
+    soundTrack.querySelectorAll<HTMLElement>('.sound-block').forEach(node => {
+      node.classList.toggle('selected', node.dataset.id === selected)
     })
   }
 
@@ -300,6 +343,70 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   track.addEventListener('pointercancel', abortDrag)
   // Страховка: если захват потерян, а pointerup до нас не дошёл, шкала осталась бы замороженной.
   track.addEventListener('lostpointercapture', abortDrag)
+
+  // Звуковая дорожка: щелчок по звуку выбирает его, протаскивание перекладывает на новое место,
+  // щелчок по пустой колее перематывает — как по пустому месту дорожки клипов.
+  soundTrack.addEventListener('pointerdown', event => {
+    const target = event.target as HTMLElement
+    const node = target.closest('.sound-block') as HTMLElement | null
+    if (!node) {
+      handlers.onSeek(timeAt(event.clientX))
+      return
+    }
+    // Захват первым делом и по тем же причинам, что у клипа: без него отпускание за краем
+    // шкалы до нас не дойдёт, и замороженная на время переноса шкала так и осталась бы стоять.
+    let captured = true
+    try {
+      soundTrack.setPointerCapture(event.pointerId)
+    } catch {
+      captured = false
+    }
+    const id = node.dataset.id ?? ''
+    selected = id
+    handlers.onSelect(id)
+    markSelected()
+    const sound = current.sounds.find(item => item.id === id)
+    if (!captured || !sound) return
+    soundDrag = { id, startX: event.clientX, at: sound.at, sounds: current.sounds, moved: false, node }
+    node.classList.add('dragging')
+  })
+
+  soundTrack.addEventListener('pointermove', event => {
+    if (!soundDrag) return
+    soundDrag.moved = soundDrag.moved || Math.abs(event.clientX - soundDrag.startX) > CLICK_SLOP_PX
+    if (!soundDrag.moved) return
+    const at = Math.max(0, soundDrag.at + (event.clientX - soundDrag.startX) / current.pxPerSec)
+    soundDrag.node.style.left = `${at * current.pxPerSec}px`
+    hint.textContent = `«${soundDrag.id}» ляжет на ${at.toFixed(2)} с`
+  })
+
+  /** Конец переноса звука. apply=false — жест отменила система: правки нет, всё как было. */
+  function finishSoundDrag(clientX: number, apply: boolean): void {
+    if (!soundDrag) return
+    const active = soundDrag
+    soundDrag = null
+    hint.textContent = ''
+    if (!active.moved) {
+      if (apply) handlers.onSeek(timeAt(clientX))
+      flushPending()
+      return
+    }
+    // Свежий список, если пока тянули пришёл тот же набор звуков: так не теряется то, что
+    // успел нормализовать сервер. Изменился состав — берём список, с которым начинали.
+    const fresh = pending?.sounds
+    const same =
+      fresh !== undefined &&
+      fresh.length === active.sounds.length &&
+      fresh.every((item, i) => item.id === active.sounds[i].id)
+    const base = same && fresh ? fresh : active.sounds
+    const at = active.at + (clientX - active.startX) / current.pxPerSec
+    flushPending()
+    if (apply) handlers.onSoundsChange(moveSound(base, active.id, at))
+  }
+
+  soundTrack.addEventListener('pointerup', event => finishSoundDrag(event.clientX, true))
+  soundTrack.addEventListener('pointercancel', () => finishSoundDrag(0, false))
+  soundTrack.addEventListener('lostpointercapture', () => finishSoundDrag(0, false))
 
   // Полоса перемотки под линейкой и сама линейка: перетаскивание указателем двигает курсор.
   let scrubbing = false

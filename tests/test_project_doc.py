@@ -10,6 +10,7 @@ ASSETS = {
     "ast_000000000003": AssetInfo(kind="audio", status="proxy_ready", duration=200.0),
     "ast_000000000004": AssetInfo(kind="subtitle", status="ready", duration=None),
     "ast_000000000005": AssetInfo(kind="video", status="analyzing", duration=None),
+    "ast_000000000006": AssetInfo(kind="image", status="proxy_ready", duration=None),
 }
 
 
@@ -336,7 +337,7 @@ def test_all_errors_are_collected_not_just_the_first():
 def test_unknown_keys_are_dropped_not_echoed():
     out = validate_doc(doc(clips=[clip(evil="<script>")], extra=1), assets=ASSETS, settings=S)
     assert "extra" not in out and "evil" not in out["clips"][0]
-    assert set(out) == {"output", "clips", "music", "subtitles"}
+    assert set(out) == {"output", "clips", "sounds", "music", "subtitles"}
 
 
 def test_not_a_number_times_are_rejected():
@@ -469,3 +470,75 @@ def test_clamped_document_passes_validation_again():
     doc = {"output": {"aspect": "16:9", "fit": "pad", "fps": 30}, "clips": clips}
     validate_doc(doc, assets=ASSETS, settings=S)
 
+
+
+PIC = "ast_000000000006"
+
+
+def test_картинка_ложится_в_клип_несмотря_на_отсутствие_длительности():
+    """У картинки нет своей длительности, и это не повод её отвергать: сколько она висит в
+    кадре, решают при добавлении. Раньше проверка требовала длительность от любого ассета."""
+    out = validate_doc(
+        doc(clips=[clip(asset_id=PIC, **{"in": 0.0, "out": 5.0})]), assets=ASSETS, settings=S
+    )
+    assert out["clips"][0]["out"] == 5.0
+
+
+def test_картинку_нельзя_растянуть_дольше_предела():
+    """Без предела один кадр занял бы весь допустимый ролик, и кодировался бы он часами."""
+    long = S.max_still_sec + 1
+    assert errors_of(doc(clips=[clip(asset_id=PIC, **{"in": 0.0, "out": long})])) == ["clips[0].out"]
+    ok = validate_doc(
+        doc(clips=[clip(asset_id=PIC, **{"in": 0.0, "out": float(S.max_still_sec)})]),
+        assets=ASSETS, settings=S,
+    )
+    assert ok["clips"][0]["out"] == float(S.max_still_sec)
+
+
+def test_звук_и_субтитры_в_клип_по_прежнему_не_идут():
+    assert errors_of(doc(clips=[clip(asset_id="ast_000000000003")])) == ["clips[0].asset_id"]
+    assert errors_of(doc(clips=[clip(asset_id="ast_000000000004")])) == ["clips[0].asset_id"]
+
+
+SND = "ast_000000000003"
+
+
+def sound(**over) -> dict:
+    return {"asset_id": SND, "at": 2.0, "in": 0.0, "out": 3.0, **over}
+
+
+def test_звук_ложится_на_свою_дорожку_со_своим_временем():
+    """У звука своё место на шкале — at: он идёт поверх речи клипов, а не в их очередь."""
+    out = validate_doc(doc(sounds=[sound()]), assets=ASSETS, settings=S)
+    assert out["sounds"] == [
+        {"id": "s1", "asset_id": SND, "at": 2.0, "in": 0.0, "out": 3.0, "volume": 1.0}
+    ]
+
+
+def test_без_звуков_дорожка_пустая_а_не_пропавшая():
+    # Старые документы приходят без ключа вовсе: читать их надо так же, как пустую дорожку.
+    assert validate_doc(doc(), assets=ASSETS, settings=S)["sounds"] == []
+
+
+def test_звук_проверяется_по_границам_виду_и_громкости():
+    assert errors_of(doc(sounds=[sound(at=-1)])) == ["sounds[0].at"]
+    assert errors_of(doc(sounds=[sound(out=500.0)])) == ["sounds[0].out"]  # запись длиной 200 с
+    assert errors_of(doc(sounds=[sound(volume=3)])) == ["sounds[0].volume"]
+    assert errors_of(doc(sounds=[sound(asset_id="ast_000000000004")])) == ["sounds[0].asset_id"]
+    assert errors_of(doc(sounds=[sound(asset_id=PIC)])) == ["sounds[0].asset_id"]
+    assert errors_of(doc(sounds="звук")) == ["sounds"]
+
+
+def test_id_звука_не_совпадает_ни_с_клипом_ни_с_другим_звуком():
+    """Выделение на шкале одно на клипы и звуки: общий id сделал бы его неоднозначным."""
+    assert errors_of(doc(sounds=[sound(id="c1")])) == ["sounds[0].id"]
+    assert errors_of(doc(sounds=[sound(id="x"), sound(id="x")])) == ["sounds[1].id"]
+
+
+def test_звук_может_свисать_за_конец_ролика():
+    """Ролик тут четыре секунды, звук лежит с сотой. Документ годен — лишнее обрежет сборка,
+    иначе укоротить видео под уже положенной озвучкой было бы нельзя без её удаления."""
+    out = validate_doc(
+        doc(sounds=[sound(at=100.0, **{"in": 0.0, "out": 150.0})]), assets=ASSETS, settings=S
+    )
+    assert out["sounds"][0]["at"] == 100.0

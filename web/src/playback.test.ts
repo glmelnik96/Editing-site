@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip } from './timeline/model'
-import { aspectRatio, incomingAt, musicVolume, nextClip, previewClipVolume, previewSpeechGain, resumePlan, seekPlan, stepPlan } from './playback'
+import {
+  aspectRatio,
+  incomingAt,
+  musicVolume,
+  nextClip,
+  previewClipVolume,
+  previewSpeechGain,
+  resumePlan,
+  seekPlan,
+  stepPlan,
+  soundPlan,
+} from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
   return {
@@ -174,5 +185,30 @@ describe('громкость клипа в превью', () => {
     expect(previewSpeechGain(undefined)).toBe(1)
     expect(previewSpeechGain({ speech_volume: 0.3 })).toBe(0.3)
     expect(previewSpeechGain({})).toBe(1)
+  })
+})
+
+describe('звуковая дорожка в превью', () => {
+  const s = (id: string, at: number, from: number, to: number) =>
+    ({ id, asset_id: `ast_${id}`, at, in: from, out: to, volume: 0.5 })
+
+  it('до своего места звук молчит, внутри играет со своего отрезка записи', () => {
+    const list = [s('s1', 2, 10, 14)]
+    expect(soundPlan(list, 1.9, 60)).toEqual([])
+    expect(soundPlan(list, 3.5, 60)).toEqual([{ id: 's1', assetId: 'ast_s1', time: 11.5, volume: 0.5 }])
+  })
+
+  it('конец звука не входит: на стыке двух звучит только второй', () => {
+    const list = [s('s1', 0, 0, 2), s('s2', 2, 0, 2)]
+    expect(soundPlan(list, 2, 60).map(c => c.id)).toEqual(['s2'])
+  })
+
+  it('перекрывающиеся звуки звучат вместе', () => {
+    const list = [s('s1', 0, 0, 5), s('s2', 3, 0, 5)]
+    expect(soundPlan(list, 4, 60).map(c => c.id)).toEqual(['s1', 's2'])
+  })
+
+  it('хвост за концом ролика не звучит, как и в собранном файле', () => {
+    expect(soundPlan([s('s1', 8, 0, 10)], 12, 10)).toEqual([])
   })
 })

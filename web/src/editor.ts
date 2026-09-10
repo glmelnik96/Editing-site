@@ -19,8 +19,20 @@ import {
   seekPlan,
   stepPlan,
   type Incoming,
+  soundPlan,
 } from './playback'
-import { createSaver, listRenders, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
+import {
+  createSaver,
+  listRenders,
+  loadProject,
+  type Cue,
+  type FieldError,
+  type Music,
+  type Project,
+  type ProjectDoc,
+  soundsOf,
+  type Sound,
+} from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { clampTransitions, clipAt, clipAssetIds, clipDuration, fadeInto, insertClip, maxFade, ms, newClipId, percentToZoom, removeClip, splitAt, timelineStart, totalDuration, trimClip, zoomToPercent, type Clip } from './timeline/model'
@@ -31,11 +43,33 @@ import { HOTKEYS, needsClip, shortcutFor, type Shortcut } from './hotkeys'
 import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTranscript } from './transcript'
+import { newSoundId, removeSound, setSoundVolume } from './timeline/sounds'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
 
 /** Шаг опроса записей, когда ничего не обрабатывается и не расшифровывается. */
 const IDLE_POLL_MS = 20000
+
+// Вид редактора — привычка человека, а не свойство проекта: свёрнутая панель и открытая складка
+// живут в браузере. В документе им делать нечего, там их увидели бы все, кто откроет проект.
+const SIDE_KEY = 'ed.side'
+const FOLD_KEY = 'ed.fold'
+
+function readPref(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback // приватный режим: вид просто не запомнится
+  }
+}
+
+function savePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* см. readPref */
+  }
+}
 
 const STATE_TEXT = {
   idle: 'сохранено',
@@ -58,20 +92,29 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         <div class="saves-panel" id="ed-saves-panel" hidden></div>
       </div>
     </div>
-    <div class="editor">
+    <div class="editor" id="ed-grid">
       <section class="side">
-        <nav class="tabs" id="ed-tabs">
-          <button type="button" class="tab" data-tab="source">Исходники</button>
-          <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
-          <button type="button" class="tab" data-tab="renders">Рендер</button>
-        </nav>
-        <div id="ed-source" data-panel="source">
-          <div id="ed-source-main"></div>
-          <div id="ed-transcript"></div>
-          <div id="ed-music"></div>
+        <!-- Голова панели не прокручивается вместе с её содержимым: вкладки нужны с любого места
+             списка, а кнопке сворачивания уезжать нельзя вовсе — свернув панель, ею же и
+             разворачивают обратно. -->
+        <div class="side-head">
+          <nav class="tabs" id="ed-tabs">
+            <button type="button" class="tab" data-tab="source">Исходники</button>
+            <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
+            <button type="button" class="tab" data-tab="renders">Рендер</button>
+          </nav>
+          <button type="button" class="side-fold" id="ed-side-toggle" aria-expanded="true"
+            aria-controls="ed-side-body" title="Свернуть панель: ролик и шкала станут шире">‹</button>
         </div>
-        <div id="ed-subtitles" data-panel="subtitles" hidden></div>
-        <section id="ed-renders" data-panel="renders" hidden></section>
+        <div class="side-body" id="ed-side-body">
+          <div id="ed-source" data-panel="source">
+            <div id="ed-source-main"></div>
+            <div id="ed-transcript"></div>
+            <div id="ed-music"></div>
+          </div>
+          <div id="ed-subtitles" data-panel="subtitles" hidden></div>
+          <section id="ed-renders" data-panel="renders" hidden></section>
+        </div>
       </section>
       <section>
         <div class="stage" id="ed-stage"></div>
@@ -171,6 +214,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
   const saves = el.querySelector('#ed-saves') as HTMLElement
   const savesToggle = el.querySelector('#ed-saves-toggle') as HTMLButtonElement
+  const grid = el.querySelector('#ed-grid') as HTMLElement
+  const sideBody = el.querySelector('#ed-side-body') as HTMLElement
+  const sideToggle = el.querySelector('#ed-side-toggle') as HTMLButtonElement
   const savesPanel = el.querySelector('#ed-saves-panel') as HTMLElement
 
   let project: Project | null = null
@@ -195,7 +241,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let timelineTime = 0
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
-  let renders: { stop: () => void; setDoc: (doc: ProjectDoc, name?: string) => void } | null = null
+  let renders: {
+    stop: () => void
+    setDoc: (doc: ProjectDoc, name?: string) => void
+    setAssets: (list: Asset[]) => void
+  } | null = null
   let assetTimer = 0
   const analysisCache = new Map<string, { start: number; end: number }[] | null>()
   const analysisPending = new Set<string>()
@@ -235,6 +285,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const picked = source.current()
     if (picked) transcript.setAsset(list.find(a => a.id === picked.id) ?? null)
     musicPanel.setAssets(list)
+    renders?.setAssets(list)
     if (project) {
       const ids = clipAssetIds(project.doc.clips)
       for (const id of ids) {
@@ -351,6 +402,49 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   const proxyOf = (assetId: string): string | null => assetList.find(a => a.id === assetId)?.files.proxy ?? null
 
+  // Звуки дорожки в превью: по элементу audio на звук, а не на запись — два куска одной записи
+  // могут звучать одновременно. Часы у них свои, поэтому на каждом тике сверяем с временем
+  // шкалы и подводим, если разошлись заметно: мелкий разнобой на слух не слышен, а перемотка
+  // на каждом тике щёлкала бы.
+  const SOUND_DRIFT_SEC = 0.3
+  const soundPlayers = new Map<string, HTMLAudioElement>()
+
+  function syncSounds(): void {
+    if (!project) return
+    const sounds = soundsOf(project.doc)
+    const cues = playing ? soundPlan(sounds, timelineTime, totalDuration(project.doc.clips)) : []
+    const live = new Set(cues.map(cue => cue.id))
+    for (const [id, player] of soundPlayers) {
+      if (!live.has(id) && !player.paused) player.pause()
+      if (!sounds.some(sound => sound.id === id)) {
+        player.removeAttribute('src')
+        soundPlayers.delete(id)
+      }
+    }
+    // Ползунок «Речь» в сборке режет и звуковую дорожку: она влита в речь до музыки.
+    const speech = previewSpeechGain(project.doc.music)
+    for (const cue of cues) {
+      const src = proxyOf(cue.assetId)
+      if (!src) continue
+      let player = soundPlayers.get(cue.id)
+      if (!player) {
+        player = new Audio()
+        player.preload = 'auto'
+        soundPlayers.set(cue.id, player)
+      }
+      if (!player.src.endsWith(src)) player.src = src
+      if (Math.abs(player.currentTime - cue.time) > SOUND_DRIFT_SEC) player.currentTime = cue.time
+      player.volume = previewClipVolume(cue.volume, speech)
+      if (player.paused) void player.play().catch(() => {})
+    }
+  }
+
+  function pauseSounds(): void {
+    soundPlayers.forEach(player => {
+      if (!player.paused) player.pause()
+    })
+  }
+
   function swap(): void {
     const hidden = active === videoA ? videoB : videoA
     active.pause()
@@ -428,6 +522,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         setPlaying(false)
         active.pause()
         music.pause()
+        pauseSounds()
         underTrack('Следующий файл ещё обрабатывается, воспроизведение остановлено')
         return
       }
@@ -451,6 +546,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   const timeline = mountTimeline(el.querySelector('#ed-timeline') as HTMLElement, {
     onChange: applyClips,
+    onSoundsChange: applySounds,
     onSeek: seek,
     onSelect: () => {
       syncBar()
@@ -482,6 +578,40 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     underTrack('Кусок на шкале')
   }
 
+  /**
+   * Положить звук на его дорожку под курсор.
+   *
+   * Под курсор, а не в конец: звук кладут под определённое место картинки — озвучить этот кадр,
+   * подложить шум под эту сцену, — и курсор человек ставит туда заранее.
+   */
+  function addSound(assetId: string, from: number, to: number): void {
+    if (!project) return
+    const sounds = soundsOf(project.doc)
+    const sound: Sound = {
+      id: newSoundId(project.doc.clips, sounds),
+      asset_id: assetId,
+      at: ms(timelineTime),
+      in: ms(from),
+      out: ms(to),
+      volume: 1,
+    }
+    applySounds([...sounds, sound])
+    selectClip(sound.id)
+    underTrack(`Звук на звуковой дорожке с ${timelineTime.toFixed(1)} с`)
+  }
+
+  /** Выбранный звук, если выбран звук, а не клип: выделение у дорожек общее. */
+  function chosenSound(): Sound | null {
+    const id = timeline.selected()
+    if (!project || !id) return null
+    return soundsOf(project.doc).find(sound => sound.id === id) ?? null
+  }
+
+  /** Честный отказ вместо молчания: со звуком пока умеем не всё, что с клипом. */
+  function soundCannot(): void {
+    underTrack('Звук пока можно двигать, менять ему громкость и удалять')
+  }
+
   const sourceMain = el.querySelector('#ed-source-main') as HTMLElement
   // Монтаж по тексту стоит под плеером исходника: слова выбирают на слух по нему, а сцена справа
   // играет уже собранный ролик. Времена слов интерполированы (±0.3 с), поэтому клип ставим со
@@ -494,12 +624,38 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       const asset = source.current()
       if (asset) addClip(asset.id, from, to, true)
     },
+    onFold: () => setFold(openFold === 'words' ? null : 'words'),
   })
   const source = mountSource(sourceMain, {
-    onAdd: (asset, range) => addClip(asset.id, range.from, range.to, false),
+    // Звук идёт на свою дорожку под курсор, видео и картинка — в очередь клипов.
+    onAdd: (asset, range) =>
+      asset.kind === 'audio'
+        ? addSound(asset.id, range.from, range.to)
+        : addClip(asset.id, range.from, range.to, false),
     onPick: asset => transcript.setAsset(asset),
     onTime: seconds => transcript.setTime(seconds),
+    onFold: () => setFold(openFold === 'cut' ? null : 'cut'),
   })
+
+  /**
+   * Способ отрезать кусок: по времени или по словам. Открыт ровно один или ни одного.
+   *
+   * Файл у обоих способов общий, и два развёрнутых инструмента над одним плеером читались бы
+   * как две независимые заготовки. Щелчок по открытому заголовку закрывает его и не открывает
+   * соседа: свернув оба, человек получает панель, где виден только выбор файла и плеер.
+   */
+  type Fold = 'cut' | 'words'
+  let openFold: Fold | null = null
+
+  function setFold(next: Fold | null): void {
+    openFold = next
+    source.setFold(next === 'cut')
+    transcript.setFold(next === 'words')
+    savePref(FOLD_KEY, next ?? 'none')
+  }
+
+  const savedFold = readPref(FOLD_KEY, 'cut')
+  setFold(savedFold === 'words' ? 'words' : savedFold === 'none' ? null : 'cut')
   const musicPanel = mountMusic(el.querySelector('#ed-music') as HTMLElement, {
     onChange: applyMusic,
   })
@@ -610,6 +766,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         },
       )
       if (project) renders.setDoc(project.doc, project.name)
+      // Записи нужны подписи о битрейте и кадре исходников: панель рождается позже списка.
+      renders.setAssets(assetList)
     }
   }
 
@@ -643,6 +801,26 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function onSavesPointerDown(event: PointerEvent): void {
     if (!saves.contains(event.target as Node)) closeSaves()
   }
+
+  /**
+   * Свернуть левую колонку: ролик и шкала занимают её место, сцена становится выше.
+   *
+   * Монтируют, глядя на шкалу и на кадр, а исходники нужны только когда берут новый кусок.
+   * Кнопка остаётся на месте свёрнутой панели — иначе развернуть её было бы нечем.
+   */
+  function setSide(open: boolean): void {
+    grid.classList.toggle('side-off', !open)
+    sideBody.hidden = !open
+    sideToggle.textContent = open ? '‹' : '›'
+    sideToggle.setAttribute('aria-expanded', String(open))
+    sideToggle.title = open
+      ? 'Свернуть панель: ролик и шкала станут шире'
+      : 'Развернуть панель исходников'
+    savePref(SIDE_KEY, open ? 'on' : 'off')
+  }
+
+  sideToggle.addEventListener('click', () => setSide(sideBody.hidden))
+  setSide(readPref(SIDE_KEY, 'on') !== 'off')
 
   savesToggle.addEventListener('click', () => {
     if (!savesPanel.hidden) {
@@ -683,6 +861,15 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // Список изменился под играющим клипом: номер клипа больше ничего не значит, встаём заново
     // по времени шкалы. Иначе плеер продолжил бы мерить время удалённого клипа.
     if (playing) seek(Math.min(timelineTime, totalDuration(clips)))
+  }
+
+  /** Правка звуковой дорожки: как у клипов — в историю, на шкалу, в сохранение и в превью. */
+  function applySounds(sounds: Sound[]): void {
+    if (!project) return
+    remember()
+    project = { ...project, doc: { ...project.doc, sounds } }
+    render()
+    saver.schedule(project)
   }
 
   function applyMusic(next: Music | null, live = false): void {
@@ -742,6 +929,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function applyPreviewVolumes(): void {
     if (!project) return
+    // Звуки сверяются здесь же: этот вызов стоит на каждом тике, перемотке и пуске.
+    syncSounds()
     const clips = project.doc.clips
     const found = clipAt(clips, timelineTime)
     const hidden = active === videoA ? videoB : videoA
@@ -782,14 +971,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     splitButton.disabled = !has
     zoomInButton.disabled = !has
     zoomOutButton.disabled = !has
-    copyButton.disabled = !chosen
+    const sound = chosenSound()
+    copyButton.disabled = !chosen || sound !== null
     deleteButton.disabled = !chosen
-    clipMark.textContent = chosen ? 'Выбранный клип' : 'Клип не выбран'
+    clipMark.textContent = sound ? 'Выбранный звук' : chosen ? 'Выбранный клип' : 'Клип не выбран'
   }
 
   function syncClipVolume(): void {
     const id = timeline.selected()
-    const clip = project?.doc.clips.find(c => c.id === id)
+    // Громкость — общее свойство клипа и звука, поэтому ползунок один на оба.
+    const clip = project?.doc.clips.find(c => c.id === id) ?? chosenSound()
     volumeInput.disabled = !clip
     // Громкость клипа появилась позже самих клипов: у проекта, сохранённого до неё, ключа нет,
     // и `undefined <= 1` — ложь. Ползунок вставал в "undefined" (браузер молча правил на 1),
@@ -814,7 +1005,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (canFade) fadeInput.max = String(maxFade(clips[index - 1], clip))
   }
 
-  async function ensureData(clips: Clip[]): Promise<void> {
+  /** Волны и кадры записей шкалы: и клипов, и звуков — звуку волна нужна не меньше. */
+  async function ensureData(clips: { asset_id: string }[]): Promise<void> {
     const ids = new Set(clips.map(c => c.asset_id))
     await Promise.all(
       Array.from(ids).map(async id => {
@@ -839,7 +1031,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stage.style.aspectRatio = String(ratio)
     stage.style.maxWidth = `calc(${ratio} * var(--stage-h))`
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
-    timeline.render({ clips: project.doc.clips, assets, data })
+    timeline.render({ clips: project.doc.clips, sounds: soundsOf(project.doc), assets, data })
     timeline.setPlayhead(timelineTime)
     subtitles.setProject(project)
     subtitles.setTimeline(project.doc.clips, assetList)
@@ -851,7 +1043,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     showTime()
     applyPreviewVolumes()
     renders?.setDoc(project.doc, project.name)
-    void ensureData(project.doc.clips)
+    void ensureData([...project.doc.clips, ...soundsOf(project.doc)])
     syncTabs()
   }
 
@@ -863,6 +1055,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       const hidden = active === videoA ? videoB : videoA
       hidden.pause()
       music.pause()
+      pauseSounds()
       return
     }
     const plan = resumePlan(project.doc.clips, { index: playIndex, sourceTime: active.currentTime })
@@ -923,7 +1116,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function removeSelected(): void {
     const id = timeline.selected()
     if (!project || !id) return underTrack('Сначала выберите клип на шкале')
-    applyClips(removeClip(project.doc.clips, id))
+    if (chosenSound()) applySounds(removeSound(soundsOf(project.doc), id))
+    else applyClips(removeClip(project.doc.clips, id))
     selectClip(null)
   }
 
@@ -1080,13 +1274,15 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       volumeRemembered = true
     }
     const volume = Math.round(Number(volumeInput.value) * 1000) / 1000
-    project = {
-      ...project,
-      doc: {
-        ...project.doc,
-        clips: project.doc.clips.map(clip => (clip.id === id ? { ...clip, volume } : clip)),
-      },
-    }
+    project = chosenSound()
+      ? { ...project, doc: { ...project.doc, sounds: setSoundVolume(soundsOf(project.doc), id, volume) } }
+      : {
+          ...project,
+          doc: {
+            ...project.doc,
+            clips: project.doc.clips.map(clip => (clip.id === id ? { ...clip, volume } : clip)),
+          },
+        }
     volumeNote.hidden = volume <= 1
     applyPreviewVolumes()
     saver.schedule(project)
@@ -1226,19 +1422,23 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         removeSelected()
         break
       case 'duplicate':
-        duplicateSelected()
+        if (chosenSound()) soundCannot()
+        else duplicateSelected()
         break
       case 'copy':
-        copySelected()
+        if (chosenSound()) soundCannot()
+        else copySelected()
         break
       case 'paste':
         pasteClip()
         break
       case 'trimIn':
-        trimToPlayhead('in')
+        if (chosenSound()) soundCannot()
+        else trimToPlayhead('in')
         break
       case 'trimOut':
-        trimToPlayhead('out')
+        if (chosenSound()) soundCannot()
+        else trimToPlayhead('out')
         break
       case 'prevClip':
         stepClip(-1)
@@ -1283,6 +1483,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   return {
     stop(): void {
+      pauseSounds()
+      soundPlayers.forEach(player => player.removeAttribute('src'))
       stopped = true
       window.clearTimeout(assetTimer)
       document.removeEventListener('keydown', onKey)

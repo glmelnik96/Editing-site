@@ -20,6 +20,7 @@ class GridLayout:
     interval: float
     frame_width: int
     frame_height: int
+    still: bool = False
 
 
 def grid_layout(settings: Settings, *, duration: float, width: int | None, height: int | None) -> GridLayout:
@@ -38,8 +39,26 @@ def grid_layout(settings: Settings, *, duration: float, width: int | None, heigh
     return GridLayout(count=count, cols=cols, rows=rows, interval=interval, frame_width=fw, frame_height=fh)
 
 
+def still_layout(settings: Settings, *, width: int | None, height: int | None) -> GridLayout:
+    """Раскадровка картинки: одна клетка.
+
+    Все кадры картинки одинаковые, делить её не на что. Клиент берёт номер клетки как время,
+    делённое на шаг, и зажимает его в count − 1 — поэтому любой момент клипа показывает эту
+    единственную клетку, и шкала с карточкой рисуют картинку тем же кодом, что и ролик.
+    Сетку в одну колонку ставим сами: общая дала бы спрайт в десять клеток, девять из них чёрные.
+    """
+    base = grid_layout(settings, duration=0.0, width=width, height=height)
+    return GridLayout(
+        count=1, cols=1, rows=1, interval=base.interval,
+        frame_width=base.frame_width, frame_height=base.frame_height, still=True,
+    )
+
+
 def thumbs_args(settings: Settings, src: str, dst: str, layout: GridLayout) -> list[str]:
-    chain = f"fps=1/{layout.interval},scale={layout.frame_width}:-2,tile={layout.cols}x{layout.rows}"
+    # У картинки кадр один, и фильтр fps его выбрасывает: у кадра нет длительности, отбирать по
+    # времени нечего — ffmpeg отвечает «Nothing was written… received no packets» (png, jpg).
+    pick = "" if layout.still else f"fps=1/{layout.interval},"
+    chain = f"{pick}scale={layout.frame_width}:-2,tile={layout.cols}x{layout.rows}"
     return [
         settings.ffmpeg_path, "-v", "error", "-y", "-i", src,
         "-vf", chain, "-frames:v", "1", "-q:v", "5", dst,

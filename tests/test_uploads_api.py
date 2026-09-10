@@ -71,7 +71,7 @@ def test_create_validation_and_limits(client, login_as, monkeypatch):
     assert r.status_code == 422
     r = client.post("/api/v1/uploads", json={"filename": "a.mp4", "size": 9 * 1024 * 1024})
     assert r.status_code == 413 and r.json()["error"]["code"] == "too_large"
-    r = client.post("/api/v1/uploads", json={"filename": "a.mp4", "size": 10, "kind": "image"})
+    r = client.post("/api/v1/uploads", json={"filename": "a.mp4", "size": 10, "kind": "гифка"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_kind"
     _create(client, 6 * 1024 * 1024)
     r = client.post("/api/v1/uploads", json={"filename": "b.mp4", "size": 5 * 1024 * 1024})

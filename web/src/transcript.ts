@@ -12,6 +12,7 @@
  */
 import { ApiError, isRetryable } from './api'
 import { loadAsset, type Asset } from './assets'
+import { foldHtml, wireFold } from './fold'
 import { escapeHtml } from './html'
 import {
   loadJob,
@@ -48,6 +49,8 @@ export type TranscriptHandlers = {
   onSeek: (seconds: number) => void
   /** Положить кусок на шкалу: времена крайних выделенных слов. */
   onTake: (start: number, end: number) => void
+  /** Щёлкнули по заголовку складки. Открыть или закрыть решает редактор: складок две. */
+  onFold?: () => void
 }
 
 /** Слово с координатами; segment — номер реплики, по нему слова раскладываются обратно в абзацы. */
@@ -121,27 +124,31 @@ function edgeNote(segment: TranscriptSegment): string {
 export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
   el.innerHTML = `
     <main class="card">
-      <h3>Текст</h3>
-      <p class="muted" id="tr-hint">Выберите файл, чтобы монтировать по тексту.</p>
-      <div id="tr-start" hidden>
-        <div class="row">
-          <button id="tr-run" type="button">Расшифровать</button>
+      ${foldHtml(
+        'tr',
+        'Взять реплику',
+        `<p class="muted" id="tr-hint">Выберите файл, чтобы монтировать по тексту.</p>
+        <div id="tr-start" hidden>
+          <div class="row">
+            <button id="tr-run" type="button">Расшифровать</button>
+          </div>
         </div>
-      </div>
-      <div id="tr-job" hidden>
-        <span class="muted" id="tr-status"></span>
-      </div>
-      <div class="transcript" id="tr-text" hidden></div>
-      <!-- Кнопка куска стоит под текстом: появись она над ним, текст съезжал бы вниз прямо
-           под указателем в тот момент, когда выделение только протаскивают. -->
-      <div id="tr-take" hidden>
-        <div class="row">
-          <button id="tr-take-run" type="button">Взять кусок</button>
-          <span class="muted" id="tr-take-note"></span>
+        <div id="tr-job" hidden>
+          <span class="muted" id="tr-status"></span>
         </div>
-      </div>
-      <pre id="tr-error" hidden></pre>
+        <div class="transcript" id="tr-text" hidden></div>
+        <!-- Кнопка куска стоит под текстом: появись она над ним, текст съезжал бы вниз прямо
+             под указателем в тот момент, когда выделение только протаскивают. -->
+        <div id="tr-take" hidden>
+          <div class="row">
+            <button id="tr-take-run" type="button">Взять кусок</button>
+            <span class="muted" id="tr-take-note"></span>
+          </div>
+        </div>
+        <pre id="tr-error" hidden></pre>`,
+      )}
     </main>`
+  const showWords = wireFold(el, 'tr', () => handlers.onFold?.())
   const hint = el.querySelector('#tr-hint') as HTMLElement
   const startBox = el.querySelector('#tr-start') as HTMLElement
   const runButton = el.querySelector('#tr-run') as HTMLButtonElement
@@ -451,6 +458,11 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
   })
 
   return {
+    /** Показать или спрятать монтаж по словам. Решение принимает редактор. */
+    setFold(open: boolean): void {
+      showWords(open)
+    },
+
     /** Выбранный в панели исходника файл: тот же самый файл панель не перезагружает. */
     setAsset(next: Asset | null): void {
       if (next?.id === asset?.id) {
@@ -471,6 +483,12 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       reset()
       if (!next) {
         hint.textContent = 'Выберите файл, чтобы монтировать по тексту.'
+        return
+      }
+      if (next.kind === 'image') {
+        // Расшифровывать нечего, и «Расшифровать» тут было бы кнопкой в никуда: задание упало бы
+        // на извлечении звука, а человек так и не понял бы, чего от него хотели.
+        hint.textContent = 'У картинки текста нет: реплику берут из видео или звука.'
         return
       }
       if (next.files.transcript) {

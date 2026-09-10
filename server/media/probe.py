@@ -10,18 +10,28 @@ from server.media.run import MediaError, run_tool
 PROBE_TIMEOUT_SEC = 60
 
 
+# Контейнеры одиночной картинки. Всё, что оканчивается на «_pipe» (png_pipe, webp_pipe,
+# bmp_pipe, tiff_pipe), — тоже они: ffmpeg читает такой файл как поток одного кадра.
+# gif сюда попадает условно: он бывает и анимацией, её отличает число кадров.
+IMAGE_FORMATS = {"image2", "image2pipe", "gif"}
+
+
 @dataclass(frozen=True)
 class MediaInfo:
-    duration: float
+    duration: float | None
     width: int | None
     height: int | None
     fps: float | None
     has_audio: bool
     video_codec: str | None
     audio_codec: str | None
+    bit_rate: int | None = None
+    still: bool = False
 
     @property
     def kind(self) -> str:
+        if self.still:
+            return "image"
         return "video" if self.video_codec else "audio"
 
 
@@ -60,20 +70,68 @@ def _duration(data: dict, video: dict | None, audio: dict | None) -> float:
     raise MediaError("no_duration", "Не удалось определить длительность файла")
 
 
+def _frames(stream: dict) -> int | None:
+    raw = stream.get("nb_frames")
+    if raw in (None, "", "N/A"):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_still(fmt: dict, video: dict | None, audio: dict | None) -> bool:
+    """Одиночная картинка, а не ролик.
+
+    По длительности не отличить: JPEG приходит с честными на вид 0.04 секунды — это один кадр
+    при 25 к/с, — а PNG и WebP не приходят с ней вовсе. Отличает контейнер. Единственный
+    двусмысленный — gif: анимация в нём живёт кадрами, поэтому там смотрим на их число.
+    """
+    if video is None or audio is not None:
+        return False
+    names = {name.strip() for name in str(fmt.get("format_name") or "").split(",")}
+    if not (names & IMAGE_FORMATS or any(name.endswith("_pipe") for name in names)):
+        return False
+    frames = _frames(video)
+    return frames is None or frames <= 1
+
+
+def _bit_rate(fmt: dict, video: dict | None) -> int | None:
+    """Битрейт исходника. У видеопотока он точнее — без звука и обвязки контейнера, — но в
+    mkv и webm его обычно нет, и тогда берём общий по файлу."""
+    for source in (video or {}, fmt):
+        raw = source.get("bit_rate")
+        if raw in (None, "", "N/A"):
+            continue
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 def parse_probe(data: dict) -> MediaInfo:
     streams = data.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video" and not _is_cover(s)), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     if video is None and audio is None:
         raise MediaError("no_streams", "В файле нет ни видео, ни звука")
+    fmt = data.get("format") or {}
+    still = _is_still(fmt, video, audio)
     return MediaInfo(
-        duration=_duration(data, video, audio),
+        # У картинки длительности нет: сколько она висит в кадре, решают на шкале. Битрейт
+        # одного кадра тоже ничего не значит — «6 Мбит/с» у JPEG это его вес, делённый на 0.04 с.
+        duration=None if still else _duration(data, video, audio),
         width=video.get("width") if video else None,
         height=video.get("height") if video else None,
-        fps=_fps(video) if video else None,
+        fps=None if still else (_fps(video) if video else None),
         has_audio=audio is not None,
         video_codec=video.get("codec_name") if video else None,
         audio_codec=audio.get("codec_name") if audio else None,
+        bit_rate=None if still else _bit_rate(fmt, video),
+        still=still,
     )
 
 

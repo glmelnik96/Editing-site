@@ -51,3 +51,18 @@ def test_progress_lines():
     assert parse_progress("out_time_us=N/A", total=3.0) is None
     assert parse_progress("frame=12", total=3.0) is None
     assert parse_progress("out_time_us=100", total=0.0) is None
+
+
+def test_image_proxy_is_a_still_video_as_long_as_a_still_may_last():
+    """Прокси картинки — неподвижный ролик: сцена редактора стоит на элементах video, и их часы —
+    это currentTime. Ролик короче предела остановил бы сцену посреди клипа с картинкой."""
+    settings = Settings(_env_file=None)
+    assert proxy_name("image") == "proxy.mp4"
+    args = proxy_args(settings, "/d/source.png", "/d/proxy.mp4.part", kind="image")
+    joined = " ".join(args)
+    assert f"-loop 1 -framerate 5 -t {settings.max_still_sec} -i /d/source.png" in joined
+    assert "-tune stillimage" in joined
+    # Звука у картинки нет, и дорожку тишины сюда не кладём: сцена берёт звук из клипов.
+    assert "-an" in args and "-c:a" not in args
+    # Контейнер задаём явно: пишем во временный .part, по нему ffmpeg формат не угадает.
+    assert args[-3:] == ["-f", "mp4", "/d/proxy.mp4.part"]

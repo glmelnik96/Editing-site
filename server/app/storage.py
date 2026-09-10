@@ -8,10 +8,22 @@ from pathlib import Path
 
 from server.app.config import Settings
 
-KINDS = ("video", "audio", "subtitle")
+KINDS = ("video", "audio", "image", "subtitle")
 TRANSCRIPT_NAME = "transcript.json"
-VIDEO_EXTS = {"mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "mxf", "ts", "wmv", "flv", "3gp"}
-AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff", "aif", "wma"}
+# Расширения, по которым вид записи угадывается до анализа. Настоящий вид ставит ffprobe: он
+# один знает, что внутри, — поэтому список здесь широкий и ошибка в нём не смертельна. Смертельно
+# отсутствие в нём: незнакомое расширение загрузку не начинает (см. resolve_kind в uploads/store).
+VIDEO_EXTS = {
+    "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "mxf", "ts", "wmv", "flv", "3gp",
+    "mpg", "mpeg", "m2v", "ogv", "asf", "vob", "divx", "f4v", "3g2",
+}
+AUDIO_EXTS = {
+    "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff", "aif", "wma",
+    "mka", "m4b", "oga", "amr", "caf", "ac3", "mp2", "wv",
+}
+# heic и avif сюда не входят намеренно: их читает не всякая сборка ffmpeg, а обещать формат,
+# который потом не откроется, хуже, чем не обещать его вовсе.
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif"}
 SUBTITLE_EXTS = {"srt", "vtt"}
 # Файлы ассета, которые отдаются наружу. source.* сюда не входит намеренно (раздел 11 спеки).
 PUBLIC_FILES = (
@@ -33,15 +45,28 @@ def safe_ext(filename: str) -> str:
 
 
 def kind_from_ext(ext: str) -> str | None:
-    """Тип по расширению без точки (регистр не важен): video, audio, subtitle или None."""
+    """Тип по расширению без точки (регистр не важен): video, audio, image, subtitle или None."""
     ext = ext.lower()
     if ext in VIDEO_EXTS:
         return "video"
     if ext in AUDIO_EXTS:
         return "audio"
+    if ext in IMAGE_EXTS:
+        return "image"
     if ext in SUBTITLE_EXTS:
         return "subtitle"
     return None
+
+
+def known_exts() -> dict[str, list[str]]:
+    """Что можно загрузить, по видам. Отсюда и проверка, и подпись на экране записей: разойдясь,
+    они обещали бы человеку не то, что принимают."""
+    return {
+        "video": sorted(VIDEO_EXTS),
+        "audio": sorted(AUDIO_EXTS),
+        "image": sorted(IMAGE_EXTS),
+        "subtitle": sorted(SUBTITLE_EXTS),
+    }
 
 
 def _check_id(value: str) -> str:
@@ -84,8 +109,13 @@ def subs_dir(settings: Settings, user_id: str, project_id: str) -> Path:
     return project_dir(settings, user_id, project_id) / "subs"
 
 
-def render_url(user_id: str, project_id: str, render_id: str) -> str:
-    return f"/files/{user_id}/projects/{project_id}/renders/{render_id}.mp4"
+# Форматы готового ролика. Имя файла — «{id}.{формат}», и по нему же отдаётся тип содержимого.
+RENDER_FORMATS = ("mp4", "webm", "m4a")
+RENDER_MEDIA_TYPES = {"mp4": "video/mp4", "webm": "video/webm", "m4a": "audio/mp4"}
+
+
+def render_url(user_id: str, project_id: str, render_id: str, fmt: str = "mp4") -> str:
+    return f"/files/{user_id}/projects/{project_id}/renders/{render_id}.{fmt}"
 
 
 def upload_path(settings: Settings, upload_id: str) -> Path:
@@ -101,7 +131,7 @@ def parse_file_url(path: str) -> tuple[str, str, str, str] | None:
 
     Две формы ассета: файлы (`/assets/{id}/{имя}`) и конверсии
     (`/assets/{id}/conversions/{id}.{ext}`). Готовые ролики —
-    `/projects/{id}/renders/{id}.mp4`. Вид возвращается четвёртым элементом, чтобы вызывающий
+    `/projects/{id}/renders/{id}.{mp4|webm|m4a}`. Вид возвращается четвёртым элементом, чтобы вызывающий
     не разбирал путь второй раз.
     """
     m = _CONVERSION_URL_RE.match(path)
@@ -128,8 +158,9 @@ def parse_file_url(path: str) -> tuple[str, str, str, str] | None:
         user_id, project_id, name = m.groups()
         if not (ID_RE.match(user_id) and ID_RE.match(project_id)):
             return None
-        # Имя ролика всегда «{id}.mp4»: ничего другого в этом каталоге наружу не отдаётся.
-        if not name.endswith(".mp4") or not ID_RE.match(name[: -len(".mp4")]):
+        # Имя ролика — «{id}.{формат}»: ничего другого в этом каталоге наружу не отдаётся.
+        stem, sep, ext = name.rpartition(".")
+        if not sep or ext not in RENDER_FORMATS or not ID_RE.match(stem):
             return None
         return user_id, project_id, name, "render"
     return None

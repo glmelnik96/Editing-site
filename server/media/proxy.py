@@ -18,7 +18,19 @@ PRESET = "veryfast"
 PROXY_BY_KIND = {
     "video": ("proxy.mp4", "mp4"),
     "audio": ("proxy.m4a", "ipod"),
+    # Прокси картинки — неподвижное видео, а не JPEG. Сцена редактора целиком стоит на двух
+    # элементах video: их currentTime — это часы склейки, а переход — их прозрачность. Картинка
+    # в виде ролика проходит по этому пути без единого частного случая, а для отдельного <img>
+    # пришлось бы заводить искусственные часы в самом хрупком месте редактора.
+    "image": ("proxy.mp4", "mp4"),
 }
+# Кадров в секунду у неподвижного прокси. Больше незачем: картинка не меняется, а часы
+# склейки браузер ведёт по времени, а не по кадрам. Пять кадров — секунды на кодирование.
+STILL_FPS = 5
+# Ключевой кадр раз в 50 секунд. Перемотка к любому месту декодирует от ближайшего ключевого,
+# но у неподвижной картинки промежуточные кадры пустые и декодируются мгновенно, а файл на
+# 600 секунд весит 210 КБ вместо 700 при ключевом кадре раз в 10 (замерено).
+STILL_GOP = 250
 
 
 def proxy_name(kind: str) -> str:
@@ -45,6 +57,19 @@ def proxy_args(settings: Settings, src: str, dst: str, *, kind: str) -> list[str
         "-progress", "pipe:1", "-nostats",
         "-i", src,
     ]
+    if kind == "image":
+        # Длина прокси — предел, сколько картинка может висеть в кадре: клип длиннее проверка
+        # документа не пропустит, и сцене всегда хватит ролика. Звука у картинки нет (-an).
+        return [
+            settings.ffmpeg_path, "-v", "error", "-y",
+            "-progress", "pipe:1", "-nostats",
+            "-loop", "1", "-framerate", str(STILL_FPS), "-t", str(settings.max_still_sec),
+            "-i", src,
+            "-vf", f"{scale_filter(settings.proxy_long_side)},format=yuv420p",
+            "-c:v", "libx264", "-preset", PRESET, "-tune", "stillimage", "-crf", CRF,
+            "-g", str(STILL_GOP), "-an", "-movflags", "+faststart",
+            "-f", PROXY_BY_KIND[kind][1], dst,
+        ]
     if kind == "video":
         args += [
             "-vf", scale_filter(settings.proxy_long_side),

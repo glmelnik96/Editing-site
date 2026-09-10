@@ -15,6 +15,7 @@ from server.app.auth.sessions import create_session, delete_session
 from server.app.auth.users import is_whitelisted, upsert_user
 from server.app.errors import ApiError
 from server.app.security import SESSION_COOKIE, client_ip, is_bearer
+from server.app.storage import known_exts
 from server.app.uploads.store import used_bytes
 from server.db.core import get_db
 
@@ -144,3 +145,28 @@ def me(
     response.headers["Cache-Control"] = "no-store"
     limit = request.app.state.settings.user_quota_bytes
     return MeView(**user.model_dump(), quota=Quota(used_bytes=used_bytes(conn, user.id), limit_bytes=limit))
+
+
+class LimitsView(BaseModel):
+    max_upload_bytes: int
+    max_still_sec: int
+    formats: dict[str, list[str]]
+
+
+@me_router.get("/limits", response_model=LimitsView)
+def limits(
+    request: Request,
+    user: CurrentUser = Depends(current_user),  # noqa: B008
+) -> LimitsView:
+    """Что и какого размера принимает сервер.
+
+    Отдельной ручкой, потому что список форматов нужен на экране записей, а держать его копию
+    в браузере значит однажды пообещать формат, который сервер уже не принимает, или смолчать
+    о принимаемом. Здесь у подписи и у проверки один источник.
+    """
+    settings = request.app.state.settings
+    return LimitsView(
+        max_upload_bytes=settings.max_upload_bytes,
+        max_still_sec=settings.max_still_sec,
+        formats=known_exts(),
+    )
