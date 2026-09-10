@@ -66,19 +66,23 @@ def delete_conversion(conn: sqlite3.Connection, user_id: str, conversion_id: str
     return True
 
 
-def evict_oldest(conn: sqlite3.Connection, asset_id: str, *, keep: int = MAX_READY - 1) -> None:
-    """При новой конверсии готовых не больше 10: старше вытесняем, как снимки проекта."""
+def evict_oldest(conn: sqlite3.Connection, asset_id: str, *, keep: int = MAX_READY - 1) -> list[Path]:
+    """При новой конверсии готовых не больше 10: старше вытесняем, как снимки проекта.
+
+    Файлы не трогаем — отдаём их пути вызывающему. Нас зовут внутри транзакции, а удалять файл
+    внутри неё нельзя: откат вернёт строки, файлов уже не будет, и «Скачать» у них навсегда
+    ответит 404. Правило дома: сначала запись, потом файлы (см. delete_project).
+    """
     rows = conn.execute(
         "SELECT id, path FROM conversions WHERE asset_id = ? AND id NOT IN "
         "(SELECT id FROM conversions WHERE asset_id = ? ORDER BY created_at DESC, id DESC LIMIT ?)",
         (asset_id, asset_id, keep),
     ).fetchall()
     if not rows:
-        return
+        return []
     ids = [row["id"] for row in rows]
     conn.execute(
         f"DELETE FROM conversions WHERE id IN ({','.join('?' * len(ids))})",
         ids,
     )
-    for row in rows:
-        Path(row["path"]).unlink(missing_ok=True)
+    return [Path(row["path"]) for row in rows]

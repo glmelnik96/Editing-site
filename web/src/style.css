@@ -512,22 +512,16 @@ main.card {
 
 .space-between { justify-content: space-between; }
 
-/* Главный путь: загрузка → редактор. Конвертер висит под редактором как шаг 2.1, а не
-   третья равная колонка: иначе казалось бы, что перед склейкой обязательно конвертировать. */
+/* Главный путь ровно из двух шагов: загрузка → редактор. Конвертер сюда не входит — он строкой
+   ниже, потому что третья карточка рядом читалась бы как обязательная часть сборки. */
 .steps {
   display: grid;
-  grid-template-columns: 1.25fr auto minmax(0, 1fr);
+  grid-template-columns: 1fr auto 1fr;
   align-items: stretch;
   gap: 16px;
 }
-.step-cluster {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-.step-cluster .step-card { min-height: 0; }
-.step-cluster .step-card:not(.step-side) { flex: 1; }
+/* Инструмент в стороне от пути: заметен, но не спорит с шагами за внимание. */
+.side-tool { color: var(--muted); }
 /* Карточки одной высоты, а «потом» посередине между ними: разная высота читалась бы как
    разная важность, а разводить шаги нужно порядком, а не размером. */
 .step-then { align-self: center; }
@@ -998,6 +992,47 @@ main.card {
 .music-row input[type='range'] {
   flex: 1;
 }
+/* Панель над шкалой: три группы через тонкую черту — просмотр, правка шкалы, каким выйдет файл.
+   Одной строкой без границ четырнадцать кнопок читались как один список равных по важности вещей,
+   и «Разрезать» стояло рядом с «30 к/с», хотя это разговоры о разном. */
+.bar-edit {
+  align-items: center;
+  gap: 0;
+  row-gap: 8px;
+}
+.bar-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 16px;
+  margin-right: 16px;
+  border-left: 1px solid var(--line);
+}
+/* Первая видимая группа идёт без черты: висящая слева линия читалась бы как обрыв. */
+.bar-group:first-of-type,
+.bar-group[hidden] + .bar-group,
+.bar-group[hidden] + .bar-group[hidden] + .bar-group {
+  padding-left: 0;
+  border-left: 0;
+}
+.bar-group[hidden] { display: none; }
+/* Настройки вывода уходят вправо: их задают раз на проект, а не в каждой правке. */
+#ed-edit-group:not([hidden]) ~ #ed-out-group {
+  margin-left: auto;
+  margin-right: 0;
+}
+
+/* Свойства выбранного клипа: своя рамка, потому что это разговор про один кусок, а не про ролик. */
+.bar-clip {
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.bar-clip[hidden] { display: none; }
+
 .clip-vol {
   display: inline-flex;
   align-items: center;

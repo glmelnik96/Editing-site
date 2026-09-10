@@ -20,7 +20,7 @@ from server.app.jobs import enqueue_job
 from server.app.projects.store import active_renders
 from server.app.util import new_id
 from server.db.core import get_db, transaction
-from server.media.convert import FORMATS, has_mp3_encoder, has_webm_encoder
+from server.media.convert import FORMATS, missing_encoder
 
 router = APIRouter(prefix="/api/v1", tags=["conversions"])
 
@@ -83,14 +83,11 @@ def convert(
     settings = request.app.state.settings
     if duration > settings.max_total_duration_sec:
         raise ApiError(422, "too_long", "Файл длиннее допустимого")
-    if fmt == "mp3" and not has_mp3_encoder(settings):
-        raise ApiError(
-            503, "encoder_unavailable", "В этой сборке ffmpeg нет кодека MP3, выберите m4a или wav"
-        )
-    if fmt == "webm" and not has_webm_encoder(settings):
-        raise ApiError(
-            503, "encoder_unavailable", "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4"
-        )
+    # Одна проверка на все внешние кодеки: mp3, ogg и webm спрашиваются одинаково, и текст отказа
+    # живёт рядом со списком кодеков, а не двумя копиями здесь и в сборщике команды.
+    unavailable = missing_encoder(settings, fmt)
+    if unavailable is not None:
+        raise ApiError(503, "encoder_unavailable", unavailable)
 
     with transaction(conn):
         pending = conn.execute(
@@ -102,12 +99,16 @@ def convert(
             raise ApiError(409, "already_queued", "Конвертация этого файла уже идёт")
         if active_renders(conn, user.id) > settings.max_renders_queued:
             raise ApiError(409, "too_many_renders", "Уже собирается слишком много роликов, подождите")
-        evict_oldest(conn, asset_id)
+        evicted = evict_oldest(conn, asset_id)
         conversion_id = new_id("cnv")
         job_id = enqueue_job(
             conn, user_id=user.id, type_="convert", target_id=asset_id,
             params={"format": fmt, "conversion_id": conversion_id},
         )
+    # Файлы вытесненных — после коммита: сорвись транзакция на постановке задания, строки бы
+    # вернулись, а файлов уже не было.
+    for path in evicted:
+        path.unlink(missing_ok=True)
     return ConvertQueued(job_id=job_id, conversion_id=conversion_id)
 
 

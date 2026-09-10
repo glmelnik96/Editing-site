@@ -8,7 +8,10 @@ import type { Asset } from './assets'
 import type { Music } from './project'
 
 export type MusicHandlers = {
-  onChange: (music: Music | null) => void
+  /** live — очередной тик перетаскивания ползунка, а не законченная правка. Редактор кладёт
+   * в историю только состояние до всего движения: иначе одно перетаскивание вытесняет
+   * пять последних настоящих действий. */
+  onChange: (music: Music | null, live?: boolean) => void
 }
 
 const READY = new Set(['ready', 'proxy_ready'])
@@ -82,15 +85,26 @@ export function mountMusic(el: HTMLElement, handlers: MusicHandlers) {
     painting = false
   }
 
-  function emit(next: Music | null): void {
+  function emit(next: Music | null, live = false): void {
     current = next
     paint()
-    handlers.onChange(current)
+    handlers.onChange(current, live)
   }
 
-  function patch(partial: Partial<Music>): void {
+  function patch(partial: Partial<Music>, live = false): void {
     if (!current) return
-    emit({ ...current, ...partial })
+    emit({ ...current, ...partial }, live)
+  }
+
+  // Ползунок шлёт input на каждый пиксель. Первый тик движения — обычная правка, остальные
+  // помечены live; change в конце перетаскивания снимает пометку, чтобы следующее движение
+  // снова попало в историю.
+  let sliding: HTMLInputElement | null = null
+  function slide(input: HTMLInputElement, partial: Partial<Music>): void {
+    if (painting) return
+    const live = sliding === input
+    sliding = input
+    patch(partial, live)
   }
 
   pick.addEventListener('change', () => {
@@ -103,12 +117,10 @@ export function mountMusic(el: HTMLElement, handlers: MusicHandlers) {
     if (!current) emit(defaultMusic(id))
     else patch({ asset_id: id })
   })
-  speech.addEventListener('input', () => {
-    if (!painting) patch({ speech_volume: Number(speech.value) })
-  })
-  volume.addEventListener('input', () => {
-    if (!painting) patch({ volume: Number(volume.value) })
-  })
+  speech.addEventListener('input', () => slide(speech, { speech_volume: Number(speech.value) }))
+  speech.addEventListener('change', () => { sliding = null })
+  volume.addEventListener('input', () => slide(volume, { volume: Number(volume.value) }))
+  volume.addEventListener('change', () => { sliding = null })
   fadeIn.addEventListener('change', () => {
     if (!painting) patch({ fade_in: Math.max(0, Number(fadeIn.value) || 0) })
   })

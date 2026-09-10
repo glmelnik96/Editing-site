@@ -37,7 +37,10 @@ from server.media.convert import (
     ConvertUnavailable,
     build_convert_command,
     convert_ext,
+    encoders,
     estimate_convert_bytes,
+    has_mp3_encoder,
+    has_ogg_encoder,
     has_webm_encoder,
 )
 from server.media.probe import probe_file
@@ -284,11 +287,17 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
         raise MediaError("disk_low", "на диске мало места для сборки, освободите его и повторите")
 
     # Субтитры из расшифровки собираются до команды: сборщик команды на диск не ходит и получает
-    # готовый файл аргументом.
-    try:
-        subtitles_path = build_project_subtitles(conn, settings, project)
-    except SubtitlesUnavailable as exc:
-        raise MediaError("no_transcript", str(exc)) from exc
+    # готовый файл аргументом. Снятая галочка проверяется здесь же, а не только в сборщике команды:
+    # иначе выключенные субтитры всё равно требовали расшифровку и роняли сборку целиком отказом
+    # «у файла нет расшифровки» — за то, чего в ролике и не будет.
+    subtitles = project["doc"].get("subtitles")
+    subtitles_off = not isinstance(subtitles, dict) or subtitles.get("enabled") is False
+    subtitles_path = None
+    if not subtitles_off:
+        try:
+            subtitles_path = build_project_subtitles(conn, settings, project)
+        except SubtitlesUnavailable as exc:
+            raise MediaError("no_transcript", str(exc)) from exc
 
     render_id = new_id("rnd")
     folder = render_dir(settings, job["user_id"], project["id"])
@@ -323,15 +332,32 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
 
     now = utcnow()
     with transaction(conn):
-        conn.execute(
-            "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
-            "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                render_id, project["id"], job["user_id"], job["id"], quality, str(dst),
-                dst.stat().st_size, duration, iso(now),
-                iso(now + timedelta(hours=settings.render_ttl_hours)),
-            ),
-        )
+        # Проект могли завершить, пока шло кодирование. finish_project отменяет задание и сносит
+        # все рендеры, но воркер видит отмену только на очередном пульсе, а последние секунды
+        # кодирования проходят уже без проверок — и готовый ролик ложился в только что завершённый
+        # проект, мимо уборки, которая уже отработала. У удаления проекта то же прикрыто внешним
+        # ключом: строки проекта нет, и вставка падает сама.
+        alive = conn.execute(
+            "SELECT 1 FROM jobs AS j JOIN projects AS p ON p.id = j.target_id "
+            "WHERE j.id = ? AND j.status = 'running' AND p.status = 'draft'",
+            (job["id"],),
+        ).fetchone()
+        if alive is not None:
+            conn.execute(
+                "INSERT INTO renders (id, project_id, user_id, job_id, quality, path, size, duration, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    render_id, project["id"], job["user_id"], job["id"], quality, str(dst),
+                    dst.stat().st_size, duration, iso(now),
+                    iso(now + timedelta(hours=settings.render_ttl_hours)),
+                ),
+            )
+    if alive is None:
+        # Файл убираем после коммита, а не внутри: правило дома — сначала запись, потом файлы,
+        # чтобы упавший процесс не оставил строку без файла.
+        dst.unlink(missing_ok=True)
+        log.info("render: %s отброшен — проект завершён или сборку отменили", render_id)
+        return
     log.info("render: %s готов (%s, %.1f с)", render_id, quality, duration)
 
 
@@ -356,6 +382,12 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
     if disk_free_bytes(settings.data_dir) < estimate:
         raise MediaError("disk_low", "на диске мало места для конвертации, освободите его и повторите")
 
+    # Готовая конверсия лежит внутри каталога ассета, а janitor сносит каталог целиком по
+    # last_access_at. Без этой отметки файл, обещанный на сутки, исчезал вместе с исходником —
+    # иногда через час после конвертации. Анализ и прокси отмечаются так же.
+    with transaction(conn):
+        conn.execute("UPDATE assets SET last_access_at = ? WHERE id = ?", (now_iso(), asset["id"]))
+
     conversion_id = params.get("conversion_id") or new_id("cnv")
     folder = conversion_dir(settings, asset["user_id"], asset["id"])
     folder.mkdir(parents=True, exist_ok=True)
@@ -366,8 +398,9 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
         args = build_convert_command(
             settings, str(_source(settings, asset)), str(tmp),
             fmt=fmt, has_audio=bool(asset["has_audio"]),
-            mp3_encoder=mp3_encoder_available(settings) if fmt == "mp3" else True,
+            mp3_encoder=has_mp3_encoder(settings) if fmt == "mp3" else True,
             webm_encoder=has_webm_encoder(settings) if fmt == "webm" else True,
+            ogg_encoder=has_ogg_encoder(settings) if fmt == "ogg" else True,
         )
     except ConvertUnavailable as exc:
         raise MediaError(exc.code, exc.message) from exc
@@ -458,17 +491,12 @@ def _read_analysis(folder: Path) -> dict:
 
 
 def mp3_encoder_available(settings: Settings) -> bool:
-    """Есть ли libmp3lame в этой сборке ffmpeg. Спрашиваем один раз на задание: список кодеков у
-    процесса не меняется, а падать на каждом чанке невнятным «unknown encoder» нельзя.
+    """Есть ли libmp3lame в этой сборке ffmpeg. Список кодеков спрашивается один раз на процесс.
 
     Запасной путь без кодека — WAV 16 кГц моно: он вчетверо тяжелее, но десять минут (около 19 МБ)
     в предел загрузки 20 МБ ещё влезают.
     """
-    try:
-        return CHUNK_CODEC in run_tool([settings.ffmpeg_path, "-v", "error", "-encoders"], timeout=60)
-    except MediaError:
-        # ffmpeg вовсе не запустился — пусть об этом скажет первая настоящая нарезка, а не проба.
-        return False
+    return CHUNK_CODEC in encoders(settings)
 
 
 def _cut_chunk(

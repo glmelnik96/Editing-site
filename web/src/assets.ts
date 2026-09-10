@@ -75,6 +75,24 @@ export function fmtWhen(ts: string | null): string {
   })
 }
 
+/**
+ * Имя для атрибута download у ссылки на готовый файл.
+ *
+ * На ВМ файл отдаёт Caddy, а он ставит `Content-Disposition: attachment` без имени и затирает
+ * заголовок, который собрал бы сам API. Пустой атрибут download в такой паре берёт имя из адреса,
+ * и ролик сохранялся как `rnd_9f31c0ab77de.mp4`. Значит имя обязана нести сама ссылка.
+ */
+export function downloadFileName(base: string, ext: string): string {
+  const clean = base.replace(/["\\\/:*?<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim()
+  return `${clean || 'файл'}.${ext}`
+}
+
+/** Имя исходника без расширения: конвертер называет результат так же, но с новым форматом. */
+export function withoutExt(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(0, dot) : name
+}
+
 export function statusText(status: string): string {
   return STATUS[status] ?? status
 }

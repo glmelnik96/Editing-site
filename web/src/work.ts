@@ -1,3 +1,10 @@
+/**
+ * Список хода под шапкой: загрузки и задания одной лентой, живые и только что закончившиеся.
+ *
+ * Ход живёт в шапке, а не на экранах: расшифровка и сборка идут минутами, человек за это время
+ * уходит на другую вкладку, и панель, приклеенная к экрану, унесла бы прогресс с собой.
+ * Поэтому же панели экранов ход не рисуют — они говорят «ход вверху».
+ */
 import { POLL_MS } from './assets'
 import { escapeHtml } from './html'
 import { cancelJob, listJobs, type JobListItem } from './project'
@@ -86,11 +93,10 @@ export function foldIncoming(prev: WorkState, incoming: WorkJob[], now: number):
       }
     }
   }
-  for (const old of prev.jobs) {
-    if (live(old.status) && !incomingIds.has(old.id)) {
-      addFlash(old.id, 'done', jobTitle(old))
-    }
-  }
+  // Пропало из ответа — не значит «готово»: сервер отдаёт только полсотни последних строк
+  // (LIST_LIMIT), и на пачке загрузок живые задания просто не помещаются в ответ. Объявить их
+  // готовыми хуже, чем промолчать: законченное задание всё равно висит в ответе полминуты
+  // (RECENT_SEC), то есть переживает десяток опросов, и вспышку мы возьмём из его статуса.
 
   const dismissed = new Set(prev.dismissed)
   const heldFailed: WorkJob[] = []
@@ -238,7 +244,14 @@ export function mountWork(el: HTMLElement): WorkControls {
   }
 
   function draw(): void {
+    // Панель снята (вышли, сессию оборвали): дорисовывать некуда, а недогоревшая вспышка
+    // без опроса уже никогда не потухнет и оставила бы вечную перерисовку.
+    if (!running) return
     const now = Date.now()
+    // Просроченные вспышки выкидываем из состояния, а не только из показа: иначе armFlash
+    // считает срок по мёртвой записи, получает ноль и зовёт draw снова и снова — панель
+    // перерисовывалась сотни раз в секунду до следующего опроса.
+    state = { ...state, flashes: state.flashes.filter(flash => flash.until > now) }
     const rows = workRows(state, now)
     el.hidden = rows.length === 0 && !stale
     const staleNote = stale ? '<p class="meta">ход мог устареть</p>' : ''

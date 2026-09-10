@@ -155,19 +155,18 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     }
     const player = video()
     if (player) {
+      // Останавливаемся на конце выделения только во время просмотра. Раньше время зажималось
+      // и при перемотке руками, и «Конец» превращался в храповик: назад двигать можно, вперёд
+      // неоткуда — за границу выделения плеер просто не пускал, и остаток файла было не посмотреть.
       player.addEventListener('timeupdate', () => {
-        if (player.currentTime >= to) {
-          if (!player.paused) player.pause()
-          if (player.currentTime > to) player.currentTime = to
-        }
+        if (!player.paused && player.currentTime >= to) player.pause()
         const total = current?.duration ?? 0
         cursor.style.left = total > 0 ? `${(player.currentTime / total) * 100}%` : '0%'
       })
+      // Кнопка «играть» показывает выделение: курсор вне него — начинаем с начала куска. Иначе
+      // после досмотра до конца плеер вставал намертво, потому что каждый пуск гасили на месте.
       player.addEventListener('play', () => {
-        if (player.currentTime >= to) {
-          player.pause()
-          player.currentTime = to
-        }
+        if (player.currentTime < from || player.currentTime >= to) player.currentTime = from
       })
     }
     refreshRange()

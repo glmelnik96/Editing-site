@@ -10,8 +10,19 @@ from server.media.run import MediaError, run_tool
 
 FORMATS = ("mp3", "m4a", "aac", "wav", "flac", "ogg", "mp4", "webm")
 MP3_ENCODER = "libmp3lame"
+OGG_ENCODER = "libvorbis"
 WEBM_VIDEO = "libvpx-vp9"
 WEBM_AUDIO = "libopus"
+
+# Кодеки, которых может не оказаться в сборке: они внешние, а не родные ffmpeg. Всё остальное
+# (aac, wav, flac, mp4) есть в любой сборке. Формат, которого тут нет, спрашивать незачем.
+EXTERNAL_ENCODERS: dict[str, tuple[tuple[str, ...], str]] = {
+    "mp3": ((MP3_ENCODER,), "В этой сборке ffmpeg нет кодека MP3, выберите m4a или wav"),
+    "ogg": ((OGG_ENCODER,), "В этой сборке ffmpeg нет кодека Vorbis, выберите m4a или wav"),
+    "webm": ((WEBM_VIDEO, WEBM_AUDIO), "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4"),
+}
+
+_ENCODERS: dict[str, frozenset[str]] = {}
 SHORT_SIDE = 1080
 # Короткая сторона не больше 1080, кадр меньше не растягиваем (min).
 MP4_SCALE = (
@@ -61,21 +72,55 @@ def estimate_convert_bytes(fmt: str, duration: float) -> int:
     return int(rate * max(duration, 0) * SIZE_SAFETY)
 
 
+def encoders(settings: Settings) -> frozenset[str]:
+    """Кодеки этой сборки ffmpeg, одним списком и один раз на процесс.
+
+    Список у сборки постоянный, а спрашивали его трижды за одну конвертацию — в маршруте, в
+    воркере и при нарезке на чанки, каждый раз запуская отдельный ffmpeg и разбирая полтысячи
+    строк. На двухъядерной ВМ, общей с двумя соседями, эти запуски конкурируют с самим кодированием.
+
+    Неудачу не запоминаем: ffmpeg мог не запуститься разово, и следующий вопрос спросим заново.
+    """
+    cached = _ENCODERS.get(settings.ffmpeg_path)
+    if cached is not None:
+        return cached
+    try:
+        listing = run_tool([settings.ffmpeg_path, "-v", "error", "-encoders"], timeout=60)
+    except MediaError:
+        return frozenset()
+    found = frozenset(listing.split())
+    _ENCODERS[settings.ffmpeg_path] = found
+    return found
+
+
+def missing_encoder(settings: Settings, fmt: str) -> str | None:
+    """Что сказать человеку, если формат этой сборке не по силам. None — можно конвертировать.
+
+    Раньше спрашивали только про mp3 и webm, а ogg уходил в ffmpeg без проверки: на сборке без
+    libvorbis задание падало сырым «Unknown encoder 'libvorbis'» вместо внятного отказа.
+    """
+    need = EXTERNAL_ENCODERS.get(fmt)
+    if need is None:
+        return None
+    names, message = need
+    have = encoders(settings)
+    return None if all(name in have for name in names) else message
+
+
 def has_mp3_encoder(settings: Settings) -> bool:
     """Есть ли libmp3lame в этой сборке. Нет — 503, не сырой stderr ffmpeg."""
-    try:
-        return MP3_ENCODER in run_tool([settings.ffmpeg_path, "-v", "error", "-encoders"], timeout=60)
-    except MediaError:
-        return False
+    return MP3_ENCODER in encoders(settings)
 
 
 def has_webm_encoder(settings: Settings) -> bool:
     """Есть ли VP9 и Opus. Нет любого — 503, не сырой stderr ffmpeg."""
-    try:
-        listing = run_tool([settings.ffmpeg_path, "-v", "error", "-encoders"], timeout=60)
-        return WEBM_VIDEO in listing and WEBM_AUDIO in listing
-    except MediaError:
-        return False
+    have = encoders(settings)
+    return WEBM_VIDEO in have and WEBM_AUDIO in have
+
+
+def has_ogg_encoder(settings: Settings) -> bool:
+    """Есть ли libvorbis. Нет — 503, не сырой stderr ffmpeg."""
+    return OGG_ENCODER in encoders(settings)
 
 
 def build_convert_command(
@@ -87,6 +132,7 @@ def build_convert_command(
     has_audio: bool = True,
     mp3_encoder: bool = True,
     webm_encoder: bool = True,
+    ogg_encoder: bool = True,
 ) -> list[str]:
     """Список аргументов из белого списка. dst обычно *.part — контейнер задаём явно через -f."""
     if fmt not in FORMATS:
@@ -100,6 +146,11 @@ def build_convert_command(
         raise ConvertUnavailable(
             "encoder_unavailable",
             "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4",
+        )
+    if fmt == "ogg" and not ogg_encoder:
+        raise ConvertUnavailable(
+            "encoder_unavailable",
+            "В этой сборке ffmpeg нет кодека Vorbis, выберите m4a или wav",
         )
 
     args = [

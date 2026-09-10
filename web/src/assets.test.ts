@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { fmtDuration, fmtSize, needsPolling, statusText } from './assets'
+import {
+  downloadFileName,
+  fmtDuration,
+  fmtSize,
+  needsPolling,
+  statusText,
+  withoutExt,
+} from './assets'
 
 describe('assets helpers', () => {
   it('formats sizes', () => {
@@ -25,5 +32,22 @@ describe('assets helpers', () => {
     expect(needsPolling([{ status: 'analyzing' }])).toBe(true)
     expect(needsPolling([{ status: 'ready' }])).toBe(true)
     expect(needsPolling([{ status: 'proxy_ready' }, { status: 'failed' }])).toBe(false)
+  })
+})
+
+describe('имя файла для скачивания', () => {
+  it('чистит то, что имя файла не переживёт', () => {
+    expect(downloadFileName('Планёрка: 10/09 «итоги»', 'mp4')).toBe('Планёрка 10 09 «итоги».mp4')
+    expect(downloadFileName('  два   пробела  ', 'mp3')).toBe('два пробела.mp3')
+  })
+  it('пустое имя не даёт файла с одной точкой', () => {
+    expect(downloadFileName('', 'mp4')).toBe('файл.mp4')
+    expect(downloadFileName('///', 'mp4')).toBe('файл.mp4')
+  })
+  it('снимает старое расширение, но не съедает точки в имени', () => {
+    expect(withoutExt('запись.mp4')).toBe('запись')
+    expect(withoutExt('10.09.2026.mov')).toBe('10.09.2026')
+    expect(withoutExt('без расширения')).toBe('без расширения')
+    expect(withoutExt('.hidden')).toBe('.hidden')
   })
 })

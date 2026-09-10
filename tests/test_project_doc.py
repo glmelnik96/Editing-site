@@ -1,7 +1,7 @@
 import pytest
 
 from server.app.config import Settings
-from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
+from server.app.projects.doc import AssetInfo, ProjectInvalid, clamp_fades, validate_doc
 
 S = Settings(_env_file=None)
 ASSETS = {
@@ -419,3 +419,53 @@ def test_transition_does_not_drop_music_fields_from_a():
     assert out["clips"][0]["volume"] == 0.8
     assert out["clips"][1]["volume"] == 1.2
     assert out["clips"][1]["transition"]["duration"] == 0.4
+
+
+def _clip(cid: str, start: float, end: float, fade: float | None = None) -> dict:
+    clip = {"id": cid, "asset_id": "ast_000000000001", "in": start, "out": end}
+    if fade is not None:
+        clip["transition"] = {"kind": "fade", "duration": fade}
+    return clip
+
+
+def test_clamp_fades_shrinks_a_transition_that_stopped_fitting():
+    """Подтяжка к паузам укорачивает клип уже после проверки — переход обязан ужаться следом.
+
+    Иначе xfade получает отрицательный offset. ffmpeg на это не ругается: он молча выбрасывает
+    клип из ролика, и человек забирает файл без начала. Сам документ при этом перестаёт проходить
+    проверку сервера, то есть следующее сохранение падало бы в 422.
+    """
+    clips = [_clip("c1", 0.0, 0.34), _clip("c2", 0.0, 2.0, 0.9)]
+    clamp_fades(clips)
+    assert clips[1]["transition"]["duration"] == 0.29
+
+
+def test_clamp_fades_drops_a_transition_that_cannot_fit_at_all():
+    clips = [_clip("c1", 0.0, 0.04), _clip("c2", 0.0, 2.0, 0.9)]
+    clamp_fades(clips)
+    assert "transition" not in clips[1]
+
+
+def test_clamp_fades_leaves_a_transition_that_fits():
+    clips = [_clip("c1", 0.0, 5.0), _clip("c2", 0.0, 5.0, 0.5)]
+    clamp_fades(clips)
+    assert clips[1]["transition"]["duration"] == 0.5
+
+
+def test_clamp_fades_keeps_two_transitions_off_one_another():
+    """Клип между двумя переходами: второй не должен начинаться, пока идёт первый, иначе
+    собственных кадров у клипа в ролике не остаётся вовсе."""
+    clips = [_clip("c1", 0.0, 3.0), _clip("c2", 0.0, 1.0, 0.9), _clip("c3", 0.0, 3.0, 0.9)]
+    clamp_fades(clips)
+    assert clips[1]["transition"]["duration"] == 0.9
+    assert clips[2]["transition"]["duration"] == 0.05
+
+
+def test_clamped_document_passes_validation_again():
+    """Сохранённый документ обязан проходить собственную проверку сервера: иначе клиент,
+    загрузив проект как есть, не может его сохранить обратно."""
+    clips = [_clip("c1", 0.0, 0.34), _clip("c2", 0.0, 2.0, 0.9)]
+    clamp_fades(clips)
+    doc = {"output": {"aspect": "16:9", "fit": "pad", "fps": 30}, "clips": clips}
+    validate_doc(doc, assets=ASSETS, settings=S)
+

@@ -14,7 +14,8 @@ export function mountNewProject(el: HTMLElement) {
   el.innerHTML = `
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Новый проект</h1>
-      <input id="np-name" class="field" maxlength="200" placeholder="Как назовём ролик" />
+      <input id="np-name" class="field" maxlength="200" placeholder="Как назовём ролик"
+        autofocus enterkeyhint="go" />
       <div class="row">
         <button id="np-go" class="btn btn-key" disabled>Создать</button>
       </div>
@@ -34,6 +35,14 @@ export function mountNewProject(el: HTMLElement) {
     go.disabled = !nameReady(nameField.value)
   }
   nameField.addEventListener('input', sync)
+  // Одно поле и одна кнопка: Enter обязан отправлять. Без этого набранное имя просто висело,
+  // и приходилось искать мышью кнопку в двух сантиметрах ниже.
+  nameField.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || go.disabled) return
+    event.preventDefault()
+    go.click()
+  })
+  nameField.focus()
 
   go.addEventListener('click', async () => {
     const name = nameField.value.trim()

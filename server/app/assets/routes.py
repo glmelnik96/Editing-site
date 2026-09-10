@@ -411,13 +411,17 @@ def delete_transcript(
     эту гонку уже закрывали тем же отказом.
     """
     asset = _owned(conn, user, asset_id)
-    _refuse_while_transcribing(conn, asset_id)
-    cur = conn.execute(
-        "DELETE FROM transcripts WHERE asset_id = ? AND user_id = ?", (asset_id, user.id)
-    )
+    # Проверка и запись под одной блокировкой, как у POST и PUT: иначе задание, поставленное
+    # между ними, доедет и молча вернёт удалённый транскрипт обратно. Ровно эту гонку у PUT уже
+    # закрывали, а здесь проверка осталась снаружи транзакции.
+    with transaction(conn):
+        _refuse_while_transcribing(conn, asset_id)
+        removed = conn.execute(
+            "DELETE FROM transcripts WHERE asset_id = ? AND user_id = ?", (asset_id, user.id)
+        ).rowcount
     path = _transcript_path(request.app.state.settings, asset)
     had_file = path.is_file()
     path.unlink(missing_ok=True)
-    if cur.rowcount == 0 and not had_file:
+    if removed == 0 and not had_file:
         raise ApiError(404, "not_found", "Транскрипта нет")
     return Response(status_code=204)

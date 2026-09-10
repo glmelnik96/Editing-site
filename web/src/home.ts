@@ -28,11 +28,11 @@ type Step = {
   title: string
   lead: string
   key: boolean
-  compact?: boolean
 }
 
-// Сначала приносят исходники, потом собирают ролик. Конвертер — боковая ветка своего экрана,
-// не записей. Его не вставляем между 1 и 2, чтобы путь к редактору не ломался.
+// Путь ровно один: сначала приносят исходники, потом собирают ролик. Конвертер сюда шагом не
+// встаёт — он не часть сборки, а отдельный инструмент мимо неё, поэтому живёт строкой ниже.
+// Номером «2.1» он читался как под-шаг редактора, хотя редактор ему не нужен вовсе.
 const UPLOAD: Step = {
   href: '#/files',
   step: 'Шаг 1',
@@ -47,15 +47,6 @@ const EDITOR: Step = {
   lead: 'Вырезать лишнее, расшифровать речь, собрать готовый файл',
   key: false,
 }
-const CONVERT: Step = {
-  href: '#/convert',
-  step: 'Шаг 2.1',
-  title: 'Конвертировать',
-  lead: 'Извлечь звук или другой файл, не собирая нарезку',
-  key: false,
-  compact: true,
-}
-
 const ROW_STYLE = [
   'justify-content:space-between',
   'margin:0',
@@ -66,10 +57,9 @@ const ROW_STYLE = [
 ].join(';')
 
 function card(step: Step, delayMs: number): string {
-  const height = step.compact ? 'min-height:0;padding:20px 28px' : ''
   return `
-    <a class="card appear step-card${step.key ? ' step-key' : ''}${step.compact ? ' step-side' : ''}"
-      href="${step.href}" style="${CARD_STYLE};${height};--delay:${delayMs}ms">
+    <a class="card appear step-card${step.key ? ' step-key' : ''}"
+      href="${step.href}" style="${CARD_STYLE};--delay:${delayMs}ms">
       <span class="meta step-mark">${step.step}</span>
       <h2 class="display-m" style="margin:0">${step.title}</h2>
       <p class="lead" style="margin:0">${step.lead}</p>
@@ -102,11 +92,10 @@ export function homeStepsHtml(): string {
       <div class="steps">
         ${card(UPLOAD, 60)}
         <span class="step-then meta" aria-hidden="true">потом</span>
-        <div class="step-cluster">
-          ${card(EDITOR, 120)}
-          ${card(CONVERT, 180)}
-        </div>
-      </div>`
+        ${card(EDITOR, 120)}
+      </div>
+      <p class="lead side-tool appear" style="--delay:180ms;margin:0">Нужен только другой формат,
+        без нарезки и сборки? <a href="#/convert">Откройте конвертер</a></p>`
 }
 
 export function mountHome(el: HTMLElement, me: Me): { stop: () => void } {

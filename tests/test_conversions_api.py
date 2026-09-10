@@ -117,7 +117,7 @@ def test_missing_mp3_encoder_is_503(client, login_as, settings, monkeypatch):
     seed_asset(settings, me["id"])
     from server.app.conversions import routes as conv_routes
 
-    monkeypatch.setattr(conv_routes, "has_mp3_encoder", lambda _s: False)
+    monkeypatch.setattr(conv_routes, "missing_encoder", lambda _s, fmt: "нет MP3" if fmt == "mp3" else None)
     r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "mp3"})
     assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
 
@@ -152,8 +152,23 @@ def test_missing_webm_encoder_is_503(client, login_as, settings, monkeypatch):
     seed_asset(settings, me["id"])
     from server.app.conversions import routes as conv_routes
 
-    monkeypatch.setattr(conv_routes, "has_webm_encoder", lambda _s: False)
+    monkeypatch.setattr(conv_routes, "missing_encoder", lambda _s, fmt: "нет VP9" if fmt == "webm" else None)
     r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webm"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
+
+
+def test_missing_ogg_encoder_is_503(client, login_as, settings, monkeypatch):
+    """libvorbis есть не в каждой сборке, а раньше ogg уходил в ffmpeg без всякой проверки:
+    задание падало сырым «Unknown encoder 'libvorbis'» вместо внятного отказа."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    from server.app.conversions import routes as conv_routes
+
+    monkeypatch.setattr(
+        conv_routes, "missing_encoder", lambda _s, fmt: "нет Vorbis" if fmt == "ogg" else None
+    )
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "ogg"})
     assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
 
 

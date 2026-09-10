@@ -71,3 +71,30 @@ describe('склейка', () => {
     expect(workRows(closed, 10)).toEqual([])
   })
 })
+
+describe('пропавшее задание', () => {
+  it('не объявляет готовым то, что просто не поместилось в ответ', () => {
+    // Сервер отдаёт полсотни последних строк. На пачке загрузок живые задания вываливаются за
+    // край ответа, и раньше панель писала «готово» о том, что даже не начиналось.
+    const before: WorkState = { ...empty(), jobs: [job({ id: 'job_1', status: 'queued' })] }
+    const after = foldIncoming(before, [], 1000)
+    expect(after.flashes).toEqual([])
+    expect(workRows(after, 1000)).toEqual([])
+  })
+
+  it('о законченном задании говорит по его статусу, а не по исчезновению', () => {
+    const before: WorkState = { ...empty(), jobs: [job({ id: 'job_1', status: 'running' })] }
+    const after = foldIncoming(before, [job({ id: 'job_1', status: 'done', progress: 1 })], 1000)
+    expect(after.flashes).toEqual([
+      { id: 'job_1', kind: 'done', until: 1000 + FLASH_MS, title: 'Анализ «Нарезка.mp4»' },
+    ])
+  })
+
+  it('просроченную вспышку не показывает', () => {
+    const state: WorkState = {
+      ...empty(),
+      flashes: [{ id: 'job_1', kind: 'done', until: 500, title: 'Анализ «Нарезка.mp4»' }],
+    }
+    expect(workRows(state, 1000)).toEqual([])
+  })
+})

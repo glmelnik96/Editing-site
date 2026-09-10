@@ -6,7 +6,7 @@
  * там уже подтянутые резы, флаги подтверждения и новая версия.
  */
 import { ApiError } from './api'
-import { POLL_MS, listAssets, type Asset } from './assets'
+import { POLL_MS, listAssets, needsPolling, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
 import {
@@ -31,6 +31,9 @@ import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
+
+/** Шаг опроса записей, когда ничего не обрабатывается и не расшифровывается. */
+const IDLE_POLL_MS = 20000
 
 const STATE_TEXT = {
   idle: 'сохранено',
@@ -69,30 +72,46 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       </section>
       <section>
         <div class="stage" id="ed-stage"></div>
-        <div class="row">
-          <button id="ed-undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
-          <button id="ed-play" type="button">▶</button>
-          <button id="ed-split" type="button">Разрезать</button>
-          <label class="burn">
-            <input id="ed-burn" type="checkbox" disabled />
-            Субтитры
-          </label>
-          <button id="ed-delete" type="button">Удалить клип</button>
-          <button id="ed-zoom-in" type="button">+</button>
-          <button id="ed-zoom-out" type="button">−</button>
-          <select id="ed-aspect">
-            <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
-          </select>
-          <select id="ed-fit" title="Вписывание">
-            <option value="pad">поля</option>
-            <option value="crop">обрезка</option>
-          </select>
-          <select id="ed-fps" title="Кадры в секунду">
-            <option value="25">25 к/с</option>
-            <option value="30">30 к/с</option>
-            <option value="50">50 к/с</option>
-            <option value="60">60 к/с</option>
-          </select>
+        <!-- Три группы, разделённые чертой: просмотр, правка шкалы, каким выйдет файл. Раньше
+             все четырнадцать кнопок стояли одной строкой одинаковой громкости, и было не видно,
+             что настройка кадра и разрез клипа — разговоры о разном. -->
+        <div class="row bar-edit">
+          <span class="bar-group" id="ed-play-group">
+            <button id="ed-play" type="button" title="Играть (пробел)">▶</button>
+            <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
+            <span class="muted" id="ed-total"></span>
+          </span>
+          <span class="bar-group" id="ed-edit-group">
+            <button id="ed-split" type="button">Разрезать</button>
+            <button id="ed-delete" type="button">Удалить клип</button>
+            <button id="ed-undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
+            <button id="ed-zoom-out" type="button" title="Мельче">−</button>
+            <button id="ed-zoom-in" type="button" title="Крупнее">+</button>
+          </span>
+          <span class="bar-group" id="ed-out-group">
+            <select id="ed-aspect" title="Пропорция кадра">
+              <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
+            </select>
+            <select id="ed-fit" title="Вписывание">
+              <option value="pad">поля</option>
+              <option value="crop">обрезка</option>
+            </select>
+            <select id="ed-fps" title="Кадры в секунду">
+              <option value="25">25 к/с</option>
+              <option value="30">30 к/с</option>
+              <option value="50">50 к/с</option>
+              <option value="60">60 к/с</option>
+            </select>
+            <label class="burn">
+              <input id="ed-burn" type="checkbox" disabled />
+              Субтитры
+            </label>
+          </span>
+        </div>
+        <!-- Свойства одного клипа: строка появляется по выбору. Висеть серой всё время им незачем,
+             к ролику целиком они отношения не имеют. -->
+        <div class="row bar-clip" id="ed-clip-bar" hidden>
+          <span class="meta">Выбранный клип</span>
           <label class="clip-vol">Громкость
             <input id="ed-volume" type="range" min="0" max="2" step="0.01" disabled />
             <span id="ed-vol-note" class="muted" hidden>в сборке громче превью</span>
@@ -100,8 +119,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <label class="clip-fade">Переход
             <input id="ed-fade" class="tc" type="number" min="0" step="0.1" disabled title="В этот клип из предыдущего. Ноль — стык." />
           </label>
-          <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
-          <span class="muted" id="ed-total"></span>
         </div>
         <div id="ed-timeline"></div>
       </section>
@@ -122,6 +139,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const fadeInput = el.querySelector('#ed-fade') as HTMLInputElement
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
+  const playButton = el.querySelector('#ed-play') as HTMLButtonElement
+  const playGroup = el.querySelector('#ed-play-group') as HTMLElement
+  const editGroup = el.querySelector('#ed-edit-group') as HTMLElement
+  const clipBar = el.querySelector('#ed-clip-bar') as HTMLElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
   const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
   const saves = el.querySelector('#ed-saves') as HTMLElement
@@ -131,14 +152,23 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   let project: Project | null = null
   let assets = new Map<string, AssetInfo>()
   let assetList: Asset[] = []
+  // Первый список сравнивать не с чем: без этого флага точка «пришла расшифровка» зажигалась
+  // бы на каждом открытии проекта с уже расшифрованным файлом.
+  let assetsSeen = false
   const dataCache = new Map<string, Promise<AssetData>>()
   const data = new Map<string, AssetData>()
   let playing = false
+  /** Одна кнопка на два состояния: без смены значка непонятно, идёт просмотр или стоит. */
+  function setPlaying(value: boolean): void {
+    playing = value
+    playButton.textContent = value ? '⏸' : '▶'
+    playButton.title = value ? 'Пауза (пробел)' : 'Играть (пробел)'
+  }
   let playIndex = 0
   let timelineTime = 0
   let stopped = false
   let versions: { refresh: () => Promise<void> } | null = null
-  let renders: { stop: () => void; setDoc: (doc: ProjectDoc) => void } | null = null
+  let renders: { stop: () => void; setDoc: (doc: ProjectDoc, name?: string) => void } | null = null
   let assetTimer = 0
   const analysisCache = new Map<string, { start: number; end: number }[] | null>()
   const analysisPending = new Set<string>()
@@ -149,6 +179,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   }
 
   function applyAssets(list: Asset[]): void {
+    const first = !assetsSeen
+    assetsSeen = true
     const previous = new Map(assetList.map(a => [a.id, a]))
     assetList = list
     assets = new Map(list.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
@@ -159,13 +191,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       for (const id of ids) {
         const hadTranscript = Boolean(previous.get(id)?.files.transcript)
         const hasTranscript = Boolean(list.find(a => a.id === id)?.files.transcript)
-        if (hasTranscript && !hadTranscript) markNews('subtitles')
+        if (hasTranscript && !hadTranscript && !first) markNews('subtitles')
       }
       subtitles.setTimeline(project.doc.clips, list)
     }
     if (project?.doc.music) {
       const musicAsset = list.find(a => a.id === project?.doc.music?.asset_id)
-      if (musicAsset?.files.proxy) music.src = musicAsset.files.proxy
+      if (musicAsset?.files.proxy) setMusicSrc(musicAsset.files.proxy)
     }
   }
 
@@ -174,6 +206,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (stopped) return
     // Опрос живёт, пока открыт редактор: расшифровку заказывают уже после того, как файлы
     // дошли до proxy_ready, и без повторного тика вкладка субтитров об этом не узнает.
+    // Когда ждать нечего, шаг растягиваем: раньше открытая вкладка редактора стучалась в сервер
+    // сорок раз в минуту вхолостую, а ВМ у нас общая с двумя соседями.
+    const soon = needsPolling(assetList) || subtitles.busy()
     assetTimer = window.setTimeout(() => {
       void listAssets()
         .then(r => {
@@ -184,7 +219,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         .catch(() => {
           if (!stopped) pollAssets()
         })
-    }, POLL_MS)
+    }, soon ? POLL_MS : IDLE_POLL_MS)
   }
 
   /** Запомнить состояние ДО правки: именно к нему вернёт кнопка «Отменить». */
@@ -249,6 +284,14 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   })
   videoB.style.display = 'none'
   music.preload = 'auto'
+
+  /** Тот же адрес, присвоенный заново, всё равно перезапускает загрузку: дорожка встаёт на ноль.
+   * Список ассетов перечитывается раз в три секунды, и без этой проверки музыка начиналась заново
+   * каждые три секунды прямо во время просмотра. Так же огорожены оба элемента video. */
+  function setMusicSrc(src: string): void {
+    if (music.src.endsWith(src)) return
+    music.src = src
+  }
 
   const proxyOf = (assetId: string): string | null => assetList.find(a => a.id === assetId)?.files.proxy ?? null
 
@@ -326,7 +369,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (plan.kind === 'advance') {
       if (!proxyOf(plan.assetId)) {
         // У следующего клипа ещё нет прокси: показывать пустой кадр хуже, чем честно встать.
-        playing = false
+        setPlaying(false)
         active.pause()
         music.pause()
         notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
@@ -338,7 +381,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (playing) void active.play().catch(() => {})
       prepareNext(plan.index)
     } else if (plan.kind === 'end') {
-      playing = false
+      setPlaying(false)
       const clip = project.doc.clips[playIndex]
       if (clip) active.currentTime = clip.out
       active.pause()
@@ -354,6 +397,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onChange: applyClips,
     onSeek: seek,
     onSelect: () => {
+      syncBar()
       syncClipVolume()
       syncClipFade()
     },
@@ -466,8 +510,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       const name = (button.dataset.tab ?? 'source') as EditorTab
       button.disabled = !tabEnabled(name, clips, hasReadyRender)
     })
-    const next = resolveTab(tab, clips, hasReadyRender)
-    if (next !== tab) showTab(next)
+    // showTab зовём всегда, а не только при смене вкладки: он же ставит класс .on, и без этого
+    // открытый редактор показывал панель «Исходники», не подсветив ни одной кнопки.
+    showTab(resolveTab(tab, clips, hasReadyRender))
   }
 
   function openPanel(name: string): void {
@@ -486,7 +531,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           syncTabs()
         },
       )
-      if (project) renders.setDoc(project.doc)
+      if (project) renders.setDoc(project.doc, project.name)
     }
   }
 
@@ -562,20 +607,22 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (playing) seek(Math.min(timelineTime, totalDuration(clips)))
   }
 
-  function applyMusic(next: Music | null): void {
+  function applyMusic(next: Music | null, live = false): void {
     if (!project) return
-    remember()
+    // live — очередной тик перетаскивания ползунка. В историю кладём состояние до всего
+    // движения: иначе одно перетаскивание вытесняет пять последних настоящих действий.
+    if (!live) remember()
     project = { ...project, doc: { ...project.doc, music: next } }
     if (next) {
       const asset = assetList.find(a => a.id === next.asset_id)
-      if (asset?.files.proxy) music.src = asset.files.proxy
+      if (asset?.files.proxy) setMusicSrc(asset.files.proxy)
     } else {
       music.pause()
       music.removeAttribute('src')
     }
     applyPreviewVolumes()
     saver.schedule(project)
-    renders?.setDoc(project.doc)
+    renders?.setDoc(project.doc, project.name)
   }
 
   function parseSilences(data: unknown): { start: number; end: number }[] {
@@ -642,12 +689,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     music.volume = musicVolume(musicDoc, timelineTime, totalDuration(clips), ducking)
   }
 
+  /** Пустая шкала: играть, резать и удалять нечего. Серые кнопки только сбивают — прячем. */
+  function syncBar(): void {
+    const has = clipCount() > 0
+    playGroup.hidden = !has
+    editGroup.hidden = !has
+    clipBar.hidden = !has || !timeline.selected()
+  }
+
   function syncClipVolume(): void {
     const id = timeline.selected()
     const clip = project?.doc.clips.find(c => c.id === id)
     volumeInput.disabled = !clip
-    if (clip) volumeInput.value = String(clip.volume)
-    volumeNote.hidden = !clip || clip.volume <= 1
+    // Громкость клипа появилась позже самих клипов: у проекта, сохранённого до неё, ключа нет,
+    // и `undefined <= 1` — ложь. Ползунок вставал в "undefined" (браузер молча правил на 1),
+    // а подпись «в сборке громче превью» висела над клипом обычной громкости.
+    const volume = clip?.volume ?? 1
+    if (clip) volumeInput.value = String(volume)
+    volumeNote.hidden = !clip || volume <= 1
   }
 
   function syncClipFade(): void {
@@ -696,19 +755,20 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     subtitles.setTimeline(project.doc.clips, assetList)
     musicPanel.setMusic(project.doc.music)
     syncBurn()
+    syncBar()
     syncClipVolume()
     syncClipFade()
     showTime()
     applyPreviewVolumes()
-    renders?.setDoc(project.doc)
+    renders?.setDoc(project.doc, project.name)
     void ensureData(project.doc.clips)
     syncTabs()
   }
 
-  el.querySelector('#ed-play')!.addEventListener('click', () => {
+  playButton.addEventListener('click', () => {
     if (!project || !project.doc.clips.length) return
     if (playing) {
-      playing = false
+      setPlaying(false)
       active.pause()
       const hidden = active === videoA ? videoB : videoA
       hidden.pause()
@@ -726,11 +786,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       music.pause()
       return
     }
-    playing = true
+    setPlaying(true)
     if (plan.kind === 'advance') {
       const src = proxyOf(plan.assetId)
       if (!src) {
-        playing = false
+        setPlaying(false)
         notice('Следующий файл ещё обрабатывается, воспроизведение остановлено')
         return
       }
@@ -889,7 +949,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const [loaded, list, ready] = await Promise.all([
       loadProject(projectId),
       listAssets(),
-      listRenders(projectId),
+      // Список готовых роликов нужен ровно для одного: включать ли вкладку «Рендер». Его отказ —
+      // не повод хоронить весь редактор: без него панель просто останется закрытой, а раньше
+      // проект вообще не открывался и висел на «загрузка…» до перезагрузки страницы.
+      listRenders(projectId).catch(() => ({ renders: [] })),
     ])
     if (stopped) return
     project = loaded
@@ -899,6 +962,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     booted = true
     syncTabs()
     render()
+    // Без перемотки оба элемента video остаются без src, и открытый проект встречает человека
+    // чёрным прямоугольником под полной шкалой.
+    if (loaded.doc.clips.length) seek(0)
     pollAssets()
   }
 

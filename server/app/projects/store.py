@@ -14,7 +14,7 @@ from pathlib import Path
 
 from server.app.config import Settings
 from server.app.jobs import cancel_jobs_for_target
-from server.app.projects.doc import AssetInfo, ProjectInvalid, validate_doc
+from server.app.projects.doc import AssetInfo, ProjectInvalid, clamp_fades, validate_doc
 from server.app.projects.snap import snap_clips
 from server.app.storage import asset_dir, project_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
@@ -87,6 +87,9 @@ def _prepare(conn: sqlite3.Connection, settings: Settings, user_id: str, raw_doc
         return json.loads(json.dumps(EMPTY_DOC))
     doc = validate_doc(raw_doc, assets=_assets_index(conn, user_id), settings=settings)
     snap_clips(doc["clips"], settings=settings, user_id=user_id)
+    # Подтяжка укорачивает клипы уже после проверки, и переход мог перестать в них помещаться.
+    # Проверять заново нечем — отказ был бы отказом в правке, о которой не просили.
+    clamp_fades(doc["clips"])
     return doc
 
 

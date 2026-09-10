@@ -1,6 +1,6 @@
 /** Панель сборки: запуск рендера, ход задания, список готовых роликов со скачиванием. */
 import { ApiError, isRetryable } from './api'
-import { fmtDuration, fmtSize } from './assets'
+import { downloadFileName, fmtDuration, fmtSize, fmtWhen } from './assets'
 import { escapeHtml } from './html'
 import {
   cancelJob,
@@ -73,11 +73,6 @@ export function renderSummary(doc: ProjectDoc, quality: 'draft' | 'final', durat
   return parts.join(' ')
 }
 
-/** Дата и время без секунд: у готового ролика важен день, до которого он доживёт. */
-function whenFull(iso: string): string {
-  return iso.replace('T', ' ').slice(0, 16)
-}
-
 export function mountRender(
   el: HTMLElement,
   projectId: string,
@@ -85,6 +80,7 @@ export function mountRender(
   onReady?: () => void,
   onCount?: (n: number) => void,
 ) {
+  let docName = ''
   el.innerHTML = `
     <main class="card">
       <h3>Сборка</h3>
@@ -143,10 +139,11 @@ export function mountRender(
 
   function row(r: RenderCard): string {
     const quality = QUALITY[r.quality] ?? r.quality
+    const name = downloadFileName(`${docName} (${quality})`, 'mp4')
     return `<li>
-      <span>${escapeHtml(quality)} · ${fmtDuration(r.duration)} · ${fmtSize(r.size)} · до ${whenFull(r.expires_at)}</span>
+      <span>${escapeHtml(quality)} · ${fmtDuration(r.duration)} · ${fmtSize(r.size)} · до ${fmtWhen(r.expires_at)}</span>
       <span class="render-actions">
-        <a href="${escapeHtml(r.download)}" download>Скачать</a>
+        <a href="${escapeHtml(r.download)}" download="${escapeHtml(name)}">Скачать</a>
         <button data-drop="${escapeHtml(r.id)}">Удалить</button>
       </span></li>`
   }
@@ -250,7 +247,12 @@ export function mountRender(
   void refresh().catch(showError)
 
   return {
-    setDoc(doc: ProjectDoc): void {
+    /** Имя проекта нужно ссылке скачивания: без него файл сохраняется под внутренним номером. */
+    setDoc(doc: ProjectDoc, name?: string): void {
+      if (name !== undefined && name !== docName) {
+        docName = name
+        void refresh().catch(showError)
+      }
       const duration = totalDuration(doc.clips)
       summaryBox.innerHTML = `<p>${escapeHtml(renderSummary(doc, 'draft', duration))}</p>
         <p>${escapeHtml(renderSummary(doc, 'final', duration))}</p>`

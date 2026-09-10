@@ -150,6 +150,45 @@ def _validate_transition(raw: object, where: str, errors: _Errors) -> tuple[dict
     return {"kind": kind, "duration": duration}, True
 
 
+# Переход обязан быть строго короче соседей; зазор, чтобы не спорить с округлением до миллисекунд.
+FADE_GUARD = 0.05
+
+
+def _fade_of(clips: list[dict], index: int) -> float:
+    """Длительность перехода «в» клип с этим номером. У первого клипа перехода нет."""
+    if index <= 0:
+        return 0.0
+    transition = clips[index].get("transition")
+    return float(transition["duration"]) if isinstance(transition, dict) else 0.0
+
+
+def clamp_fades(clips: list[dict]) -> None:
+    """Укоротить переходы, которые перестали помещаться, вместо отказа в сохранении.
+
+    Подтяжка резов к паузам идёт уже ПОСЛЕ проверки и может укоротить клип: переход, который был
+    короче обоих соседей, вдруг оказывается длиннее. xfade получает отрицательный offset — и это
+    не ошибка, на которую ffmpeg пожалуется: он молча выбрасывает клип из вывода, а сохранённый
+    документ потом не проходит собственную проверку сервера, то есть следующее сохранение падает
+    в 422. Человек просил подтянуть рез, а не потерять кусок ролика, поэтому чиним переход.
+
+    Здесь же разводим два перехода на одном клипе: если они наезжают друг на друга, второй
+    начинается, пока идёт первый, и собственных кадров у клипа в ролике не остаётся.
+    """
+    for index in range(1, len(clips)):
+        transition = clips[index].get("transition")
+        if not isinstance(transition, dict):
+            continue
+        prev_len = clips[index - 1]["out"] - clips[index - 1]["in"] - _fade_of(clips, index - 1)
+        this_len = clips[index]["out"] - clips[index]["in"]
+        limit = _round(max(0.0, min(prev_len, this_len) - FADE_GUARD))
+        if transition["duration"] <= limit:
+            continue
+        if limit <= 0:
+            clips[index].pop("transition", None)
+        else:
+            transition["duration"] = limit
+
+
 def _reject_overlong_fades(clips: list[dict], errors: _Errors) -> None:
     """xfade требует, чтобы переход был короче обоих соседних клипов: иначе offset уйдёт в минус."""
     for index, clip in enumerate(clips):

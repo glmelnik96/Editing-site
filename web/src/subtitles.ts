@@ -10,7 +10,7 @@ import { loadAsset, type Asset } from './assets'
 import { escapeHtml } from './html'
 import { generateSubtitles, loadJob, startTranscribe, type Cue, type Project, type Subtitles } from './project'
 import { formatTimecode, parseTimecode } from './timecode'
-import { clipAssetIds, type Clip } from './timeline/model'
+import { clipAssetIds, totalDuration, type Clip } from './timeline/model'
 
 const POLL_MS = 2000
 
@@ -138,9 +138,17 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
 
   const alive = () => !stopped
   const cues = (): Cue[] => project?.doc.subtitles?.cues ?? []
-  const total = (): number =>
-    (project?.doc.clips ?? []).reduce((sum, clip) => sum + Math.max(0, clip.out - clip.in), 0)
+  // Через общий счётчик шкалы: он вычитает переходы, а простая сумма кусков давала длину
+  // больше настоящей, и реплики, выехавшие за конец ролика, не помечались.
+  const total = (): number => totalDuration(project?.doc.clips ?? [])
   const missing = () => timelineAssets.filter(a => !a.hasTranscript)
+
+  const showNote = (text: string) => {
+    const box = el.querySelector<HTMLPreElement>('#sub-error')
+    if (!box) return
+    box.hidden = false
+    box.textContent = text
+  }
 
   const showError = (e: unknown) => {
     const box = el.querySelector<HTMLPreElement>('#sub-error')
@@ -194,7 +202,16 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       el.querySelector('#sub-build')?.addEventListener('click', () => void build())
       return
     }
+    // Реплики собраны, но на шкалу добавили запись без расшифровки: «Собрать заново» её не
+    // возьмёт и молча ничего не сделает, а другой двери к расшифровке в редакторе нет.
+    const late = need.length
+      ? `<p class="lead" style="margin:0">На шкале без расшифровки:
+          ${need.map(a => `«${escapeHtml(a.name)}»`).join(', ')}. Пока эти куски пойдут в ролик
+          без субтитров</p>
+          <button class="btn btn-key" id="sub-transcribe">Расшифровать</button>`
+      : ''
     el.innerHTML = shell(`
+      ${late}
       <div class="row">
         <span class="small">${plural(list.length)}</span>
         <button class="btn btn-ghost" id="sub-rebuild">Собрать заново</button>
@@ -212,6 +229,7 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   }
 
   function wire(): void {
+    el.querySelector('#sub-transcribe')?.addEventListener('click', () => void transcribe())
     el.querySelector('#sub-rebuild')?.addEventListener('click', () => {
       if (!window.confirm('Собрать реплики заново? Ваши правки текста и времени пропадут.')) return
       void build()
@@ -343,7 +361,14 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   }
 
   async function build(): Promise<void> {
-    if (!timelineAssets.length || missing().length) return
+    if (!timelineAssets.length) return
+    const need = missing()
+    if (need.length) {
+      // Раньше здесь был молчаливый выход: человек подтверждал «правки пропадут» и не получал
+      // ни реплик, ни объяснения.
+      showNote(`Сначала расшифруйте: ${need.map(a => `«${a.name}»`).join(', ')}`)
+      return
+    }
     try {
       await handlers.flush()
       handlers.onProject(await generateSubtitles(projectId, 'burn'))
@@ -391,7 +416,10 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
         return
       }
       if (same) return
-      if (cues().length > 0 && !jobId) return
+      // Карточки не пересобираем, пока их правят: innerHTML стёр бы набор в textarea. Но
+      // появившийся на шкале файл без расшифровки — повод перерисовать: иначе о нём негде
+      // узнать и нечем его расшифровать.
+      if (cues().length > 0 && !jobId && !missing().length) return
       draw()
     },
     /** Время плеера: подсветить реплику, которая сейчас в кадре. */

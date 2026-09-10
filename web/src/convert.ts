@@ -1,12 +1,24 @@
 /**
  * Экран конвертера: один готовый файл, формат, список скачиваний этого человека.
  *
- * Загрузка остаётся в записях. Ход задания дублирует полосу шапки, чтобы не искать её глазами.
+ * Загрузка остаётся в записях. Ход и отмена живут в списке под шапкой — как у панели сборки:
+ * своя полоса с собственной кнопкой «Отменить» рядом с той же строкой в шапке показывала одно
+ * задание дважды и спрашивала, какую из двух отмен нажимать.
  */
 import { api, ApiError, isRetryable } from './api'
-import { fmtDuration, fmtSize, listAssets, needsPolling, POLL_MS, type Asset } from './assets'
+import {
+  downloadFileName,
+  fmtDuration,
+  fmtSize,
+  fmtWhen,
+  listAssets,
+  needsPolling,
+  POLL_MS,
+  withoutExt,
+  type Asset,
+} from './assets'
 import { escapeHtml } from './html'
-import { cancelJob, listJobs, loadJob, type JobListItem, type JobView } from './project'
+import { listJobs, loadJob, type JobListItem, type JobView } from './project'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
 const CONVERT_JOB_TEXT: Record<string, string> = {
@@ -75,10 +87,6 @@ export function pickConvertFile(selectedId: string, readyIds: string[], runningI
   return readyIds[0] ?? ''
 }
 
-function until(iso: string): string {
-  return iso.replace('T', ' ').slice(0, 16)
-}
-
 export function emptyConvertHtml(): string {
   return `<p class="lead" style="margin:0">Сначала загрузите запись</p>
     <a class="btn btn-key" href="#/files">К записям</a>`
@@ -101,9 +109,9 @@ export function conversionsListHtml(items: ConversionCard[]): string {
     <ul class="versions">${items
       .map(
         c => `<li>
-      <span>${escapeHtml(c.original_name)} · ${escapeHtml(c.format)} · ${fmtDuration(c.duration)} · ${fmtSize(c.size)} · до ${until(c.expires_at)}</span>
+      <span>${escapeHtml(c.original_name)} · ${escapeHtml(c.format)} · ${fmtDuration(c.duration)} · ${fmtSize(c.size)} · до ${fmtWhen(c.expires_at)}</span>
       <span class="render-actions">
-        <a href="${escapeHtml(c.download)}" download>Скачать</a>
+        <a href="${escapeHtml(c.download)}" download="${escapeHtml(downloadFileName(withoutExt(c.original_name), c.format))}">Скачать</a>
         <button type="button" data-drop-conversion="${escapeHtml(c.id)}">Удалить</button>
       </span></li>`,
       )
@@ -166,15 +174,9 @@ export function mountConvert(el: HTMLElement) {
   function jobHtml(assetId: string): string {
     const job = jobs.get(assetId)
     if (!job || job.status === 'done') return ''
-    const running = CONVERT_RUNNING.has(job.status)
-    const pct = Math.round(Math.min(1, Math.max(0, job.progress)) * 100)
-    const bar = running
-      ? `<div class="progress"><i style="width:${pct}%"></i></div>
-        <button type="button" class="btn btn-ghost" data-cancel-convert>Отменить</button>`
-      : ''
+    const where = CONVERT_RUNNING.has(job.status) ? ' — ход и отмена вверху' : ''
     return `<div class="stack" style="gap:4px">
-      <span class="meta">${escapeHtml(convertJobText(job.status, job.progress))}</span>
-      ${bar}
+      <span class="meta">${escapeHtml(convertJobText(job.status, job.progress))}${where}</span>
     </div>`
   }
 
@@ -185,7 +187,12 @@ export function mountConvert(el: HTMLElement) {
         job = await loadJob(jobId)
       } catch (e) {
         showError(e)
-        if (!isRetryable(e)) pending.delete(assetId)
+        if (!isRetryable(e)) {
+          // Заодно снимаем последнее известное состояние: без этого запись оставалась «в очереди»
+          // навсегда, форматы и «Конвертировать» не разблокировались, а отмена била в пустоту.
+          pending.delete(assetId)
+          jobs.delete(assetId)
+        }
         continue
       }
       jobs.set(assetId, job)
@@ -270,17 +277,6 @@ export function mountConvert(el: HTMLElement) {
         showError(e)
       }
     })
-    body.querySelector('[data-cancel-convert]')?.addEventListener('click', async () => {
-      const jobId = pending.get(selectedId)
-      if (!jobId) return
-      try {
-        await cancelJob(jobId)
-      } catch (e) {
-        showError(e)
-        return
-      }
-      await refresh().catch(showError)
-    })
     body.querySelectorAll<HTMLButtonElement>('button[data-drop-conversion]').forEach(b =>
       b.addEventListener('click', async () => {
         if (!window.confirm('Удалить готовый файл? Он пропадёт без возможности восстановления.')) return
@@ -321,7 +317,11 @@ export function mountConvert(el: HTMLElement) {
       wire()
     } finally {
       window.clearTimeout(timer)
-      if (!stopped && (needsPolling(assets) || convertIsLive())) {
+      // Первый заход упал (сервер перезапускался, сеть моргнула) — список записей пуст, живых
+      // заданий нет, и по прежнему условию опрос больше не заводился: экран оставался пустым
+      // навсегда. Поэтому пока ничего не показано, пробуем снова.
+      const retry = !assets.length
+      if (!stopped && (retry || needsPolling(assets) || convertIsLive())) {
         timer = window.setTimeout(() => void refresh().catch(showError), POLL_MS)
       }
     }
