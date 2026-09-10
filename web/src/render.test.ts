@@ -14,7 +14,14 @@ const doc: ProjectDoc = {
     duck: true,
     speech_volume: 1,
   },
-  subtitles: { source: 'cues', asset_id: null, mode: 'burn', style: 'default', enabled: true, cues: [] },
+  subtitles: {
+    source: 'cues',
+    asset_id: null,
+    mode: 'burn',
+    style: 'default',
+    enabled: true,
+    cues: [{ start: 0, end: 2, text: 'Начали' }],
+  },
 }
 
 describe('оценка времени сборки', () => {
@@ -31,7 +38,7 @@ describe('сводка вкладки Рендер', () => {
     const text = renderSummary(doc, 'final', 720)
     expect(text).toContain('Финал: 1080p, 9:16, поля, 30 к/с')
     expect(text).toContain('Музыка с приглушением под речь')
-    expect(text).toContain('Субтитры вжжёны в кадр')
+    expect(text).toContain('Субтитры впечатаны в кадр')
     expect(text).toContain('Около 12 мин, если воркер свободен')
     expect(text).not.toContain('ffmpeg')
     expect(text).not.toContain('-filter_complex')
@@ -54,6 +61,12 @@ describe('сводка вкладки Рендер', () => {
     expect(text).toContain('Музыка')
     expect(text).not.toContain('приглушением')
     expect(text).toContain('Субтитры отдельной дорожкой')
+  })
+
+  it('без реплик не обещает субтитры, даже если галочка стоит', () => {
+    // Реплики удаляют по одной, и документ остаётся с enabled: true и пустым списком.
+    const empty = renderSummary({ ...doc, subtitles: { ...doc.subtitles!, cues: [] } }, 'final', 60)
+    expect(empty).not.toContain('Субтитры')
   })
 
   it('называет переходы, если они есть', () => {

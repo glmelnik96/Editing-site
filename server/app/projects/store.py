@@ -85,11 +85,21 @@ def _prepare(conn: sqlite3.Connection, settings: Settings, user_id: str, raw_doc
     """Проверка документа плюс подтяжка резов к паузам."""
     if raw_doc is None:
         return json.loads(json.dumps(EMPTY_DOC))
-    doc = validate_doc(raw_doc, assets=_assets_index(conn, user_id), settings=settings)
+    assets = _assets_index(conn, user_id)
+    doc = validate_doc(raw_doc, assets=assets, settings=settings)
+    asked = json.loads(json.dumps(doc["clips"]))
     snap_clips(doc["clips"], settings=settings, user_id=user_id)
     # Подтяжка укорачивает клипы уже после проверки, и переход мог перестать в них помещаться.
-    # Проверять заново нечем — отказ был бы отказом в правке, о которой не просили.
     clamp_fades(doc["clips"])
+    # Обе правки — услуга, а не то, о чём просили. Если после них документ перестаёт проходить
+    # нашу же проверку, сохраняем как прислали. Сохранённое обязано валидироваться: иначе клиент,
+    # загрузив проект и отправив его обратно без единой правки, получит 422. Так и случается:
+    # укороченный переход удлиняет шкалу (её длина — сумма клипов минус переходы), а подтяжка
+    # умеет и удлинять клип, и вдвоём они выталкивают ролик за предел длительности.
+    try:
+        validate_doc(doc, assets=assets, settings=settings)
+    except ProjectInvalid:
+        doc["clips"] = asked
     return doc
 
 

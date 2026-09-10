@@ -54,7 +54,10 @@ function musicLine(doc: ProjectDoc): string | null {
 function subsLine(doc: ProjectDoc): string | null {
   const subs = doc.subtitles
   if (!subs || subs.enabled === false) return null
-  return subs.mode === 'soft' ? 'Субтитры отдельной дорожкой.' : 'Субтитры вжжёны в кадр.'
+  // Галочку снимают, а реплики удаляют по одной — и документ остаётся с enabled: true и пустым
+  // списком. Обещать субтитры, которых нет, сводка не должна.
+  if (subs.source === 'cues' && !subs.cues?.length) return null
+  return subs.mode === 'soft' ? 'Субтитры отдельной дорожкой.' : 'Субтитры впечатаны в кадр.'
 }
 
 export function renderSummary(doc: ProjectDoc, quality: 'draft' | 'final', durationSec: number): string {
@@ -81,6 +84,8 @@ export function mountRender(
   onCount?: (n: number) => void,
 ) {
   let docName = ''
+  // Пустая шкала: вкладка живёт ради скачивания старых роликов, но собирать из ничего нельзя.
+  let empty = true
   el.innerHTML = `
     <main class="card">
       <h3>Сборка</h3>
@@ -123,8 +128,8 @@ export function mountRender(
     statusBox.textContent = RUNNING.has(status) ? 'Собираю — ход вверху' : (JOB_TEXT[status] ?? status)
     const running = RUNNING.has(status)
     cancelButton.hidden = !running
-    draftButton.disabled = running
-    finalButton.disabled = running
+    draftButton.disabled = running || empty
+    finalButton.disabled = running || empty
   }
 
   /** Вернуть панель в исходный вид: задания больше нет, собрать можно заново. */
@@ -133,8 +138,8 @@ export function mountRender(
     window.clearTimeout(timer)
     jobBox.hidden = true
     cancelButton.hidden = true
-    draftButton.disabled = false
-    finalButton.disabled = false
+    draftButton.disabled = empty
+    finalButton.disabled = empty
   }
 
   function row(r: RenderCard): string {
@@ -252,6 +257,16 @@ export function mountRender(
       if (name !== undefined && name !== docName) {
         docName = name
         void refresh().catch(showError)
+      }
+      empty = doc.clips.length === 0
+      draftButton.disabled = empty || jobId !== null
+      finalButton.disabled = empty || jobId !== null
+      if (empty) {
+        // Раньше панель обещала «Черновик: 720p… около 1 мин» пустому проекту, а сервер отвечал
+        // 422 сырым текстом в <pre>. Отказ понятнее до нажатия, чем после.
+        summaryBox.innerHTML = `<p>Собирать нечего: на шкале нет ни одного куска.
+          Положите запись во вкладке «Исходники»</p>`
+        return
       }
       const duration = totalDuration(doc.clips)
       summaryBox.innerHTML = `<p>${escapeHtml(renderSummary(doc, 'draft', duration))}</p>

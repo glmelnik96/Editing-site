@@ -644,20 +644,9 @@ main.card {
   border-radius: 12px;
 }
 
-/* Заголовок панели субтитров и переключатель режимов одной строкой. Режимы мельче вкладок слева
-   намеренно: слева выбирают работу, здесь — взгляд на одну и ту же расшифровку. */
-.sub-head {
-  justify-content: space-between;
-  align-items: baseline;
-}
-.sub-modes .tab {
-  padding: 4px 10px;
-  font-size: 13px;
-}
-/* .stack ставит display:flex и перебивает hidden — ровно та же ловушка, что у #ed-source.
-   Без этого спрятанный режим оставался на экране под открытым. */
-#sub-cards[hidden],
-#sub-words[hidden] {
+/* Стопка ставит display:flex и перебивает hidden. Ловушка уже стоила двух багов — спрятанная
+   панель оставалась на экране, — поэтому правило общее, а не на конкретный ящик. */
+.stack[hidden] {
   display: none;
 }
 
@@ -769,6 +758,13 @@ main.card {
   flex-direction: column;
   gap: 12px;
   align-self: start;
+  /* Своя прокрутка: в колонке три панели — исходник с плеером, текст расшифровки и музыка, —
+     и вместе они выше экрана. Без этого прокрутка страницы уносила сцену и шкалу вверх, а
+     монтировать, не видя шкалы, нельзя. */
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+  /* Полосе прокрутки нужен зазор, иначе она ложится на рамки карточек. */
+  padding-right: 4px;
 }
 .side .card {
   margin: 0;
@@ -787,6 +783,39 @@ main.card {
 }
 #ed-source[hidden] {
   display: none;
+}
+
+/* Подсказка по клавишам висит поверх редактора у нижнего края: её открывают на секунду,
+   и сдвигать под руками шкалу ради неё нельзя. */
+.keys {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 40;
+  max-width: 460px;
+  margin: 0;
+}
+.keys-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 12px 0 0;
+}
+.keys-list dt,
+.keys-list dd {
+  margin: 0;
+}
+.keys-list dd {
+  color: var(--muted);
+}
+.keys kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* --- Сцена и плеер --- */
@@ -855,7 +884,18 @@ main.card {
   position: relative;
   height: 76px;
 }
+/* Блоки живут в своём слое. У них есть собственные номера по глубине — переходы рисуются
+   внахлёст, выбранный поднимается над соседями, — и без отдельного слоя эта игра вылезала
+   наружу: начиная с третьего клипа красная риска и призрак переноса уходили под клипы.
+   Слой сквозной для указателя, иначе клик по пустому месту шкалы перестал бы ставить курсор. */
+.blocks {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
 .block {
+  pointer-events: auto;
   position: absolute;
   top: 2px;
   overflow: hidden;

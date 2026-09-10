@@ -26,6 +26,9 @@ export type RenderInput = {
 const TRACK_HEIGHT = 72
 const WAVE_HEIGHT = 22
 const HANDLE_PX = 8
+// Выбранный блок поднимается над соседями, чтобы его обводку не срезал следующий клип.
+// Число живёт внутри слоя .blocks, наружу — к игле и призраку — оно не вылезает.
+const SELECTED_Z = 999
 const CLICK_SLOP_PX = 4 // сдвиг меньше этого — это клик, а не перенос
 
 export function emptyTrackHint(clipCount: number): string {
@@ -54,13 +57,14 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     <div class="timeline">
       <div class="ruler" id="tl-ruler"></div>
       <div class="scrub" id="tl-scrub" title="Перемотка"></div>
-      <div class="track" id="tl-track"><div class="drop-ghost" id="tl-drop" hidden></div><div class="playhead" id="tl-playhead"></div></div>
+      <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div><div class="playhead" id="tl-playhead"></div></div>
       <div class="tl-hint muted" id="tl-hint"></div>
     </div>`
   const view = el.querySelector('.timeline') as HTMLElement
   const ruler = el.querySelector('#tl-ruler') as HTMLElement
   const scrub = el.querySelector('#tl-scrub') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
+  const blocksBox = el.querySelector('#tl-blocks') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const ghost = el.querySelector('#tl-drop') as HTMLElement
   const hint = el.querySelector('#tl-hint') as HTMLElement
@@ -123,7 +127,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       return `<span class="tick" style="left:${seconds * current.pxPerSec}px">${seconds} с</span>`
     }).join('')
 
-    track.querySelectorAll('.block').forEach(node => node.remove())
+    blocksBox.querySelectorAll('.block').forEach(node => node.remove())
     blocks.forEach((block, index) => {
       const clip = current.clips[index]
       const node = document.createElement('div')
@@ -132,14 +136,14 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       node.style.left = `${block.left}px`
       node.style.width = `${block.width}px`
       node.style.height = `${TRACK_HEIGHT}px`
-      node.style.zIndex = clip.id === selected ? '20' : String(index + 1)
+      node.style.zIndex = clip.id === selected ? String(SELECTED_Z) : String(index + 1)
       if (fade > 0) node.style.setProperty('--fade-px', `${Math.max(6, ms(fade * current.pxPerSec))}px`)
       node.dataset.id = clip.id
       node.dataset.index = String(index)
       node.innerHTML = blockHtml(clip, block.width)
       const info = current.data.get(clip.asset_id)
       node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, { from: clip.in, to: clip.out }, Math.round(block.width)), block.width))
-      track.appendChild(node)
+      blocksBox.appendChild(node)
     })
     if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
   }
@@ -190,6 +194,21 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     if (next) handlers.onChange(next)
   }
 
+  /**
+   * Показать выделение, не пересобирая шкалу.
+   *
+   * Раньше это делал render(): он сносил все блоки и строил заново — то есть уничтожал блок прямо
+   * под пальцем в момент нажатия, ещё до захвата указателя. Перенос от этого срабатывал через раз,
+   * а на длинной шкале каждое нажатие впустую перерисовывало кадры и звуковые волны всех клипов.
+   */
+  function markSelected(): void {
+    blocksBox.querySelectorAll<HTMLElement>('.block').forEach(node => {
+      const mine = node.dataset.id === selected
+      node.classList.toggle('selected', mine)
+      node.style.zIndex = mine ? String(SELECTED_Z) : String(Number(node.dataset.index ?? 0) + 1)
+    })
+  }
+
   /** Перенос отменён системой (жест перехватил браузер): возвращаем всё как было, правки нет. */
   function abortDrag(): void {
     if (!drag) return
@@ -206,6 +225,16 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       handlers.onSeek(timeAt(event.clientX))
       return
     }
+    // Захват берём первым делом: дальше мы трогаем DOM и классы, и терять указатель на полпути
+    // нельзя — именно поэтому перенос срабатывал через раз. Отказ гасим: указателя может уже не
+    // быть (жест перехватила система), и ронять из-за этого выбор клипа незачем — без захвата
+    // перенос просто потеряет курсор за краем блока, а выделение и подрезка работают и так.
+    let captured = true
+    try {
+      track.setPointerCapture(event.pointerId)
+    } catch {
+      captured = false
+    }
     const id = node.dataset.id ?? ''
     const index = Number(node.dataset.index ?? 0)
     selected = id
@@ -220,12 +249,15 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           : rect.right - event.clientX < HANDLE_PX
             ? 'out'
             : 'move'
-    // Выделение перерисовываем до начала переноса: с этого момента шкала заморожена и render()
+    // Выделение показываем до начала переноса: с этого момента шкала заморожена и render()
     // только копит пришедшее.
-    render()
+    markSelected()
+    // Без захвата перенос начинать нельзя: отпускание за пределами шкалы до нас не дойдёт, drag
+    // останется висеть, а render() при живом drag только копит правки — шкала замерла бы навсегда.
+    // Выбор клипа при этом уже случился, так что нажатие не пропало впустую.
+    if (!captured) return
     drag = { id, index, kind, startX: event.clientX, clips: current.clips, moved: false }
-    track.setPointerCapture(event.pointerId)
-    track.querySelector(`.block[data-id="${CSS.escape(id)}"]`)?.classList.add('dragging')
+    node.classList.add('dragging')
   })
 
   track.addEventListener('pointermove', event => {
@@ -294,7 +326,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     },
     select(id: string | null): void {
       selected = id
-      render()
+      markSelected()
     },
     selected(): string | null {
       return selected

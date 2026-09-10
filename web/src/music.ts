@@ -44,8 +44,8 @@ export function mountMusic(el: HTMLElement, handlers: MusicHandlers) {
         <input id="mus-volume" type="range" min="0" max="1" step="0.01" />
       </label>
       <div class="row">
-        <label>Fade in <input id="mus-fade-in" class="tc" type="number" min="0" step="0.1" /></label>
-        <label>Fade out <input id="mus-fade-out" class="tc" type="number" min="0" step="0.1" /></label>
+        <label>Нарастание, с <input id="mus-fade-in" class="tc" type="number" min="0" step="0.1" /></label>
+        <label>Затухание, с <input id="mus-fade-out" class="tc" type="number" min="0" step="0.1" /></label>
       </div>
       <label class="music-row"><input id="mus-loop" type="checkbox" /> по кругу</label>
       <label class="music-row"><input id="mus-duck" type="checkbox" /> приглушать под речь</label>

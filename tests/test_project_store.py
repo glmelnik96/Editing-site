@@ -277,3 +277,47 @@ def test_finished_project_cannot_be_saved(conn, settings):
     with pytest.raises(ProjectInvalid) as e:
         save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=doc(), version=p["version"])
     assert e.value.errors[0]["field"] == "status"
+
+
+def test_saved_document_always_passes_its_own_validation(tmp_path):
+    """Что сервер сохранил, он обязан принять обратно без единой правки.
+
+    Подтяжка резов к паузам идёт ПОСЛЕ проверки и умеет клип удлинить: `out` подтягивается к
+    началу паузы и отступает буфером внутрь неё. Ролик 9.9 с при пределе 10 после подтяжки
+    становится 10.3 с — сервер сохранял документ, который сам же потом отвергал, и клиент,
+    загрузив проект и отправив его обратно нетронутым, получал 422 на пустом месте.
+    """
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", max_total_duration_sec=10)
+    settings.data_dir.mkdir(parents=True)
+    c = connect(settings.db_path)
+    migrate(c)
+    c.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES (?, 'a@b.c', 'U', ?)",
+        (USER, now_iso()),
+    )
+    c.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, duration, "
+        "created_at, last_access_at) VALUES (?, ?, 'video', 'a', 'mp4', 1, 'ready', 60, ?, ?)",
+        ("ast_000000000001", USER, now_iso(), now_iso()),
+    )
+    folder = asset_dir(settings, USER, "ast_000000000001")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "source.mp4").write_bytes(b"x")
+    (folder / "analysis.json").write_text(
+        json.dumps({"silences": [], "silences_dense": [{"start": 10.0, "end": 11.0}]}),
+        encoding="utf-8",
+    )
+    raw = {"clips": [{"asset_id": "ast_000000000001", "in": 0.0, "out": 9.9, "snap_to_pauses": True}]}
+    project = create_project(c, settings, USER, name="Ролик", raw_doc=raw)
+
+    # Подтянуть было некуда, не сломав предел: рез остаётся там, где его поставил человек.
+    assert project["doc"]["clips"][0]["out"] == 9.9
+    assert project["doc"]["clips"][0]["out_verified"] is False
+
+    # И ровно то, что отдал сервер, сохраняется обратно без ошибки.
+    again = save_project(
+        c, settings, USER, project["id"], name=project["name"], version=project["version"],
+        raw_doc=project["doc"],
+    )
+    assert again["version"] == project["version"] + 1
+    c.close()

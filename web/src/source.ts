@@ -10,6 +10,10 @@ import { formatTimecode, parseTimecode } from './timecode'
 
 export type SourceHandlers = {
   onAdd: (asset: Asset, range: { from: number; to: number }) => void
+  /** Сменился выбранный файл: рядом живёт панель текста, она показывает расшифровку этого же. */
+  onPick?: (asset: Asset | null) => void
+  /** Время плеера исходника: панель текста подсвечивает звучащее слово. */
+  onTime?: (seconds: number) => void
 }
 
 const READY = new Set(['ready', 'proxy_ready'])
@@ -62,6 +66,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   let current: Asset | null = null
   let from = 0
   let to = 0
+  // Действуют ли ворота куска: прыжок по слову за его пределы их снимает.
+  let inPiece = true
 
   const video = (): HTMLMediaElement | null => playerBox.querySelector('video, audio')
 
@@ -89,6 +95,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     const total = current?.duration ?? 0
     if (edge === 'in') from = Math.max(0, Math.min(value, to - MIN_PIECE))
     else to = Math.min(total, Math.max(value, from + MIN_PIECE))
+    // Тронули границу — снова говорим о куске, и ворота возвращаются.
+    inPiece = true
     refreshRange()
   }
 
@@ -143,6 +151,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
 
   function choose(asset: Asset | null): void {
     current = asset
+    inPiece = true
+    handlers.onPick?.(asset)
     from = 0
     to = asset?.duration ?? 0
     playerBox.innerHTML = asset?.files.proxy
@@ -159,14 +169,17 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
       // и при перемотке руками, и «Конец» превращался в храповик: назад двигать можно, вперёд
       // неоткуда — за границу выделения плеер просто не пускал, и остаток файла было не посмотреть.
       player.addEventListener('timeupdate', () => {
-        if (!player.paused && player.currentTime >= to) player.pause()
+        if (inPiece && !player.paused && player.currentTime >= to) player.pause()
         const total = current?.duration ?? 0
         cursor.style.left = total > 0 ? `${(player.currentTime / total) * 100}%` : '0%'
+        handlers.onTime?.(player.currentTime)
       })
       // Кнопка «играть» показывает выделение: курсор вне него — начинаем с начала куска. Иначе
       // после досмотра до конца плеер вставал намертво, потому что каждый пуск гасили на месте.
       player.addEventListener('play', () => {
-        if (player.currentTime < from || player.currentTime >= to) player.currentTime = from
+        if (inPiece && (player.currentTime < from || player.currentTime >= to)) {
+          player.currentTime = from
+        }
       })
     }
     refreshRange()
@@ -207,6 +220,21 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     },
     current(): Asset | null {
       return current
+    },
+    /**
+     * Перемотать плеер исходника: панель текста зовёт это по клику на слове.
+     *
+     * Слово может лежать далеко за отмеченным куском, а ворота куска останавливают плеер на его
+     * конце и отматывают пуск к началу — клик по слову оказывался бы бесполезен, как только кусок
+     * отмечен. Поэтому прыжок наружу ворота снимает: слушать даём везде, а вернутся они, как
+     * только человек снова тронет границы куска.
+     */
+    seek(seconds: number): void {
+      const player = video()
+      if (!player) return
+      const at = Math.max(0, seconds)
+      inPiece = at >= from && at < to
+      player.currentTime = at
     },
   }
 }

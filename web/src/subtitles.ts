@@ -4,17 +4,12 @@
  * Расшифровка ошибается, и ошибку надо править до вжигания, а не после. Поэтому реплики живут
  * в документе проекта: правка карточки — обычная правка документа, а значит работают откат,
  * точки сохранения и защита от одновременной работы.
- *
- * Здесь же второй режим — монтаж по словам. У него с карточками общий текст и общая кнопка
- * «Расшифровать», поэтому он не отдельная вкладка: решение «слева видна ровно одна работа»
- * остаётся в силе, а расшифровку не приходится заказывать дважды из разных мест.
  */
 import { ApiError, isRetryable } from './api'
 import { loadAsset, type Asset } from './assets'
 import { escapeHtml } from './html'
 import { generateSubtitles, loadJob, startTranscribe, type Cue, type Project, type Subtitles } from './project'
 import { formatTimecode, parseTimecode } from './timecode'
-import { mountTranscript } from './transcript'
 import { clipAssetIds, totalDuration, type Clip } from './timeline/model'
 
 const POLL_MS = 2000
@@ -27,11 +22,6 @@ export type SubtitleHandlers = {
   /** Дождаться, пока очередь правок доедет: иначе сборка реплик получит конфликт версий. */
   flush: () => Promise<void>
   onSeek: (seconds: number) => void
-  /**
-   * Взять кусок по выделенным словам. Времена слов интерполированы (±0.3 с), поэтому редактор
-   * ставит клип со `snap_to_pauses`: настоящий рез подтянет сервер по измеренным паузам.
-   */
-  onTake: (assetId: string, start: number, end: number) => void
 }
 
 /** Реплика, которая не влезает в ролик или лезет на соседнюю: сервер такую не сохранит. */
@@ -140,28 +130,13 @@ export function plural(count: number): string {
 export function mountSubtitles(el: HTMLElement, projectId: string, handlers: SubtitleHandlers) {
   el.innerHTML = `
     <main class="card stack">
-      <div class="row sub-head" style="margin:0">
-        <h3 class="display-m" style="margin:0">Субтитры</h3>
-        <nav class="tabs sub-modes" id="sub-modes">
-          <button type="button" class="tab on" data-mode="cards">карточки</button>
-          <button type="button" class="tab" data-mode="words">по словам</button>
-        </nav>
-      </div>
+      <h3 class="display-m" style="margin:0">Субтитры</h3>
       <div id="sub-cards" class="stack"></div>
-      <div id="sub-words" class="stack" hidden></div>
       <pre id="sub-error" hidden></pre>
     </main>`
 
   const cardsBox = el.querySelector('#sub-cards') as HTMLElement
-  const wordsBox = el.querySelector('#sub-words') as HTMLElement
   const errorBox = el.querySelector('#sub-error') as HTMLPreElement
-  const modesBar = el.querySelector('#sub-modes') as HTMLElement
-
-  let mode: 'cards' | 'words' = 'cards'
-  let words: ReturnType<typeof mountTranscript> | null = null
-  let wordsFor: string | null = null
-  let wordsAssetId = ''
-  let assetPool: Asset[] = []
 
   let stopped = false
   let project: Project | null = null
@@ -201,83 +176,6 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
       <textarea class="field cue-text" rows="2" maxlength="200" data-text="${index}">${escapeHtml(cue.text)}</textarea>
       ${trouble ? `<span class="meta cue-trouble">${escapeHtml(trouble)}</span>` : ''}
     </article>`
-  }
-
-  function showMode(next: 'cards' | 'words'): void {
-    mode = next
-    cardsBox.hidden = next !== 'cards'
-    wordsBox.hidden = next !== 'words'
-    modesBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>
-      button.classList.toggle('on', button.dataset.mode === next),
-    )
-    if (next === 'words') drawWords()
-  }
-
-  modesBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>
-    button.addEventListener('click', () =>
-      showMode((button.dataset.mode ?? 'cards') as 'cards' | 'words'),
-    ),
-  )
-
-  function dropWords(): void {
-    words?.stop()
-    words = null
-    wordsFor = null
-  }
-
-  /**
-   * Монтаж по словам: текст записи, клик по слову перематывает плеер, выделение от слова до
-   * слова кладёт кусок на шкалу. Записи берём те же, что и карточки, — со шкалы: реплики и куски
-   * должны говорить об одном ролике.
-   *
-   * Пересобираем только при смене записи. Панель держит загруженный текст, выделение и прокрутку,
-   * и каждый тик опроса ронял бы их, если рисовать её заново.
-   */
-  function drawWords(): void {
-    if (stopped) return
-    if (!timelineAssets.length) {
-      dropWords()
-      wordsBox.innerHTML = `<p class="lead" style="margin:0">Монтаж по тексту берёт слова из записи
-        на шкале. Положите запись в ролик</p>`
-      return
-    }
-    if (!timelineAssets.some(a => a.id === wordsAssetId)) wordsAssetId = timelineAssets[0].id
-    if (words && wordsFor === wordsAssetId) return
-
-    const asset = assetPool.find(a => a.id === wordsAssetId) ?? null
-    const pick =
-      timelineAssets.length > 1
-        ? `<select class="field" id="sub-words-pick">${timelineAssets
-            .map(
-              a =>
-                `<option value="${escapeHtml(a.id)}"${a.id === wordsAssetId ? ' selected' : ''}>` +
-                `${escapeHtml(a.name)}</option>`,
-            )
-            .join('')}</select>`
-        : ''
-    // Свой плеер: слова выбирают на слух, а сцена справа играет собранный ролик, а не исходник.
-    const player = asset?.files.proxy
-      ? `<video class="player" id="sub-words-player" controls preload="metadata"
-          src="${escapeHtml(asset.files.proxy)}"></video>`
-      : ''
-    dropWords()
-    wordsBox.innerHTML = `${pick}${player}<div id="sub-words-panel"></div>`
-
-    const video = wordsBox.querySelector<HTMLVideoElement>('#sub-words-player')
-    wordsBox.querySelector<HTMLSelectElement>('#sub-words-pick')?.addEventListener('change', event => {
-      wordsAssetId = (event.target as HTMLSelectElement).value
-      drawWords()
-    })
-
-    words = mountTranscript(wordsBox.querySelector('#sub-words-panel') as HTMLElement, {
-      onSeek: seconds => {
-        if (video) video.currentTime = seconds
-      },
-      onTake: (start, end) => handlers.onTake(wordsAssetId, start, end),
-    })
-    video?.addEventListener('timeupdate', () => words?.setTime(video.currentTime))
-    wordsFor = wordsAssetId
-    words.setAsset(asset)
   }
 
   function draw(): void {
@@ -341,6 +239,13 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
   function wire(): void {
     el.querySelector('#sub-transcribe')?.addEventListener('click', () => void transcribe())
     el.querySelector('#sub-rebuild')?.addEventListener('click', () => {
+      // Сначала проверяем, выполнимо ли это вообще, и только потом спрашиваем про потерю правок:
+      // заставлять человека соглашаться расстаться с текстом ради действия, которое всё равно не
+      // состоится, — обман.
+      const need = missing()
+      if (need.length) {
+        return showNote(`Сначала расшифруйте: ${need.map(a => `«${a.name}»`).join(', ')}`)
+      }
       if (!window.confirm('Собрать реплики заново? Ваши правки текста и времени пропадут.')) return
       void build()
     })
@@ -509,7 +414,6 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     },
     /** Клипы шкалы и пул записей: реплики только из того, что в ролике. */
     setTimeline(clips: Pick<Clip, 'asset_id'>[], assets: Asset[]): void {
-      assetPool = assets
       const next = timelineSubtitleAssets(clips, assets)
       const finishedCurrent = Boolean(
         jobId && transcribeId && next.find(a => a.id === transcribeId)?.hasTranscript,
@@ -525,12 +429,6 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
         }
         draw()
         return
-      }
-      // Панель слов узнаёт о доехавшей расшифровке из свежей карточки записи: тот же файл она
-      // не перезагружает, а появившийся текст подхватывает.
-      if (mode === 'words') {
-        if (same && words) words.setAsset(assetPool.find(a => a.id === wordsAssetId) ?? null)
-        else drawWords()
       }
       if (same) return
       // Карточки не пересобираем, пока их правят: innerHTML стёр бы набор в textarea. Но
@@ -552,12 +450,10 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     stop(): void {
       stopped = true
       window.clearTimeout(timer)
-      dropWords()
     },
-    /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи.
-     * Заказать её можно из обоих режимов, поэтому спрашиваем и панель слов. */
+    /** Расшифровка заказана и ещё не доехала: редактор продолжает опрашивать записи. */
     busy(): boolean {
-      return jobId !== null || Boolean(words?.busy())
+      return jobId !== null
     },
     alive,
   }
