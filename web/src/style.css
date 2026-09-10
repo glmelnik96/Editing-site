@@ -981,6 +981,12 @@ main.card {
   border-radius: 12px;
   background: color-mix(in srgb, var(--brand) 14%, transparent);
 }
+/* Полоса перемотки и дорожка в одной колее: игла проходит обе насквозь, поэтому её хват
+   оказывается в полосе — там, где по нему и надо попадать. */
+.lane {
+  position: relative;
+}
+
 /* Красная риска текущего кадра — конвенция монтажных программ; другого красного
  * в системе нет, поэтому берём --bad. Ошибку она здесь не значит. */
 .playhead {
@@ -989,15 +995,36 @@ main.card {
   bottom: 0;
   width: 2px;
   background: var(--bad);
+  /* Сквозная для указателя: под ней лежит полоса перемотки, и щелчок должен доходить до неё,
+     а не спотыкаться о двухпиксельную риску. */
   pointer-events: none;
   z-index: 3;
 }
+/* Хват: без него непонятно, что иглу можно взять, и её ищут двухпиксельной риской. */
+.playhead-grip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  background: var(--bad);
+  border-radius: 4px 4px 7px 7px;
+  box-sizing: border-box;
+  border: 2px solid var(--panel);
+}
+
+/* Полоса под линейкой — она же место хвата. Высота под хват: попасть по ней надо мышью,
+   а не пикселем, иначе вместо перемотки человек промахивается в ленту. */
 .scrub {
   position: relative;
-  height: 12px;
+  height: 16px;
   background: var(--line);
   cursor: ew-resize;
   touch-action: none;
+}
+.scrub:hover {
+  background: color-mix(in srgb, var(--muted) 40%, var(--line));
 }
 /* Подсказка вынесена из прокручиваемой области: внутри неё она уезжала вбок вместе с лентой
    и на длинном ролике пропадала из виду вместе с тем, что хотела объяснить. */

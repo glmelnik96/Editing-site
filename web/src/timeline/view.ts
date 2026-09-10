@@ -61,13 +61,19 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   el.innerHTML = `
     <div class="timeline" id="tl-view">
       <div class="ruler" id="tl-ruler"></div>
-      <div class="scrub" id="tl-scrub" title="Перемотка"></div>
-      <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div><div class="playhead" id="tl-playhead"></div></div>
+      <!-- Полоса перемотки и дорожка в одной колее: игла проходит их насквозь, и её хват
+           оказывается в полосе — там, где по нему и надо попадать. -->
+      <div class="lane" id="tl-lane">
+        <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
+        <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
+        <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
+      </div>
     </div>
     <div class="tl-hint muted" id="tl-hint"></div>`
   const view = el.querySelector('.timeline') as HTMLElement
   const ruler = el.querySelector('#tl-ruler') as HTMLElement
   const scrub = el.querySelector('#tl-scrub') as HTMLElement
+  const lane = el.querySelector('#tl-lane') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
   const blocksBox = el.querySelector('#tl-blocks') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
@@ -127,6 +133,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     const blocks = layout(current.clips, current.pxPerSec)
     const width = Math.max(200, totalDuration(current.clips) * current.pxPerSec)
     track.style.width = `${width}px`
+    lane.style.width = `${width}px`
     ruler.style.width = `${width}px`
     ruler.innerHTML = Array.from({ length: Math.ceil(width / (current.pxPerSec * 5)) + 1 }, (_, i) => {
       const seconds = i * 5
@@ -298,7 +305,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   let scrubbing = false
   const startScrub = (event: PointerEvent) => {
     scrubbing = true
-    scrub.setPointerCapture(event.pointerId)
+    // Захват гасим так же, как у переноса клипа: указателя может уже не быть, и ронять из-за
+    // этого перемотку незачем — щелчок по полосе сработает и без него.
+    try {
+      scrub.setPointerCapture(event.pointerId)
+    } catch {
+      /* указатель уже не активен */
+    }
     handlers.onSeek(timeAt(event.clientX))
   }
   scrub.addEventListener('pointerdown', startScrub)
