@@ -51,8 +51,14 @@ def get_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) -> sqlite3.
 
 
 def _owned(conn: sqlite3.Connection, user: CurrentUser, asset_id: str) -> sqlite3.Row:
-    row = get_asset(conn, user.id, asset_id)
-    if row is None:
+    """Запись. Админ видит и чужие: он отвечает за общий диск и за проекты команды.
+
+    Владелец берётся из самой строки (`row["user_id"]`), а не из вызывающего: файлы лежат в его
+    каталоге, и всё, что дальше трогает диск или считает занятое место, обязано считать его.
+    Чужому не-админу — 404, а не 403: сообщать о существовании чужих записей незачем.
+    """
+    row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if row is None or (row["user_id"] != user.id and user.role != "admin"):
         raise ApiError(404, "not_found", "Ассет не найден")
     return row
 
@@ -137,7 +143,7 @@ def get_(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> AssetView:
     row = _owned(conn, user, asset_id)
-    return asset_view(row, has_transcript=has_transcript(conn, user.id, asset_id))
+    return asset_view(row, has_transcript=has_transcript(conn, row["user_id"], asset_id))
 
 
 @router.delete("/{asset_id}", status_code=204)
@@ -149,18 +155,18 @@ def delete(
 ) -> Response:
     """Сначала запись, потом файлы: упавший процесс не оставит запись без файлов, папку подберёт janitor.
     Ассет, занятый в незавершённом проекте, не удаляется."""
-    _owned(conn, user, asset_id)
+    owner = _owned(conn, user, asset_id)["user_id"]
     with transaction(conn):
         # Проверка занятости внутри транзакции: BEGIN IMMEDIATE сериализует нас с сохранением проекта,
         # иначе между проверкой и удалением кто-то успел бы сослаться на этот ассет.
-        used_by = projects_using_asset(conn, user.id, asset_id)
+        used_by = projects_using_asset(conn, owner, asset_id)
         if used_by:
             raise ApiError(409, "asset_in_use", "Файл стоит в проекте", {"projects": used_by})
-        cur = conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
+        cur = conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, owner))
         if cur.rowcount == 0:
             raise ApiError(404, "not_found", "Ассет не найден")
         cancel_jobs_for_target(conn, asset_id)
-    shutil.rmtree(asset_dir(request.app.state.settings, user.id, asset_id), ignore_errors=True)
+    shutil.rmtree(asset_dir(request.app.state.settings, owner, asset_id), ignore_errors=True)
     return Response(status_code=204)
 
 
@@ -287,13 +293,13 @@ def transcribe(
     with transaction(conn):
         # BEGIN IMMEDIATE сериализует нас со вторым таким же запросом: иначе два клика подряд
         # поставили бы два задания и дважды заплатили провайдеру за один и тот же звук.
-        if has_transcript(conn, user.id, asset_id):
+        if has_transcript(conn, asset["user_id"], asset_id):
             raise ApiError(
                 409, "transcript_exists", "Транскрипт уже есть, удалите его перед новой расшифровкой"
             )
         _refuse_while_transcribing(conn, asset_id)
         job_id = enqueue_job(
-            conn, user_id=user.id, type_="transcribe", target_id=asset_id,
+            conn, user_id=asset["user_id"], type_="transcribe", target_id=asset_id,
             params={"language": language},
         )
     return TranscribeQueued(job_id=job_id, language=language)
@@ -390,7 +396,7 @@ def put_transcript(
             "language = excluded.language, duration = excluded.duration, segments = excluded.segments, "
             "stats = excluded.stats, created_at = excluded.created_at",
             (
-                asset_id, user.id, UPLOADED, "", language, round(duration, 3), len(segments),
+                asset_id, asset["user_id"], UPLOADED, "", language, round(duration, 3), len(segments),
                 json.dumps(stats, ensure_ascii=False), now_iso(),
             ),
         )
@@ -417,7 +423,7 @@ def delete_transcript(
     with transaction(conn):
         _refuse_while_transcribing(conn, asset_id)
         removed = conn.execute(
-            "DELETE FROM transcripts WHERE asset_id = ? AND user_id = ?", (asset_id, user.id)
+            "DELETE FROM transcripts WHERE asset_id = ? AND user_id = ?", (asset_id, asset["user_id"])
         ).rowcount
     path = _transcript_path(request.app.state.settings, asset)
     had_file = path.is_file()

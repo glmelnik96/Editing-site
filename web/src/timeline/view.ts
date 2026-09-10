@@ -6,7 +6,7 @@
  */
 import { escapeHtml } from '../html'
 import { barsFor, sliceThumbs, type AssetData } from '../strip'
-import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, type Clip } from './model'
+import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, ZOOM_MAX, ZOOM_MIN, type Clip } from './model'
 
 export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
 
@@ -24,7 +24,10 @@ export type RenderInput = {
 }
 
 const TRACK_HEIGHT = 72
-const WAVE_HEIGHT = 22
+// Волну читают, чтобы найти паузы: от её высоты прямо зависит, попадёт человек резом в тишину
+// или в слово. Рисуем от середины в обе стороны — при той же высоте блока это вдвое больше
+// размаха, чем полоска от низа.
+const WAVE_HEIGHT = 44
 const HANDLE_PX = 8
 // Выбранный блок поднимается над соседями, чтобы его обводку не срезал следующий клип.
 // Число живёт внутри слоя .blocks, наружу — к игле и призраку — оно не вылезает.
@@ -43,10 +46,11 @@ function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
   canvas.className = 'wave'
   const ctx = canvas.getContext('2d')
   if (ctx) {
-    ctx.fillStyle = 'rgba(255,255,255,.55)'
+    ctx.fillStyle = 'rgba(255,255,255,.8)'
+    const middle = WAVE_HEIGHT / 2
     bars.forEach((value, x) => {
-      const height = Math.max(1, (value / 255) * WAVE_HEIGHT)
-      ctx.fillRect(x, WAVE_HEIGHT - height, 1, height)
+      const half = Math.max(0.5, (value / 255) * middle)
+      ctx.fillRect(x, middle - half, 1, half * 2)
     })
   }
   return canvas
@@ -55,12 +59,12 @@ function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
 /** Шкала: возвращает управление для редактора. */
 export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   el.innerHTML = `
-    <div class="timeline">
+    <div class="timeline" id="tl-view">
       <div class="ruler" id="tl-ruler"></div>
       <div class="scrub" id="tl-scrub" title="Перемотка"></div>
       <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div><div class="playhead" id="tl-playhead"></div></div>
-      <div class="tl-hint muted" id="tl-hint"></div>
-    </div>`
+    </div>
+    <div class="tl-hint muted" id="tl-hint"></div>`
   const view = el.querySelector('.timeline') as HTMLElement
   const ruler = el.querySelector('#tl-ruler') as HTMLElement
   const scrub = el.querySelector('#tl-scrub') as HTMLElement
@@ -340,7 +344,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       }
     },
     setZoom(pxPerSec: number): void {
-      render({ pxPerSec: Math.max(4, Math.min(400, pxPerSec)) })
+      render({ pxPerSec: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pxPerSec)) })
     },
     zoom(): number {
       return current.pxPerSec

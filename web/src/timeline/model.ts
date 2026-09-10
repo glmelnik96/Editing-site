@@ -230,3 +230,27 @@ export function dropTarget(clips: Clip[], from: number, time: number): { to: num
   const index = moved.findIndex(c => c.id === clips[from].id)
   return { to, start: timelineStart(moved, index) }
 }
+
+
+/* Масштаб шкалы: от четырёх пикселей на секунду (часовая запись целиком в экране) до четырёхсот
+ * (кадр различим поштучно). */
+export const ZOOM_MIN = 4
+export const ZOOM_MAX = 400
+
+/**
+ * Ползунок и масштаб связаны по логарифму, а не напрямую.
+ *
+ * Диапазон стократный: при линейной связи первая четверть ползунка проскакивала бы всю
+ * осмысленную часть, а остальные три четверти двигали бы кадр туда-сюда. По логарифму один и тот
+ * же сдвиг ручки везде меняет масштаб во столько же раз.
+ */
+export function zoomToPercent(pxPerSec: number): number {
+  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pxPerSec))
+  return Math.round((Math.log(clamped / ZOOM_MIN) / Math.log(ZOOM_MAX / ZOOM_MIN)) * 100)
+}
+
+export function percentToZoom(percent: number): number {
+  const clamped = Math.max(0, Math.min(100, percent))
+  return ms(ZOOM_MIN * (ZOOM_MAX / ZOOM_MIN) ** (clamped / 100))
+}
+

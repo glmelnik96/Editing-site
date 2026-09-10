@@ -3,9 +3,12 @@
  *
  * Кабинет и белый список — разные вещи, и держать их на одном экране правильно: кабинет ведёт
  * допуск сразу в три сервиса, а белый список отвечает на вопрос «кого вообще пускает вход сюда».
+ * Третьим здесь же обзор работы команды: он отвечает на «чем занят общий диск» и даёт открыть
+ * чужой проект, когда его автор в отпуске.
  */
 import { api, ApiError } from './api'
 import { mountCabinet } from './cabinet'
+import { mountOverview } from './overview'
 import { fmtWhen } from './assets'
 import { escapeHtml } from './html'
 
@@ -16,6 +19,7 @@ export function mountAdmin(el: HTMLElement) {
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Кабинет доступа</h1>
       <div id="ad-cabinet"></div>
+      <div id="ad-overview"></div>
       <div id="ad-whitelist" class="stack"></div>
     </div>`
 
@@ -23,6 +27,7 @@ export function mountAdmin(el: HTMLElement) {
   let stopped = false
 
   mountCabinet(el.querySelector('#ad-cabinet') as HTMLElement)
+  const overview = mountOverview(el.querySelector('#ad-overview') as HTMLElement)
 
   const showError = (e: unknown) => {
     const box = whitelist.querySelector<HTMLPreElement>('#wl-error')
@@ -95,6 +100,7 @@ export function mountAdmin(el: HTMLElement) {
   return {
     stop(): void {
       stopped = true
+      overview.stop()
     },
   }
 }

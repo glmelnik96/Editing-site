@@ -861,6 +861,14 @@ main.card {
 .timeline {
   position: relative;
   overflow-x: auto;
+  /* Протаскивание по шкале — это перенос клипа или перемотка, но браузер по умолчанию считает
+     его выделением текста: промахнулся мимо блока — и вместо движения по ленте выделил подписи.
+     Своё выделение шкала рисует сама, чужое ей не нужно. */
+  user-select: none;
+  /* Полоса прокрутки здесь не украшение, а единственный способ доехать до правого края ленты:
+     делаем её толще системной и видимой, а не ниткой в три пикселя. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--muted) var(--panel);
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -924,7 +932,7 @@ main.card {
   width: 160px;
   height: 90px;
   background-repeat: no-repeat;
-  opacity: 0.75;
+  opacity: 0.4;
 }
 /* Тень под подписью — не глубина, а читаемость: имя клипа лежит поверх кадра из видео. */
 .block .label {
@@ -991,10 +999,29 @@ main.card {
   cursor: ew-resize;
   touch-action: none;
 }
+/* Подсказка вынесена из прокручиваемой области: внутри неё она уезжала вбок вместе с лентой
+   и на длинном ролике пропадала из виду вместе с тем, что хотела объяснить. */
 .tl-hint {
   height: 18px;
   font-size: 12px;
   padding-left: 6px;
+}
+
+/* Webkit не понимает scrollbar-color: там полосу описывают отдельно. */
+.timeline::-webkit-scrollbar {
+  height: 14px;
+}
+.timeline::-webkit-scrollbar-track {
+  background: var(--ink);
+  border-radius: 7px;
+}
+.timeline::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 3px solid var(--ink);
+  border-radius: 7px;
+}
+.timeline::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 /* --- Панель исходника --- */
@@ -1092,6 +1119,11 @@ main.card {
   gap: 8px;
   white-space: nowrap;
 }
+/* Ползунок масштаба: короткий, чтобы не спорить с кнопками правки за место в строке. */
+.zoom {
+  width: 96px;
+}
+
 .clip-vol input[type='range'] {
   width: 88px;
 }

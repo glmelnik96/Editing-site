@@ -14,7 +14,7 @@ from server.app.auth.deps import CurrentUser, current_user
 from server.app.errors import ApiError
 from server.app.jobs import list_jobs_for_user
 from server.app.projects.routes import RenderView
-from server.app.projects.store import delete_render, get_render
+from server.app.projects.store import delete_render, get_render, get_render_any, render_owner
 from server.app.util import now_iso, utcnow
 from server.db.core import get_db
 
@@ -50,7 +50,15 @@ class JobList(BaseModel):
 
 
 def _owned_job(conn: sqlite3.Connection, user: CurrentUser, job_id: str) -> sqlite3.Row:
-    row = conn.execute("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user.id)).fetchone()
+    # Админ смотрит и чужие задания: он мог сам поставить сборку в чужом проекте — она числится
+    # за владельцем, потому что готовый ролик ложится в его каталог.
+    row = (
+        conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if user.role == "admin"
+        else conn.execute(
+            "SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user.id)
+        ).fetchone()
+    )
     if row is None:
         raise ApiError(404, "not_found", "Задание не найдено")
     return row
@@ -62,7 +70,8 @@ def get_(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> RenderView:
-    render = get_render(conn, user.id, render_id)
+    # Ролик чужого проекта админ тоже видит: он мог сам его собрать.
+    render = get_render(conn, user.id, render_id) if user.role != "admin" else get_render_any(conn, render_id)
     if render is None:
         raise ApiError(404, "not_found", "Ролик не найден")
     return RenderView(**render)
@@ -74,7 +83,10 @@ def delete(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
-    if not delete_render(conn, user.id, render_id):
+    owner = render_owner(conn, render_id)
+    if owner is None or (owner != user.id and user.role != "admin"):
+        raise ApiError(404, "not_found", "Ролик не найден")
+    if not delete_render(conn, owner, render_id):
         raise ApiError(404, "not_found", "Ролик не найден")
     return Response(status_code=204)
 
@@ -118,7 +130,7 @@ def cancel(
         )
     conn.execute(
         "UPDATE jobs SET status = 'canceled', finished_at = ? "
-        "WHERE id = ? AND user_id = ? AND status IN ('queued', 'running')",
-        (now_iso(), job_id, user.id),
+        "WHERE id = ? AND (user_id = ? OR ?) AND status IN ('queued', 'running')",
+        (now_iso(), job_id, user.id, user.role == "admin"),
     )
     return Response(status_code=204)

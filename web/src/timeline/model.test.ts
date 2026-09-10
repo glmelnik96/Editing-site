@@ -10,6 +10,7 @@ import {
   layout,
   moveClip,
   newClipId,
+  percentToZoom,
   removeClip,
   sameOrder,
   sourceTime,
@@ -17,6 +18,9 @@ import {
   timelineStart,
   totalDuration,
   trimClip,
+  zoomToPercent,
+  ZOOM_MAX,
+  ZOOM_MIN,
 } from './model'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
@@ -255,3 +259,35 @@ describe('переходы', () => {
     expect(cut[2].transition).toEqual({ kind: 'fade', duration: 0.5 })
   })
 })
+
+
+describe('масштаб шкалы', () => {
+  it('края ползунка — края диапазона', () => {
+    expect(percentToZoom(0)).toBe(ZOOM_MIN)
+    expect(percentToZoom(100)).toBe(ZOOM_MAX)
+    expect(zoomToPercent(ZOOM_MIN)).toBe(0)
+    expect(zoomToPercent(ZOOM_MAX)).toBe(100)
+  })
+
+  it('туда и обратно возвращает то же', () => {
+    for (const percent of [0, 17, 40, 63, 88, 100]) {
+      expect(zoomToPercent(percentToZoom(percent))).toBe(percent)
+    }
+  })
+
+  it('делит диапазон по логарифму, а не поровну', () => {
+    // Диапазон стократный: при линейной связи середина ползунка была бы около 200 px/с, то есть
+    // вся осмысленная часть уместилась бы в первую четверть хода.
+    expect(percentToZoom(50)).toBeCloseTo(40, 0)
+    // Один и тот же сдвиг ручки везде меняет масштаб во столько же раз.
+    expect(percentToZoom(50) / percentToZoom(25)).toBeCloseTo(percentToZoom(75) / percentToZoom(50), 1)
+  })
+
+  it('за края не выпускает', () => {
+    expect(percentToZoom(-40)).toBe(ZOOM_MIN)
+    expect(percentToZoom(300)).toBe(ZOOM_MAX)
+    expect(zoomToPercent(0.1)).toBe(0)
+    expect(zoomToPercent(10000)).toBe(100)
+  })
+})
+

@@ -6,7 +6,7 @@
  * там уже подтянутые резы, флаги подтверждения и новая версия.
  */
 import { ApiError } from './api'
-import { POLL_MS, listAssets, needsPolling, type Asset } from './assets'
+import { POLL_MS, listProjectAssets, needsPolling, type Asset } from './assets'
 import { createHistory } from './history'
 import { escapeHtml } from './html'
 import {
@@ -23,7 +23,7 @@ import {
 import { createSaver, listRenders, loadProject, type Cue, type FieldError, type Music, type Project, type ProjectDoc } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
-import { clampTransitions, clipAt, clipAssetIds, clipDuration, fadeInto, insertClip, maxFade, ms, newClipId, removeClip, splitAt, timelineStart, totalDuration, trimClip, type Clip } from './timeline/model'
+import { clampTransitions, clipAt, clipAssetIds, clipDuration, fadeInto, insertClip, maxFade, ms, newClipId, percentToZoom, removeClip, splitAt, timelineStart, totalDuration, trimClip, zoomToPercent, type Clip } from './timeline/model'
 import { mountMusic } from './music'
 import { mountRender } from './render'
 import { resolveTab, tabEnabled, type EditorTab } from './editor-tabs'
@@ -92,11 +92,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
             <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
             <button id="ed-delete" type="button" title="Удалить выбранный клип (Del)">Удалить клип</button>
             <button id="ed-zoom-out" type="button" title="Мельче (−)">−</button>
+            <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
+              title="Масштаб шкалы" />
             <button id="ed-zoom-in" type="button" title="Крупнее (+)">+</button>
           </span>
           <span class="bar-group" id="ed-help-group">
-            <button id="ed-help" type="button" class="btn-icon" title="Горячие клавиши (?)"
-              aria-expanded="false">?</button>
+            <button id="ed-help" type="button" title="Показать список (?)"
+              aria-expanded="false">Горячие клавиши</button>
           </span>
           <span class="bar-group" id="ed-out-group">
             <select id="ed-aspect" title="Пропорция кадра">
@@ -161,6 +163,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const copyButton = el.querySelector('#ed-copy') as HTMLButtonElement
   const deleteButton = el.querySelector('#ed-delete') as HTMLButtonElement
   const zoomInButton = el.querySelector('#ed-zoom-in') as HTMLButtonElement
+  const zoomSlider = el.querySelector('#ed-zoom') as HTMLInputElement
   const zoomOutButton = el.querySelector('#ed-zoom-out') as HTMLButtonElement
   const helpButton = el.querySelector('#ed-help') as HTMLButtonElement
   const keysCard = el.querySelector('#ed-keys') as HTMLElement
@@ -256,7 +259,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // сорок раз в минуту вхолостую, а ВМ у нас общая с двумя соседями.
     const soon = needsPolling(assetList) || subtitles.busy() || transcript.busy()
     assetTimer = window.setTimeout(() => {
-      void listAssets()
+      void listProjectAssets(projectId)
         .then(r => {
           if (stopped) return
           applyAssets(r.assets)
@@ -1039,8 +1042,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   el.querySelector('#ed-copy')!.addEventListener('click', duplicateSelected)
   el.querySelector('#ed-delete')!.addEventListener('click', removeSelected)
   helpButton.addEventListener('click', () => showKeys(keysCard.hidden))
-  el.querySelector('#ed-zoom-in')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() * 1.5))
-  el.querySelector('#ed-zoom-out')!.addEventListener('click', () => timeline.setZoom(timeline.zoom() / 1.5))
+  /** Масштаб меняют и кнопками, и ползунком: ползунок обязан показывать то, что вышло. */
+  function setZoom(pxPerSec: number): void {
+    timeline.setZoom(pxPerSec)
+    zoomSlider.value = String(zoomToPercent(timeline.zoom()))
+  }
+
+  zoomInButton.addEventListener('click', () => setZoom(timeline.zoom() * 1.5))
+  zoomOutButton.addEventListener('click', () => setZoom(timeline.zoom() / 1.5))
+  zoomSlider.addEventListener('input', () => setZoom(percentToZoom(Number(zoomSlider.value))))
+  zoomSlider.value = String(zoomToPercent(timeline.zoom()))
 
   function applyOutput(patch: Partial<ProjectDoc['output']>): void {
     if (!project) return
@@ -1236,10 +1247,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         stepClip(1)
         break
       case 'zoomIn':
-        timeline.setZoom(timeline.zoom() * 1.5)
+        setZoom(timeline.zoom() * 1.5)
         break
       case 'zoomOut':
-        timeline.setZoom(timeline.zoom() / 1.5)
+        setZoom(timeline.zoom() / 1.5)
         break
     }
   }
@@ -1248,7 +1259,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   async function boot(): Promise<void> {
     const [loaded, list, ready] = await Promise.all([
       loadProject(projectId),
-      listAssets(),
+      listProjectAssets(projectId),
       // Список готовых роликов нужен ровно для одного: включать ли вкладку «Рендер». Его отказ —
       // не повод хоронить весь редактор: без него панель просто останется закрытой, а раньше
       // проект вообще не открывался и висел на «загрузка…» до перезагрузки страницы.

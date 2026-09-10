@@ -1,10 +1,11 @@
-"""Администратор: whitelist почт и общая статистика. Чужие проекты администратор не видит.
+"""Администратор: whitelist почт, общая статистика и обзор чужой работы.
 
 Удаление адреса из whitelist отключает учётную запись (сессии и токены перестают работать),
 повторное добавление включает её обратно.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -17,6 +18,7 @@ from server.app.auth.deps import CurrentUser, require_admin, require_admin_cooki
 from server.app.errors import ApiError
 from server.app.health import disk_free_pct_safe
 from server.db.core import get_db
+from server.media.timeline import clips_duration
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -142,6 +144,79 @@ def cabinet_access(
         except cabinet_mod.CabinetError as exc:
             raise ApiError(422, exc.code, str(exc)) from exc
     return ChangeList(results=[ChangeItem(**vars(r)) for r in results])
+
+
+class OwnedProject(BaseModel):
+    id: str
+    name: str
+    owner_email: str
+    owner_name: str
+    clips_count: int
+    duration: float
+    updated_at: str
+
+
+class OwnedProjectList(BaseModel):
+    projects: list[OwnedProject]
+
+
+class OwnedAsset(BaseModel):
+    id: str
+    original_name: str
+    owner_email: str
+    owner_name: str
+    kind: str
+    status: str
+    size: int
+    duration: float | None
+    created_at: str
+
+
+class OwnedAssetList(BaseModel):
+    assets: list[OwnedAsset]
+
+
+@router.get("/projects", response_model=OwnedProjectList)
+def all_projects(
+    _: CurrentUser = Depends(require_admin),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> OwnedProjectList:
+    """Проекты всех: диск общий, и следить за тем, чем он занят, кроме админа некому."""
+    rows = conn.execute(
+        "SELECT p.id, p.name, p.doc, p.updated_at, u.email, u.name AS owner_name "
+        "FROM projects AS p JOIN users AS u ON u.id = p.user_id "
+        "ORDER BY p.updated_at DESC, p.id"
+    )
+    out = []
+    for row in rows:
+        clips = (json.loads(row["doc"]).get("clips") or [])
+        out.append(OwnedProject(
+            id=row["id"], name=row["name"], owner_email=row["email"], owner_name=row["owner_name"],
+            clips_count=len(clips), duration=clips_duration(clips), updated_at=row["updated_at"],
+        ))
+    return OwnedProjectList(projects=out)
+
+
+@router.get("/assets", response_model=OwnedAssetList)
+def all_assets(
+    _: CurrentUser = Depends(require_admin),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> OwnedAssetList:
+    """Записи всех. Самые тяжёлые сверху: место кончается из-за них, а не из-за числа файлов."""
+    rows = conn.execute(
+        "SELECT a.id, a.original_name, a.kind, a.status, a.size, a.duration, a.created_at, "
+        "u.email, u.name AS owner_name "
+        "FROM assets AS a JOIN users AS u ON u.id = a.user_id "
+        "ORDER BY a.size DESC, a.id"
+    )
+    return OwnedAssetList(assets=[
+        OwnedAsset(
+            id=r["id"], original_name=r["original_name"], owner_email=r["email"],
+            owner_name=r["owner_name"], kind=r["kind"], status=r["status"], size=r["size"],
+            duration=r["duration"], created_at=r["created_at"],
+        )
+        for r in rows
+    ])
 
 
 @router.get("/stats", response_model=Stats)

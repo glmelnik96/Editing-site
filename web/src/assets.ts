@@ -110,6 +110,17 @@ export function listAssets(): Promise<{ assets: Asset[] }> {
   return api<{ assets: Asset[] }>('/api/v1/assets')
 }
 
+/**
+ * Записи, из которых собран и может собираться этот проект, — то есть записи его владельца.
+ *
+ * Редактор спрашивает их через проект, а не общим списком: документ обязан ссылаться на записи
+ * владельца, и у админа, открывшего чужой проект, свой список совсем другой — каждый клип
+ * выглядел бы необработанным, а сцена осталась бы пустой.
+ */
+export function listProjectAssets(projectId: string): Promise<{ assets: Asset[] }> {
+  return api<{ assets: Asset[] }>(`/api/v1/projects/${encodeURIComponent(projectId)}/assets`)
+}
+
 export function deleteAsset(id: string): Promise<void> {
   return api<void>(`/api/v1/assets/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

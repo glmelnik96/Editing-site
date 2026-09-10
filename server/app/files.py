@@ -44,7 +44,10 @@ def authorize_file(
 
     owner_id — это ассет для kind="asset"/"conversion" и проект для kind="render".
     """
-    if user_id != user.id:
+    # Админ читает чужие файлы: без этого он не откроет чужой проект — редактору нужны прокси,
+    # полоски кадров и карты пауз владельца. Права даёт конфигурация сервиса (VIDEO_ADMIN_EMAIL),
+    # а не кто-то через интерфейс.
+    if user_id != user.id and user.role != "admin":
         raise ApiError(404, "not_found", "Файл не найден")
     if kind == "render":
         render_id = name[: -len(".mp4")]

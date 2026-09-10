@@ -99,3 +99,126 @@ def test_agent_token_cannot_touch_whitelist_but_may_read_stats(login_as):
     assert admin.get("/api/v1/admin/whitelist", headers=headers).status_code == 403
     assert admin.delete("/api/v1/admin/whitelist/x@ya.ru", headers=headers).status_code == 403
     assert admin.get("/api/v1/admin/stats", headers=headers).status_code == 200
+
+
+def _seed_asset(settings, user_id, asset_id="ast_000000000001", size=1234):
+    """Готовая запись на диске: проекту нужна ссылка на существующий и обработанный файл."""
+    import sqlite3
+
+    from server.app.storage import asset_dir
+
+    folder = asset_dir(settings, user_id, asset_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "source.mp4").write_bytes(b"x")
+    conn = sqlite3.connect(str(settings.db_path))
+    conn.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, duration, "
+        "created_at, last_access_at) VALUES (?, ?, 'video', 'встреча.mp4', 'mp4', ?, 'ready', 60, "
+        "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        (asset_id, user_id, size),
+    )
+    conn.commit()
+    conn.close()
+    return asset_id
+
+
+def test_admin_sees_everyones_projects_and_assets(login_as, settings):
+    """Диск общий, и следить за тем, чем он занят, кроме админа некому."""
+    admin = login_as("admin@ya.ru")
+    admin.post("/api/v1/admin/whitelist", json={"email": "user@ya.ru"})
+
+    user = login_as("user@ya.ru", "Пользователь")
+    me = user.get("/api/v1/me").json()
+    asset = _seed_asset(settings, me["id"])
+    project = user.post(
+        "/api/v1/projects",
+        json={"name": "Планёрка", "doc": {"clips": [{"asset_id": asset, "in": 0, "out": 5}]}},
+    ).json()
+
+    admin = login_as("admin@ya.ru")
+    projects = admin.get("/api/v1/admin/projects").json()["projects"]
+    assert [p["id"] for p in projects] == [project["id"]]
+    assert projects[0]["owner_email"] == "user@ya.ru" and projects[0]["owner_name"] == "Пользователь"
+    assert projects[0]["clips_count"] == 1 and projects[0]["duration"] == 5.0
+
+    assets = admin.get("/api/v1/admin/assets").json()["assets"]
+    assert [a["id"] for a in assets] == [asset]
+    assert assets[0]["owner_email"] == "user@ya.ru" and assets[0]["size"] == 1234
+
+
+def test_these_lists_are_for_the_admin_only(login_as):
+    admin = login_as("admin@ya.ru")
+    admin.post("/api/v1/admin/whitelist", json={"email": "user@ya.ru"})
+    user = login_as("user@ya.ru", "Пользователь")
+    assert user.get("/api/v1/admin/projects").status_code == 403
+    assert user.get("/api/v1/admin/assets").status_code == 403
+
+
+def test_admin_opens_and_edits_a_foreign_project(login_as, settings):
+    """Открыть чужой проект и починить его — то, ради чего админ вообще видит чужое.
+
+    Работает он при этом от имени владельца: файлы лежат в каталоге владельца, и сохранение
+    ищет строку по его id, а не по id вошедшего.
+    """
+    admin = login_as("admin@ya.ru")
+    admin.post("/api/v1/admin/whitelist", json={"email": "user@ya.ru"})
+    user = login_as("user@ya.ru", "Пользователь")
+    me = user.get("/api/v1/me").json()
+    asset = _seed_asset(settings, me["id"])
+    project = user.post(
+        "/api/v1/projects",
+        json={"name": "Планёрка", "doc": {"clips": [{"asset_id": asset, "in": 0, "out": 5}]}},
+    ).json()
+
+    admin = login_as("admin@ya.ru")
+    assert admin.get(f"/api/v1/projects/{project['id']}").status_code == 200
+    # Записи проекта видны админу через сам проект: своих у него нет, а без них редактор
+    # показал бы каждый клип необработанным.
+    seen = admin.get(f"/api/v1/projects/{project['id']}/assets").json()["assets"]
+    assert [a["id"] for a in seen] == [asset]
+
+    saved = admin.put(
+        f"/api/v1/projects/{project['id']}",
+        json={
+            "name": "Планёрка (поправил админ)",
+            "version": project["version"],
+            "doc": {"clips": [{"asset_id": asset, "in": 1, "out": 4}]},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == project["version"] + 1
+
+    # Правка ушла владельцу, а не завелась вторым проектом у админа.
+    user = login_as("user@ya.ru", "Пользователь")
+    mine = user.get("/api/v1/projects").json()["projects"]
+    assert [p["name"] for p in mine] == ["Планёрка (поправил админ)"]
+    assert admin.get("/api/v1/projects").status_code == 200
+
+
+def test_a_foreign_project_is_still_invisible_to_everyone_else(login_as, settings):
+    admin = login_as("admin@ya.ru")
+    for email in ("one@ya.ru", "two@ya.ru"):
+        admin.post("/api/v1/admin/whitelist", json={"email": email})
+    one = login_as("one@ya.ru", "Первый")
+    project = one.post("/api/v1/projects", json={"name": "Своё"}).json()
+
+    two = login_as("two@ya.ru", "Второй")
+    assert two.get(f"/api/v1/projects/{project['id']}").status_code == 404
+    assert two.delete(f"/api/v1/projects/{project['id']}").status_code == 404
+    assert two.get(f"/api/v1/projects/{project['id']}/assets").status_code == 404
+
+
+def test_admin_deletes_a_foreign_project_and_asset(login_as, settings):
+    admin = login_as("admin@ya.ru")
+    admin.post("/api/v1/admin/whitelist", json={"email": "user@ya.ru"})
+    user = login_as("user@ya.ru", "Пользователь")
+    me = user.get("/api/v1/me").json()
+    asset = _seed_asset(settings, me["id"])
+    project = user.post("/api/v1/projects", json={"name": "Планёрка"}).json()
+
+    admin = login_as("admin@ya.ru")
+    assert admin.delete(f"/api/v1/projects/{project['id']}").status_code == 204
+    assert admin.delete(f"/api/v1/assets/{asset}").status_code == 204
+    assert admin.get("/api/v1/admin/projects").json()["projects"] == []
+    assert admin.get("/api/v1/admin/assets").json()["assets"] == []
+

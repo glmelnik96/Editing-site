@@ -134,6 +134,13 @@ def create_project(
     return {"id": project_id, "name": name, "version": 1, "created_at": now, "updated_at": now, "doc": doc}
 
 
+def project_owner(conn: sqlite3.Connection, project_id: str) -> str | None:
+    """Кому принадлежит проект. Нужен маршрутам: админ работает с чужими проектами, но работает
+    от имени владельца — файлы лежат в его каталоге, и строки ищутся по его id."""
+    row = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return row["user_id"] if row else None
+
+
 def get_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
@@ -532,6 +539,18 @@ def list_renders(conn: sqlite3.Connection, user_id: str, project_id: str) -> lis
         (project_id, user_id),
     )
     return [_render_row(r) for r in rows]
+
+
+def render_owner(conn: sqlite3.Connection, render_id: str) -> str | None:
+    """Кому принадлежит готовый ролик. Нужен маршрутам: админ работает с чужими от имени владельца."""
+    row = conn.execute("SELECT user_id FROM renders WHERE id = ?", (render_id,)).fetchone()
+    return row["user_id"] if row else None
+
+
+def get_render_any(conn: sqlite3.Connection, render_id: str) -> dict | None:
+    """Ролик без проверки владельца: зовут только там, где владельца уже проверили выше."""
+    row = conn.execute("SELECT * FROM renders WHERE id = ?", (render_id,)).fetchone()
+    return _render_row(row) if row else None
 
 
 def get_render(conn: sqlite3.Connection, user_id: str, render_id: str) -> dict | None:
