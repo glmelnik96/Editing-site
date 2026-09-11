@@ -4,10 +4,11 @@
  * Модуль только рисует и ловит указатель. Любая правка уходит наверх через onChange уже готовым
  * списком клипов: считает её модель (model.ts), а не эта обвязка.
  */
+import { fmtDuration } from '../assets'
 import { escapeHtml } from '../html'
 import type { Overlay, Sound } from '../project'
 import { barsFor, sliceThumbs, type AssetData, type ThumbsMeta } from '../strip'
-import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, ZOOM_MAX, ZOOM_MIN, type Clip } from './model'
+import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, rulerTicks, sameOrder, totalDuration, trimClip, zoomFloor, ZOOM_MAX, type Clip } from './model'
 import { laneBlocks, laneEnd, laneSpan, moveItem, type Placed } from './sounds'
 import { tileRange, tileWidth, visibleTiles, type Tile } from './tiles'
 
@@ -52,6 +53,7 @@ const HANDLE_PX = 8
 const SELECTED_Z = 999
 const CLICK_SLOP_PX = 4 // сдвиг меньше этого — это клик, а не перенос
 const SAY_MS = 6000 // сколько держать сказанное под шкалой
+const TICK_LABEL_PX = 56 // место под подпись деления вроде «1:20:00»
 
 export function emptyTrackHint(clipCount: number): string {
   return clipCount === 0 ? 'Добавьте кусок из исходников' : ''
@@ -113,6 +115,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   const overlayTrack = el.querySelector('#tl-overlays') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const ghost = el.querySelector('#tl-drop') as HTMLElement
+  let rulerWidth = 200 // ширина шкалы в пикселях после последней перерисовки — для делений
   let sayTimer = 0
   // До какого момента под шкалой стоит сказанное: перерисовка его не трогает.
   let sayUntil = 0
@@ -167,6 +170,17 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       <b class="handle handle-in"></b><b class="handle handle-out"></b>`
   }
 
+  /** Где кончается содержимое шкалы: последний клип или свисающий за него звук либо наложение. */
+  function contentEnd(input: RenderInput): number {
+    const total = totalDuration(input.clips)
+    return Math.max(total, laneEnd(input.sounds, total), laneEnd(input.overlays, total))
+  }
+
+  /** Нижняя граница масштаба сейчас: у длинного ролика — весь ролик в видимой части шкалы. */
+  function zoomMin(): number {
+    return zoomFloor(contentEnd(current), view.clientWidth)
+  }
+
   function render(input?: Partial<RenderInput>): void {
     if (drag || laneDrag) {
       pending = { ...(pending ?? {}), ...input }
@@ -176,8 +190,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     const blocks = layout(current.clips, current.pxPerSec)
     // Шкала дотягивается и до звука, свисающего за конец ролика: сборка его хвост обрежет, но
     // увидеть и схватить его, чтобы вернуть назад, человек должен.
-    const total = totalDuration(current.clips)
-    const end = Math.max(total, laneEnd(current.sounds, total), laneEnd(current.overlays, total))
+    const end = contentEnd(current)
     const width = Math.max(200, end * current.pxPerSec)
     track.style.width = `${width}px`
     soundTrack.style.width = `${width}px`
@@ -185,10 +198,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     audioTrack.style.width = `${width}px`
     lane.style.width = `${width}px`
     ruler.style.width = `${width}px`
-    ruler.innerHTML = Array.from({ length: Math.ceil(width / (current.pxPerSec * 5)) + 1 }, (_, i) => {
-      const seconds = i * 5
-      return `<span class="tick" style="left:${seconds * current.pxPerSec}px">${seconds} с</span>`
-    }).join('')
+    rulerWidth = width
 
     blocksBox.querySelectorAll('.block').forEach(node => node.remove())
     audioBox.querySelectorAll('.block').forEach(node => node.remove())
@@ -229,6 +239,8 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     // Сказанное под шкалой перерисовка не стирает: автосохранение отвечает через полсекунды после
     // правки, и отказ на следующую правку исчезал, не успев быть прочитанным.
     if (!drag && Date.now() >= sayUntil) hint.textContent = emptyTrackHint(current.clips.length)
+    // Деления — после блоков: пока старые блоки на месте, прокрутка ещё считает шкалу широкой.
+    paintTicks()
     paintTiles()
   }
 
@@ -299,6 +311,16 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   }
 
   /**
+   * Деления линейки — только в видимой части шкалы, как на часах и с шагом под масштаб (rulerTicks).
+   * Перерисовываются вместе с плитками: при прокрутке, смене размера и после render().
+   */
+  function paintTicks(): void {
+    ruler.innerHTML = rulerTicks(current.pxPerSec, rulerWidth, view.scrollLeft, view.clientWidth, TICK_LABEL_PX)
+      .map(tick => `<span class="tick" style="left:${tick.left}px">${fmtDuration(tick.seconds)}</span>`)
+      .join('')
+  }
+
+  /**
    * Дорисовать видимые плитки и убрать далёкие.
    *
    * Запас — экран в каждую сторону: прокрутка открывает уже готовое, а не пустоту, пока рисуется.
@@ -328,6 +350,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     paintQueued = true
     requestAnimationFrame(() => {
       paintQueued = false
+      paintTicks()
       paintTiles()
     })
   }
@@ -681,11 +704,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       }
     },
     setZoom(pxPerSec: number): void {
-      render({ pxPerSec: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pxPerSec)) })
+      render({ pxPerSec: Math.max(zoomMin(), Math.min(ZOOM_MAX, pxPerSec)) })
     },
     zoom(): number {
       return current.pxPerSec
     },
+    /** Нижняя граница масштаба для текущего ролика и ширины окна — ноль ползунка. */
+    zoomMin,
     select(id: string | null): void {
       selected = id
       markSelected()

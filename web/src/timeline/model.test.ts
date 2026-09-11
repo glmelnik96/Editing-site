@@ -12,13 +12,17 @@ import {
   newClipId,
   percentToZoom,
   removeClip,
+  rulerTicks,
   sameOrder,
   sourceTime,
   splitAt,
+  tickStep,
   timelineStart,
   totalDuration,
   trimClip,
+  zoomFloor,
   zoomToPercent,
+  ZOOM_FLOOR,
   ZOOM_MAX,
   ZOOM_MIN,
 } from './model'
@@ -288,6 +292,68 @@ describe('масштаб шкалы', () => {
     expect(percentToZoom(300)).toBe(ZOOM_MAX)
     expect(zoomToPercent(0.1)).toBe(0)
     expect(zoomToPercent(10000)).toBe(100)
+  })
+
+  it('у длинного ролика ноль ползунка — весь ролик в окне', () => {
+    // Минута в окне 800 px влезает и при обычном минимуме (3200 px хватило бы на 200 с), а
+    // четверть часа и полтора часа — нет: граница опускается до «весь ролик в окне».
+    expect(zoomFloor(60, 800)).toBe(ZOOM_MIN)
+    expect(zoomFloor(900, 800)).toBe(0.888)
+    expect(zoomFloor(4992, 800)).toBe(0.16)
+    // Округление вниз: шкала не вылезает за край на пиксель и не заводит прокрутку.
+    expect(zoomFloor(4992, 800) * 4992).toBeLessThanOrEqual(800)
+    // Мельче предела не уходим, а без размеров окна — обычный минимум.
+    expect(zoomFloor(100_000, 800)).toBe(ZOOM_FLOOR)
+    expect(zoomFloor(0, 800)).toBe(ZOOM_MIN)
+    expect(zoomFloor(4992, 0)).toBe(ZOOM_MIN)
+  })
+
+  it('ползунок считает от нижней границы ролика', () => {
+    const min = zoomFloor(4992, 800)
+    expect(percentToZoom(0, min)).toBe(min)
+    expect(percentToZoom(100, min)).toBe(ZOOM_MAX)
+    expect(zoomToPercent(min, min)).toBe(0)
+    expect(zoomToPercent(2, min)).toBeGreaterThan(0)
+    for (const percent of [0, 25, 50, 75, 100]) {
+      expect(zoomToPercent(percentToZoom(percent, min), min)).toBe(percent)
+    }
+  })
+})
+
+describe('деления шкалы', () => {
+  it('шаг под масштаб: подписи не слипаются и не пропадают', () => {
+    expect(tickStep(400)).toBe(1)
+    expect(tickStep(40)).toBe(5)
+    expect(tickStep(4)).toBe(30)
+    expect(tickStep(0.16)).toBe(600)
+    // Между подписями не меньше 90 px, и шаг — ближайший к этому снизу из «часовых».
+    for (const px of [400, 40, 4, 0.16, 0.05]) {
+      const step = tickStep(px)
+      expect(step * px).toBeGreaterThanOrEqual(90)
+    }
+    // Совсем мелко — шаг упирается в час, реже делений не бывает.
+    expect(tickStep(0.01)).toBe(3600)
+  })
+
+  it('размечает только видимое окно с запасом по экрану в каждую сторону', () => {
+    // Обычный масштаб, начало шкалы: окно 630 px и столько же запаса вправо — до 1260 px.
+    const start = rulerTicks(40, 198_556, 0, 630)
+    expect(start.map(t => t.seconds)).toEqual([0, 5, 10, 15, 20, 25, 30])
+    // Прокрутка к середине: деления вокруг неё, а не с начала.
+    const middle = rulerTicks(400, 1_985_560, 1_000_000, 630)
+    expect(middle[0].seconds).toBe(2498)
+    expect(middle.map(t => t.seconds)).toEqual([2498, 2499, 2500, 2501, 2502, 2503])
+    expect(middle[0].left).toBe(2498 * 400)
+  })
+
+  it('устаревшую прокрутку зажимает, а подпись без места у правого края не ставит', () => {
+    // Ролик целиком в окне, а scrollLeft ещё от широкой шкалы: делений быть должно, с нуля.
+    const fit = rulerTicks(0.126, 625.45, 1_000_000, 630)
+    expect(fit.map(t => t.seconds)).toEqual([0, 900, 1800, 2700, 3600, 4500])
+    // Короткий ролик на минимуме: «1:00» стояло бы на 240 px — за краем шкалы в 200 px.
+    expect(rulerTicks(4, 200, 0, 630).map(t => t.seconds)).toEqual([0, 30])
+    // Ширина окна ещё неизвестна (панель не показана) — размечаем первую тысячу пикселей.
+    expect(rulerTicks(40, 198_556, 0, 0).map(t => t.seconds)).toEqual([0, 5, 10, 15, 20, 25])
   })
 })
 

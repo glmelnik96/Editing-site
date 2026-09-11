@@ -232,25 +232,88 @@ export function dropTarget(clips: Clip[], from: number, time: number): { to: num
 }
 
 
-/* Масштаб шкалы: от четырёх пикселей на секунду (часовая запись целиком в экране) до четырёхсот
- * (кадр различим поштучно). */
+/* Масштаб шкалы: обычно от четырёх пикселей на секунду до четырёхсот (кадр различим поштучно).
+ * У длинного ролика нижняя граница ниже — «весь ролик в окне», её считает zoomFloor. */
 export const ZOOM_MIN = 4
 export const ZOOM_MAX = 400
+// Мельче не уходим даже ради всего ролика: трёхчасовой предел проекта при этом — полэкрана.
+export const ZOOM_FLOOR = 0.05
+
+/**
+ * Нижняя граница масштаба для ролика длиной total в окне шириной width пикселей.
+ *
+ * Четыре пикселя на секунду — это три с небольшим минуты на экран. Всё длиннее не помещалось
+ * даже на минимуме: полуторачасовой вебинар растягивался на два десятка экранов, и ноль на
+ * ползунке ничего не давал. Поэтому у длинного ролика минимум — весь ролик в окне. Округляем
+ * вниз, чтобы шкала не вылезала за край на пиксель и не заводила прокрутку; без размеров (окно
+ * ещё не показано) — обычный минимум.
+ */
+export function zoomFloor(total: number, width: number): number {
+  if (!(total > 0) || !(width > 0)) return ZOOM_MIN
+  const fit = Math.floor((width / total) * 1000) / 1000
+  return Math.min(ZOOM_MIN, Math.max(ZOOM_FLOOR, fit))
+}
 
 /**
  * Ползунок и масштаб связаны по логарифму, а не напрямую.
  *
- * Диапазон стократный: при линейной связи первая четверть ползунка проскакивала бы всю
+ * Диапазон стократный и больше: при линейной связи первая четверть ползунка проскакивала бы всю
  * осмысленную часть, а остальные три четверти двигали бы кадр туда-сюда. По логарифму один и тот
- * же сдвиг ручки везде меняет масштаб во столько же раз.
+ * же сдвиг ручки везде меняет масштаб во столько же раз. min — нижняя граница текущего ролика
+ * (zoomFloor): ноль ползунка всегда «мельче некуда», сколько бы пикселей это ни было.
  */
-export function zoomToPercent(pxPerSec: number): number {
-  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pxPerSec))
-  return Math.round((Math.log(clamped / ZOOM_MIN) / Math.log(ZOOM_MAX / ZOOM_MIN)) * 100)
+export function zoomToPercent(pxPerSec: number, min = ZOOM_MIN): number {
+  const clamped = Math.max(min, Math.min(ZOOM_MAX, pxPerSec))
+  return Math.round((Math.log(clamped / min) / Math.log(ZOOM_MAX / min)) * 100)
 }
 
-export function percentToZoom(percent: number): number {
+export function percentToZoom(percent: number, min = ZOOM_MIN): number {
   const clamped = Math.max(0, Math.min(100, percent))
-  return ms(ZOOM_MIN * (ZOOM_MAX / ZOOM_MIN) ** (clamped / 100))
+  return ms(min * (ZOOM_MAX / min) ** (clamped / 100))
+}
+
+// Шаги делений шкалы в секундах — как на часах: «1:30» читается сразу, «90 с» надо считать.
+const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
+
+/**
+ * Шаг делений при данном масштабе: самый мелкий, при котором между подписями не меньше minPx.
+ *
+ * Постоянные пять секунд годились для одного масштаба: на мелком подписи наезжали друг на друга
+ * и слипались в серую полосу, на крупном стояли раз в два экрана.
+ */
+export function tickStep(pxPerSec: number, minPx = 90): number {
+  return TICK_STEPS.find(step => step * pxPerSec >= minPx) ?? TICK_STEPS[TICK_STEPS.length - 1]
+}
+
+export type Tick = { seconds: number; left: number }
+
+/**
+ * Деления линейки для видимой части шкалы: окно прокрутки с запасом по экрану в каждую сторону.
+ *
+ * Всю шкалу не размечаем: у трёхчасового ролика на крупном масштабе делений больше десяти тысяч,
+ * а линейка пересобирается на каждую правку и на каждый шаг ползунка. Подпись, которой не
+ * хватает места до правого края (labelPx), не ставим: вылезая за шкалу, она заводила бы
+ * прокрутку у ролика, который целиком в окне. scrollLeft может быть устаревшим — больше
+ * возможного после сжатия шкалы, пока браузер не пересчитал раскладку, — поэтому зажимается.
+ */
+export function rulerTicks(
+  pxPerSec: number,
+  width: number,
+  scrollLeft: number,
+  viewWidth: number,
+  labelPx = 56,
+): Tick[] {
+  const step = tickStep(pxPerSec)
+  const margin = viewWidth || 1000
+  const start = Math.min(Math.max(0, scrollLeft), Math.max(0, width - viewWidth))
+  const from = Math.max(0, Math.floor((start - margin) / pxPerSec / step) * step)
+  const to = Math.min(width, start + viewWidth + margin)
+  const ticks: Tick[] = []
+  for (let seconds = from; seconds * pxPerSec <= to; seconds += step) {
+    const left = seconds * pxPerSec
+    if (seconds > 0 && left + labelPx > width) break
+    ticks.push({ seconds, left })
+  }
+  return ticks
 }
 

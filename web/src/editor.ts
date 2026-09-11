@@ -140,7 +140,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
             <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
                  — к громкости, к переходу, — а не к масштабу шкалы. -->
             <label class="zoom-label" for="ed-zoom">Масштаб</label>
-            <button id="ed-zoom-out" type="button" title="Мельче (−)">−</button>
+            <button id="ed-zoom-out" type="button" title="Мельче (−); на минимуме — весь ролик">−</button>
             <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
               title="Масштаб шкалы" />
             <button id="ed-zoom-in" type="button" title="Крупнее (+)">+</button>
@@ -1105,6 +1105,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       data,
     })
     timeline.setPlayhead(timelineTime)
+    syncZoomSlider() // нижняя граница масштаба зависит от длины ролика
     subtitles.setProject(project)
     subtitles.setTimeline(project.doc.clips, assetList)
     syncBurn()
@@ -1426,16 +1427,25 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   el.querySelector('#ed-copy')!.addEventListener('click', duplicateSelected)
   el.querySelector('#ed-delete')!.addEventListener('click', removeSelected)
   helpButton.addEventListener('click', () => showKeys(keysCard.hidden))
-  /** Масштаб меняют и кнопками, и ползунком: ползунок обязан показывать то, что вышло. */
+  /**
+   * Масштаб меняют и кнопками, и ползунком: ползунок обязан показывать то, что вышло. Ноль
+   * ползунка — нижняя граница текущего ролика: у длинного это «весь ролик в окне», поэтому
+   * положение ручки пересчитывается и после каждой перерисовки шкалы.
+   */
+  function syncZoomSlider(): void {
+    zoomSlider.value = String(zoomToPercent(timeline.zoom(), timeline.zoomMin()))
+  }
   function setZoom(pxPerSec: number): void {
     timeline.setZoom(pxPerSec)
-    zoomSlider.value = String(zoomToPercent(timeline.zoom()))
+    syncZoomSlider()
   }
 
   zoomInButton.addEventListener('click', () => setZoom(timeline.zoom() * 1.5))
   zoomOutButton.addEventListener('click', () => setZoom(timeline.zoom() / 1.5))
-  zoomSlider.addEventListener('input', () => setZoom(percentToZoom(Number(zoomSlider.value))))
-  zoomSlider.value = String(zoomToPercent(timeline.zoom()))
+  zoomSlider.addEventListener('input', () =>
+    setZoom(percentToZoom(Number(zoomSlider.value), timeline.zoomMin())),
+  )
+  syncZoomSlider()
 
   function applyOutput(patch: Partial<ProjectDoc['output']>): void {
     if (!project) return
