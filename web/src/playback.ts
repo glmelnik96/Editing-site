@@ -108,51 +108,34 @@ export function resumePlan(clips: Clip[], at: { index: number; sourceTime: numbe
   return { kind: 'stop', timelineTime: step.timelineTime }
 }
 
-/** Громкость музыки в момент ролика с учётом затуханий. Затухания не перекрывают друг друга. */
 export type Silence = { start: number; end: number }
 export type Ducking = { sourceTime: number; silences: Silence[] }
 
-const DUCK_SPEECH_GAIN = 0.3
+/** Насколько тише фон под речью. В сборке это компрессор по боковой цепи; в превью — одно число. */
+export const DUCK_SPEECH_GAIN = 0.3
 
-export function musicVolume(
-  music: { volume: number; fade_in: number; fade_out: number; duck?: boolean } | null,
-  timelineTime: number,
-  total: number,
-  ducking?: Ducking | null,
-): number {
-  if (!music) return 0
-  const half = total / 2
-  const fadeIn = Math.min(music.fade_in, half)
-  const fadeOut = Math.min(music.fade_out, half)
-  let gain = music.volume
-  if (fadeIn > 0 && timelineTime < fadeIn) gain *= timelineTime / fadeIn
-  const fromEnd = total - timelineTime
-  if (fadeOut > 0 && fromEnd < fadeOut) gain *= Math.max(0, fromEnd) / fadeOut
-  if (music.duck && ducking) {
-    const pause = ducking.silences.some(
-      s => ducking.sourceTime >= s.start && ducking.sourceTime < s.end,
-    )
-    if (!pause) gain *= DUCK_SPEECH_GAIN
-  }
+/** Появление и затухание на краях отрезка. Каждое не длиннее половины — иначе они перекрылись бы. */
+export function fadeGain(local: number, span: number, fadeIn: number, fadeOut: number): number {
+  const half = span / 2
+  const rise = Math.min(fadeIn, half)
+  const fall = Math.min(fadeOut, half)
+  let gain = 1
+  if (rise > 0 && local < rise) gain *= Math.max(0, local) / rise
+  const left = span - local
+  if (fall > 0 && left < fall) gain *= Math.max(0, left) / fall
   return Math.max(0, Math.min(1, gain))
 }
 
-/**
- * HTML video.volume принимает 0…1.
- * Громкость клипа и ползунок «Речь» считаем вместе: в сборке speech_volume есть
- * только если есть музыка, и режет уже после volume клипа. Усиление выше 1
- * в превью не слышно.
- */
-export function previewClipVolume(volume: number, speechVolume = 1): number {
-  return Math.max(0, Math.min(1, volume * speechVolume))
+/** Множитель приглушения: под речью тише, в паузе и без карты пауз — как есть. */
+export function duckFactor(ducking: Ducking | null | undefined): number {
+  if (!ducking) return 1
+  const pause = ducking.silences.some(s => ducking.sourceTime >= s.start && ducking.sourceTime < s.end)
+  return pause ? 1 : DUCK_SPEECH_GAIN
 }
 
-/** Без музыки ползунок речи в сборке не действует — в превью тоже. */
-export function previewSpeechGain(music: { speech_volume?: number } | null | undefined): number {
-  if (!music) return 1
-  const value = music.speech_volume
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 1
-  return Math.max(0, Math.min(1, value))
+/** HTML video.volume принимает 0…1: усиление выше 1 в превью не слышно. */
+export function previewClipVolume(volume: number): number {
+  return Math.max(0, Math.min(1, volume))
 }
 
 const ASPECTS: Record<string, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 }
@@ -162,23 +145,31 @@ export function aspectRatio(aspect: string): number {
   return ASPECTS[aspect] ?? ASPECTS['16:9']
 }
 
-export type SoundCue = { id: string; assetId: string; time: number; volume: number }
+export type SoundCue = { id: string; assetId: string; time: number; gain: number; duck: boolean }
 
 /**
- * Какие звуки дорожки звучат в момент ролика и с какого места своей записи.
+ * Какие звуки дорожки звучат в момент ролика, с какого места записи и насколько громко.
  *
- * Хвост, свисающий за конец ролика, не звучит и в превью: сборка его обрезает (amix
- * duration=first), и услышать в браузере то, чего не будет в файле, хуже, чем не услышать.
- * Конец звука не входит — как у клипов, иначе на стыке двух звуков звучали бы оба.
+ * Хвост за концом ролика не звучит и в превью: сборка его обрезает, и услышать в браузере то,
+ * чего не будет в файле, хуже, чем не услышать. Конец звука не входит — как у клипов. Звук по
+ * кругу идёт до конца ролика, а время внутри записи — по остатку от длины куска. Громкость — с
+ * появлением и затуханием; приглушение под речь считает вызывающий: ему видно, кто говорит.
  */
 export function soundPlan(sounds: Sound[], timelineTime: number, total: number): SoundCue[] {
   if (timelineTime >= total) return []
-  return sounds
-    .filter(sound => timelineTime >= sound.at && timelineTime < sound.at + (sound.out - sound.in))
-    .map(sound => ({
+  const cues: SoundCue[] = []
+  for (const sound of sounds) {
+    const length = sound.out - sound.in
+    const span = sound.loop ? total - sound.at : length
+    const local = timelineTime - sound.at
+    if (length <= 0 || local < 0 || local >= span) continue
+    cues.push({
       id: sound.id,
       assetId: sound.asset_id,
-      time: ms(sound.in + (timelineTime - sound.at)),
-      volume: sound.volume,
-    }))
+      time: ms(sound.in + (sound.loop ? local % length : local)),
+      gain: sound.volume * fadeGain(local, span, sound.fade_in, sound.fade_out),
+      duck: sound.duck,
+    })
+  }
+  return cues
 }

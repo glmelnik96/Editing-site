@@ -5,18 +5,26 @@
  * списком клипов: считает её модель (model.ts), а не эта обвязка.
  */
 import { escapeHtml } from '../html'
-import type { Sound } from '../project'
-import { barsFor, sliceThumbs, type AssetData } from '../strip'
+import type { Overlay, Sound } from '../project'
+import { barsFor, sliceThumbs, type AssetData, type ThumbsMeta } from '../strip'
 import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, sameOrder, totalDuration, trimClip, ZOOM_MAX, ZOOM_MIN, type Clip } from './model'
-import { moveSound, soundBlocks, soundLength, soundsEnd } from './sounds'
+import { laneBlocks, laneEnd, laneSpan, moveItem, type Placed } from './sounds'
 import { tileRange, tileWidth, visibleTiles, type Tile } from './tiles'
 
-export type AssetInfo = { duration: number | null; files: { thumbs: string | null } }
+export type AssetInfo = {
+  kind?: string
+  /** Есть ли у записи звук: без него у клипа нет блока на дорожке звука. */
+  hasAudio?: boolean | null
+  duration: number | null
+  files: { thumbs: string | null }
+}
 
 export type TimelineHandlers = {
   onChange: (clips: Clip[]) => void
   /** Правка звуковой дорожки: готовый список звуков, как onChange для клипов. */
   onSoundsChange: (sounds: Sound[]) => void
+  /** Правка наложений: то же для колеи над клипами. */
+  onOverlaysChange: (overlays: Overlay[]) => void
   onSeek: (time: number) => void
   onSelect: (id: string | null) => void
 }
@@ -24,12 +32,16 @@ export type TimelineHandlers = {
 export type RenderInput = {
   clips: Clip[]
   sounds: Sound[]
+  overlays: Overlay[]
   assets: Map<string, AssetInfo>
   data: Map<string, AssetData>
   pxPerSec: number
 }
 
 const TRACK_HEIGHT = 72
+// Высота клетки кадра: у клипа как в спрайте, у куска колеи — под её низкий блок.
+const CLIP_FRAME_H = 90
+const LANE_FRAME_H = 44
 // Волну читают, чтобы найти паузы: от её высоты прямо зависит, попадёт человек резом в тишину
 // или в слово. Рисуем от середины в обе стороны — при той же высоте блока это вдвое больше
 // размаха, чем полоска от низа.
@@ -71,12 +83,20 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
            оказывается в полосе — там, где по нему и надо попадать. -->
       <div class="lane" id="tl-lane">
         <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
-        <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
+        <!-- Наложения — колея над клипами: картинка или видео поверх основы лежат по своему
+             времени и клипы не сдвигают. Пустая видна всегда, как и звуковая. -->
+        <div class="overlay-track empty" id="tl-overlays"
+          data-empty="Наложения: картинка или видео поверх основы. В «Исходниках» — кнопка «Поверх видео»"><i class="lane-tag" title="Вторая дорожка видео: наложения">V2</i></div>
+        <div class="track" id="tl-track"><i class="lane-tag" title="Первая дорожка видео: клипы">V1</i><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
+        <!-- Звук клипов — своя колея под картинкой, привязанная к ней: блок звука повторяет блок
+             клипа, выбирается и двигается вместе с ним. Так на шкале две дорожки видео и две
+             звука, а волну речи читают на своей высоте, не деля место с кадрами. -->
+        <div class="track-audio" id="tl-clip-audio"><i class="lane-tag" title="Первая дорожка звука: звук клипов">A1</i><div class="blocks" id="tl-audio-blocks"></div></div>
         <!-- Звуковая дорожка — своя колея под клипами: звук лежит по своему времени и клипы не
              сдвигает. Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу
              под руками, а подпись в ней объясняет, откуда туда класть. -->
         <div class="sound-track empty" id="tl-sounds"
-          data-empty="Звуковая дорожка: озвучка и шумы поверх речи. Положите звук из «Исходников»"></div>
+          data-empty="Звуковая дорожка: озвучка, шумы и музыка поверх речи. Положите звук из «Исходников»"><i class="lane-tag" title="Вторая дорожка звука: звуки со своим местом">A2</i></div>
         <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
       </div>
     </div>
@@ -87,13 +107,25 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   const lane = el.querySelector('#tl-lane') as HTMLElement
   const track = el.querySelector('#tl-track') as HTMLElement
   const blocksBox = el.querySelector('#tl-blocks') as HTMLElement
+  const audioTrack = el.querySelector('#tl-clip-audio') as HTMLElement
+  const audioBox = el.querySelector('#tl-audio-blocks') as HTMLElement
   const soundTrack = el.querySelector('#tl-sounds') as HTMLElement
+  const overlayTrack = el.querySelector('#tl-overlays') as HTMLElement
   const playhead = el.querySelector('#tl-playhead') as HTMLElement
   const ghost = el.querySelector('#tl-drop') as HTMLElement
   let sayTimer = 0
+  // До какого момента под шкалой стоит сказанное: перерисовка его не трогает.
+  let sayUntil = 0
   const hint = el.querySelector('#tl-hint') as HTMLElement
 
-  let current: RenderInput = { clips: [], sounds: [], assets: new Map(), data: new Map(), pxPerSec: 40 }
+  let current: RenderInput = {
+    clips: [],
+    sounds: [],
+    overlays: [],
+    assets: new Map(),
+    data: new Map(),
+    pxPerSec: 40,
+  }
   let selected: string | null = null
   let drag: {
     id: string
@@ -103,15 +135,17 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     clips: Clip[]
     moved: boolean
   } | null = null
-  // Перенос звука. Отдельно от переноса клипа: у звука нет ни очереди, ни ручек, он просто
-  // едет по своей колее, и смешивать два состояния значило бы проверять вид куска на каждом шаге.
-  let soundDrag: {
+  // Перенос куска свободной колеи. Отдельно от переноса клипа: у куска нет ни очереди, ни ручек,
+  // он просто едет по своей колее, и смешивать два состояния значило бы проверять вид куска на
+  // каждом шаге. Указатель один, поэтому и перенос один на обе колеи.
+  let laneDrag: {
     id: string
     startX: number
     at: number
-    sounds: Sound[]
+    items: Placed[]
     moved: boolean
     node: HTMLElement
+    lane: Lane
   } | null = null
   // Пришло, пока человек тянул блок. Во время переноса шкалу не пересобираем, иначе блок теряет
   // подсветку и уезжает не туда: автосохранение отвечает свежим документом ровно посреди
@@ -134,7 +168,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   }
 
   function render(input?: Partial<RenderInput>): void {
-    if (drag || soundDrag) {
+    if (drag || laneDrag) {
       pending = { ...(pending ?? {}), ...input }
       return
     }
@@ -142,10 +176,13 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     const blocks = layout(current.clips, current.pxPerSec)
     // Шкала дотягивается и до звука, свисающего за конец ролика: сборка его хвост обрежет, но
     // увидеть и схватить его, чтобы вернуть назад, человек должен.
-    const end = Math.max(totalDuration(current.clips), soundsEnd(current.sounds))
+    const total = totalDuration(current.clips)
+    const end = Math.max(total, laneEnd(current.sounds, total), laneEnd(current.overlays, total))
     const width = Math.max(200, end * current.pxPerSec)
     track.style.width = `${width}px`
     soundTrack.style.width = `${width}px`
+    overlayTrack.style.width = `${width}px`
+    audioTrack.style.width = `${width}px`
     lane.style.width = `${width}px`
     ruler.style.width = `${width}px`
     ruler.innerHTML = Array.from({ length: Math.ceil(width / (current.pxPerSec * 5)) + 1 }, (_, i) => {
@@ -154,6 +191,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     }).join('')
 
     blocksBox.querySelectorAll('.block').forEach(node => node.remove())
+    audioBox.querySelectorAll('.block').forEach(node => node.remove())
     strips = []
     blocks.forEach((block, index) => {
       const clip = current.clips[index]
@@ -168,23 +206,29 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       node.dataset.id = clip.id
       node.dataset.index = String(index)
       node.innerHTML = blockHtml(clip)
-      strips.push(strip(node, clip.asset_id, clip.in, clip.out, block.left, block.width, true))
+      // Кадры — на дорожке видео, волна — на дорожке звука под ней.
+      strips.push(strip(node, clip.asset_id, clip.in, clip.out, block.left, block.width, true, false))
       blocksBox.appendChild(node)
+      const asset = current.assets.get(clip.asset_id)
+      // Пока запись не приехала, звук считаем есть: блок, который то появляется, то исчезает, хуже.
+      const hasAudio = asset ? asset.kind !== 'image' && asset.hasAudio !== false : true
+      if (!hasAudio) return
+      const audio = document.createElement('div')
+      audio.className = `block audio-block${clip.id === selected ? ' selected' : ''}`
+      audio.style.left = `${block.left}px`
+      audio.style.width = `${block.width}px`
+      audio.style.height = `${LANE_FRAME_H}px`
+      audio.style.zIndex = clip.id === selected ? String(SELECTED_Z) : String(index + 1)
+      audio.dataset.id = clip.id
+      audio.dataset.index = String(index)
+      strips.push(strip(audio, clip.asset_id, clip.in, clip.out, block.left, block.width, false, true, LANE_FRAME_H))
+      audioBox.appendChild(audio)
     })
-    soundTrack.querySelectorAll('.sound-block').forEach(node => node.remove())
-    soundTrack.classList.toggle('empty', current.sounds.length === 0)
-    soundBlocks(current.sounds, current.pxPerSec).forEach((block, index) => {
-      const sound = current.sounds[index]
-      const node = document.createElement('div')
-      node.className = `sound-block${sound.id === selected ? ' selected' : ''}`
-      node.style.left = `${block.left}px`
-      node.style.width = `${block.width}px`
-      node.dataset.id = sound.id
-      node.innerHTML = `<span class="label">${escapeHtml(sound.id)} · ${soundLength(sound).toFixed(1)} с</span>`
-      strips.push(strip(node, sound.asset_id, sound.in, sound.out, block.left, block.width, false))
-      soundTrack.appendChild(node)
-    })
-    if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
+    soundLane.paint(current.sounds)
+    overlayLane.paint(current.overlays)
+    // Сказанное под шкалой перерисовка не стирает: автосохранение отвечает через полсекунды после
+    // правки, и отказ на следующую правку исчезал, не успев быть прочитанным.
+    if (!drag && Date.now() >= sayUntil) hint.textContent = emptyTrackHint(current.clips.length)
     paintTiles()
   }
 
@@ -197,18 +241,31 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     left: number
     width: number
     frames: boolean
+    wave: boolean
+    frameHeight: number
   }
   let strips: Strip[] = []
   let paintQueued = false
 
   /** Завести полосу блока: пустой слой плиток первым ребёнком, чтобы подпись и ручки были поверх. */
   function strip(
-    node: HTMLElement, assetId: string, from: number, to: number, left: number, width: number, frames: boolean,
+    node: HTMLElement, assetId: string, from: number, to: number, left: number, width: number,
+    frames: boolean, wave = true, frameHeight = CLIP_FRAME_H,
   ): Strip {
     const box = document.createElement('div')
     box.className = 'wave-tiles'
     node.prepend(box)
-    return { box, assetId, from, to, left, width, frames }
+    return { box, assetId, from, to, left, width, frames, wave, frameHeight }
+  }
+
+  /**
+   * Раскладка спрайта под высоту клетки блока: у клипа кадр 90 px, у куска колеи — 44.
+   * Смещения и размеры фона считаются от этих же чисел, поэтому спрайт просто масштабируется,
+   * а не режется по высоте.
+   */
+  function cellMeta(s: Strip, meta: ThumbsMeta): ThumbsMeta {
+    const scale = s.frameHeight / meta.height
+    return { ...meta, width: Math.max(1, Math.round(meta.width * scale)), height: s.frameHeight }
   }
 
   /** Одна плитка: кадры своего отрезка и волна шириной с плитку — далеко от предела холста. */
@@ -222,18 +279,22 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     const sprite = current.assets.get(s.assetId)?.files.thumbs
     if (s.frames && sprite && info?.thumbs) {
       // Кадры считаются на весь блок разом — это просто числа, — а в плитку попадают свои.
-      node.innerHTML = sliceThumbs(info.thumbs, { from: s.from, to: s.to }, s.width)
+      const meta = cellMeta(s, info.thumbs)
+      node.innerHTML = sliceThumbs(meta, { from: s.from, to: s.to }, s.width)
         .filter(f => f.left >= tile.x0 && f.left < tile.x1)
         .map(f => {
           const bg = f.background
-          return `<i class="frame" style="left:${f.left - tile.x0}px;background-image:url('${escapeHtml(sprite)}');
-            background-position:${bg.x}px ${bg.y}px;background-size:${bg.width}px ${bg.height}px"></i>`
+          return `<i class="frame" style="left:${f.left - tile.x0}px;width:${meta.width}px;height:${meta.height}px;
+            background-image:url('${escapeHtml(sprite)}');background-position:${bg.x}px ${bg.y}px;
+            background-size:${bg.width}px ${bg.height}px"></i>`
         })
         .join('')
     }
-    const range = tileRange(tile, s.width, s.from, s.to)
-    const width = tile.x1 - tile.x0
-    node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, range, Math.round(width)), width))
+    if (s.wave) {
+      const range = tileRange(tile, s.width, s.from, s.to)
+      const width = tile.x1 - tile.x0
+      node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, range, Math.round(width)), width))
+    }
     return node
   }
 
@@ -248,7 +309,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     const to = view.scrollLeft + view.clientWidth + margin
     for (const s of strips) {
       const info = current.data.get(s.assetId)
-      const size = tileWidth(s.frames ? (info?.thumbs?.width ?? null) : null)
+      const size = tileWidth(s.frames && info?.thumbs ? cellMeta(s, info.thumbs).width : null)
       const wanted = visibleTiles(s.left, s.width, from, to, size)
       const keep = new Set(wanted.map(tile => String(tile.index)))
       s.box.querySelectorAll<HTMLElement>('.wave-tile').forEach(node => {
@@ -329,14 +390,18 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
    * а на длинной шкале каждое нажатие впустую перерисовывало кадры и звуковые волны всех клипов.
    */
   function markSelected(): void {
-    blocksBox.querySelectorAll<HTMLElement>('.block').forEach(node => {
-      const mine = node.dataset.id === selected
-      node.classList.toggle('selected', mine)
-      node.style.zIndex = mine ? String(SELECTED_Z) : String(Number(node.dataset.index ?? 0) + 1)
-    })
-    soundTrack.querySelectorAll<HTMLElement>('.sound-block').forEach(node => {
-      node.classList.toggle('selected', node.dataset.id === selected)
-    })
+    for (const box of [blocksBox, audioBox]) {
+      box.querySelectorAll<HTMLElement>('.block').forEach(node => {
+        const mine = node.dataset.id === selected
+        node.classList.toggle('selected', mine)
+        node.style.zIndex = mine ? String(SELECTED_Z) : String(Number(node.dataset.index ?? 0) + 1)
+      })
+    }
+    for (const laneTrack of [soundTrack, overlayTrack]) {
+      laneTrack.querySelectorAll<HTMLElement>('.lane-block').forEach(node => {
+        node.classList.toggle('selected', node.dataset.id === selected)
+      })
+    }
   }
 
   /** Перенос отменён системой (жест перехватил браузер): возвращаем всё как было, правки нет. */
@@ -348,7 +413,12 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     flushPending()
   }
 
-  track.addEventListener('pointerdown', event => {
+  /**
+   * Нажатие на клип — на дорожке видео или на его звуке под ней: выбор, а дальше перенос или
+   * подрезка. Звуковой блок привязан к клипу и повторяет его геометрию, поэтому обработчик
+   * один; ручек подрезки у звука нет, и с него клип только выбирают и двигают.
+   */
+  function clipPointerDown(event: PointerEvent, surface: HTMLElement): void {
     const target = event.target as HTMLElement
     const node = target.closest('.block') as HTMLElement | null
     if (!node) {
@@ -361,7 +431,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     // перенос просто потеряет курсор за краем блока, а выделение и подрезка работают и так.
     let captured = true
     try {
-      track.setPointerCapture(event.pointerId)
+      surface.setPointerCapture(event.pointerId)
     } catch {
       captured = false
     }
@@ -370,15 +440,18 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     selected = id
     handlers.onSelect(id)
     const rect = node.getBoundingClientRect()
-    const kind: 'move' | 'in' | 'out' = target.classList.contains('handle-in')
-      ? 'in'
-      : target.classList.contains('handle-out')
-        ? 'out'
-        : event.clientX - rect.left < HANDLE_PX
-          ? 'in'
-          : rect.right - event.clientX < HANDLE_PX
-            ? 'out'
-            : 'move'
+    const trims = surface === track
+    const kind: 'move' | 'in' | 'out' = !trims
+      ? 'move'
+      : target.classList.contains('handle-in')
+        ? 'in'
+        : target.classList.contains('handle-out')
+          ? 'out'
+          : event.clientX - rect.left < HANDLE_PX
+            ? 'in'
+            : rect.right - event.clientX < HANDLE_PX
+              ? 'out'
+              : 'move'
     // Выделение показываем до начала переноса: с этого момента шкала заморожена и render()
     // только копит пришедшее.
     markSelected()
@@ -388,9 +461,9 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     if (!captured) return
     drag = { id, index, kind, startX: event.clientX, clips: current.clips, moved: false }
     node.classList.add('dragging')
-  })
+  }
 
-  track.addEventListener('pointermove', event => {
+  function clipPointerMove(event: PointerEvent): void {
     if (!drag) return
     drag.moved = drag.moved || Math.abs(event.clientX - drag.startX) > CLICK_SLOP_PX
     const delta = (event.clientX - drag.startX) / current.pxPerSec
@@ -409,78 +482,146 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       const value = drag.kind === 'in' ? clip.in + delta : clip.out + delta
       hint.textContent = `${drag.kind === 'in' ? 'начало' : 'конец'}: ${Math.max(0, value).toFixed(2)} с`
     }
-  })
-
-  track.addEventListener('pointerup', event => finishDrag(event.clientX))
-  // Отмена — это не «отпустил здесь»: раньше прерванный жест применял перенос по последней
-  // точке, и клип вставал не туда, куда его вели.
-  track.addEventListener('pointercancel', abortDrag)
-  // Страховка: если захват потерян, а pointerup до нас не дошёл, шкала осталась бы замороженной.
-  track.addEventListener('lostpointercapture', abortDrag)
-
-  // Звуковая дорожка: щелчок по звуку выбирает его, протаскивание перекладывает на новое место,
-  // щелчок по пустой колее перематывает — как по пустому месту дорожки клипов.
-  soundTrack.addEventListener('pointerdown', event => {
-    const target = event.target as HTMLElement
-    const node = target.closest('.sound-block') as HTMLElement | null
-    if (!node) {
-      handlers.onSeek(timeAt(event.clientX))
-      return
-    }
-    // Захват первым делом и по тем же причинам, что у клипа: без него отпускание за краем
-    // шкалы до нас не дойдёт, и замороженная на время переноса шкала так и осталась бы стоять.
-    let captured = true
-    try {
-      soundTrack.setPointerCapture(event.pointerId)
-    } catch {
-      captured = false
-    }
-    const id = node.dataset.id ?? ''
-    selected = id
-    handlers.onSelect(id)
-    markSelected()
-    const sound = current.sounds.find(item => item.id === id)
-    if (!captured || !sound) return
-    soundDrag = { id, startX: event.clientX, at: sound.at, sounds: current.sounds, moved: false, node }
-    node.classList.add('dragging')
-  })
-
-  soundTrack.addEventListener('pointermove', event => {
-    if (!soundDrag) return
-    soundDrag.moved = soundDrag.moved || Math.abs(event.clientX - soundDrag.startX) > CLICK_SLOP_PX
-    if (!soundDrag.moved) return
-    const at = Math.max(0, soundDrag.at + (event.clientX - soundDrag.startX) / current.pxPerSec)
-    soundDrag.node.style.left = `${at * current.pxPerSec}px`
-    hint.textContent = `«${soundDrag.id}» ляжет на ${at.toFixed(2)} с`
-  })
-
-  /** Конец переноса звука. apply=false — жест отменила система: правки нет, всё как было. */
-  function finishSoundDrag(clientX: number, apply: boolean): void {
-    if (!soundDrag) return
-    const active = soundDrag
-    soundDrag = null
-    hint.textContent = ''
-    if (!active.moved) {
-      if (apply) handlers.onSeek(timeAt(clientX))
-      flushPending()
-      return
-    }
-    // Свежий список, если пока тянули пришёл тот же набор звуков: так не теряется то, что
-    // успел нормализовать сервер. Изменился состав — берём список, с которым начинали.
-    const fresh = pending?.sounds
-    const same =
-      fresh !== undefined &&
-      fresh.length === active.sounds.length &&
-      fresh.every((item, i) => item.id === active.sounds[i].id)
-    const base = same && fresh ? fresh : active.sounds
-    const at = active.at + (clientX - active.startX) / current.pxPerSec
-    flushPending()
-    if (apply) handlers.onSoundsChange(moveSound(base, active.id, at))
   }
 
-  soundTrack.addEventListener('pointerup', event => finishSoundDrag(event.clientX, true))
-  soundTrack.addEventListener('pointercancel', () => finishSoundDrag(0, false))
-  soundTrack.addEventListener('lostpointercapture', () => finishSoundDrag(0, false))
+  for (const surface of [track, audioTrack]) {
+    surface.addEventListener('pointerdown', event => clipPointerDown(event, surface))
+    surface.addEventListener('pointermove', clipPointerMove)
+    surface.addEventListener('pointerup', event => finishDrag(event.clientX))
+    // Отмена — это не «отпустил здесь»: раньше прерванный жест применял перенос по последней
+    // точке, и клип вставал не туда, куда его вели.
+    surface.addEventListener('pointercancel', abortDrag)
+    // Страховка: если захват потерян, а pointerup до нас не дошёл, шкала осталась бы замороженной.
+    surface.addEventListener('lostpointercapture', abortDrag)
+  }
+
+  /**
+   * Свободная колея: куски со своим временем на шкале, перенос мышью, общее с клипами выделение.
+   *
+   * Звуки под клипами и наложения над ними — одна механика. Различаются содержимым блока (волна
+   * или кадры), классом для цвета и тем, куда уходит правка. Раньше это был код звуковой дорожки;
+   * копировать его второй раз нельзя — расхождения в переносе ловились бы только руками.
+   */
+  type LaneItem = Placed & { asset_id: string }
+  type Lane = {
+    track: HTMLElement
+    block: string
+    frames: boolean
+    wave: boolean
+    items: () => LaneItem[]
+    pending: () => LaneItem[] | undefined
+    emit: (items: LaneItem[]) => void
+  }
+
+  function freeLane(lane: Lane): { paint: (items: LaneItem[]) => void } {
+    const laneTrack = lane.track
+
+    // Щелчок по куску выбирает его, протаскивание перекладывает на новое место, щелчок по пустой
+    // колее перематывает — как по пустому месту дорожки клипов.
+    laneTrack.addEventListener('pointerdown', event => {
+      const target = event.target as HTMLElement
+      const node = target.closest('.lane-block') as HTMLElement | null
+      if (!node) {
+        handlers.onSeek(timeAt(event.clientX))
+        return
+      }
+      // Захват первым делом и по тем же причинам, что у клипа: без него отпускание за краем
+      // шкалы до нас не дойдёт, и замороженная на время переноса шкала так и осталась бы стоять.
+      let captured = true
+      try {
+        laneTrack.setPointerCapture(event.pointerId)
+      } catch {
+        captured = false
+      }
+      const id = node.dataset.id ?? ''
+      selected = id
+      handlers.onSelect(id)
+      markSelected()
+      const items = lane.items()
+      const item = items.find(entry => entry.id === id)
+      if (!captured || !item) return
+      laneDrag = { id, startX: event.clientX, at: item.at, items, moved: false, node, lane }
+      node.classList.add('dragging')
+    })
+
+    laneTrack.addEventListener('pointermove', event => {
+      if (!laneDrag || laneDrag.lane !== lane) return
+      laneDrag.moved = laneDrag.moved || Math.abs(event.clientX - laneDrag.startX) > CLICK_SLOP_PX
+      if (!laneDrag.moved) return
+      const at = Math.max(0, laneDrag.at + (event.clientX - laneDrag.startX) / current.pxPerSec)
+      laneDrag.node.style.left = `${at * current.pxPerSec}px`
+      hint.textContent = `«${laneDrag.id}» ляжет на ${at.toFixed(2)} с`
+    })
+
+    /** Конец переноса. apply=false — жест отменила система: правки нет, всё как было. */
+    function finish(clientX: number, apply: boolean): void {
+      if (!laneDrag || laneDrag.lane !== lane) return
+      const active = laneDrag
+      laneDrag = null
+      hint.textContent = ''
+      if (!active.moved) {
+        if (apply) handlers.onSeek(timeAt(clientX))
+        flushPending()
+        return
+      }
+      // Свежий список, если пока тянули пришёл тот же набор: так не теряется то, что успел
+      // нормализовать сервер. Изменился состав — берём список, с которым начинали.
+      const fresh = lane.pending()
+      const same =
+        fresh !== undefined &&
+        fresh.length === active.items.length &&
+        fresh.every((item, i) => item.id === active.items[i].id)
+      const base = (same && fresh ? fresh : active.items) as LaneItem[]
+      const at = active.at + (clientX - active.startX) / current.pxPerSec
+      flushPending()
+      if (apply) lane.emit(moveItem(base, active.id, at))
+    }
+
+    laneTrack.addEventListener('pointerup', event => finish(event.clientX, true))
+    laneTrack.addEventListener('pointercancel', () => finish(0, false))
+    laneTrack.addEventListener('lostpointercapture', () => finish(0, false))
+
+    return {
+      paint(items: LaneItem[]): void {
+        laneTrack.querySelectorAll('.lane-block').forEach(node => node.remove())
+        laneTrack.classList.toggle('empty', items.length === 0)
+        const total = totalDuration(current.clips)
+        laneBlocks(items, current.pxPerSec, total).forEach((block, index) => {
+          const item = items[index]
+          const node = document.createElement('div')
+          node.className = `lane-block ${lane.block}${item.id === selected ? ' selected' : ''}`
+          node.style.left = `${block.left}px`
+          node.style.width = `${block.width}px`
+          node.dataset.id = item.id
+          const length = item.loop ? 'по кругу' : `${laneSpan(item, total).toFixed(1)} с`
+          node.innerHTML = `<span class="label">${escapeHtml(item.id)} · ${length}</span>`
+          strips.push(
+            strip(node, item.asset_id, item.in, item.out, block.left, block.width, lane.frames, lane.wave, LANE_FRAME_H),
+          )
+          laneTrack.appendChild(node)
+        })
+      },
+    }
+  }
+
+  const soundLane = freeLane({
+    track: soundTrack,
+    block: 'sound-block',
+    frames: false,
+    wave: true,
+    items: () => current.sounds,
+    pending: () => pending?.sounds,
+    emit: items => handlers.onSoundsChange(items as Sound[]),
+  })
+  const overlayLane = freeLane({
+    track: overlayTrack,
+    block: 'overlay-block',
+    frames: true,
+    wave: false,
+    items: () => current.overlays,
+    pending: () => pending?.overlays,
+    emit: items => handlers.onOverlaysChange(items as Overlay[]),
+  })
 
   // Полоса перемотки под линейкой и сама линейка: перетаскивание указателем двигает курсор.
   let scrubbing = false
@@ -521,8 +662,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       if (drag) return
       window.clearTimeout(sayTimer)
       hint.textContent = text
+      sayUntil = text ? Date.now() + SAY_MS : 0
       if (text) {
         sayTimer = window.setTimeout(() => {
+          sayUntil = 0
           if (!drag) hint.textContent = emptyTrackHint(current.clips.length)
         }, SAY_MS)
       }

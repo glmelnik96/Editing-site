@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { Asset } from './assets'
-import { addLabel, isPlaceable, sourcePoolNote } from './source'
+import { addLabel, canOverlay, isPlaceable, sourcePoolNote } from './source'
 
 test('без готовых записей — ссылка загрузить', () => {
   expect(sourcePoolNote(0)).toContain('#/files')
@@ -45,4 +45,11 @@ test('необработанную запись в список не пуска�
   expect(isPlaceable(asset({ kind: 'image', status: 'uploaded' }))).toBe(false)
   // «ready» без прокси годится: кусок можно отметить по таймкоду, не видя кадра.
   expect(isPlaceable(asset({ status: 'ready' }))).toBe(true)
+})
+
+test('поверх основы кладут картинку и видео, но не звук', () => {
+  expect(canOverlay('image')).toBe(true)
+  expect(canOverlay('video')).toBe(true)
+  expect(canOverlay('audio')).toBe(false)
+  expect(canOverlay(undefined)).toBe(false)
 })

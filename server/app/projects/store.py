@@ -10,11 +10,18 @@ import logging
 import os
 import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from server.app.config import Settings
 from server.app.jobs import cancel_jobs_for_target
-from server.app.projects.doc import AssetInfo, ProjectInvalid, clamp_fades, validate_doc
+from server.app.projects.doc import (
+    AssetInfo,
+    ProjectInvalid,
+    clamp_fades,
+    legacy_music_to_sound,
+    validate_doc,
+)
 from server.app.projects.snap import snap_clips
 from server.app.storage import project_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
@@ -30,6 +37,7 @@ EMPTY_DOC = {
     "output": {"aspect": "16:9", "fit": "pad", "fps": 30},
     "clips": [],
     "sounds": [],
+    "overlays": [],
     "music": None,
     "subtitles": None,
 }
@@ -47,14 +55,27 @@ class ProjectLimit(Exception):
     pass
 
 
-def _row_to_project(row: sqlite3.Row) -> dict:
+def _duration_of(conn: sqlite3.Connection) -> Callable[[str], float | None]:
+    def lookup(asset_id: str) -> float | None:
+        row = conn.execute("SELECT duration FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return float(row["duration"]) if row and row["duration"] else None
+
+    return lookup
+
+
+def _row_to_project(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
+    # Музыка старых документов переводится в звук уже при чтении: клиент и сборка видят одну
+    # форму. Сохранить документ в базе в новой форме — дело следующей правки.
+    doc, problems = legacy_music_to_sound(json.loads(row["doc"]), _duration_of(conn))
+    for field, message in problems:
+        log.warning("проект %s: музыка отброшена при чтении — %s: %s", row["id"], field, message)
     return {
         "id": row["id"],
         "name": row["name"],
         "version": row["version"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
-        "doc": json.loads(row["doc"]),
+        "doc": doc,
     }
 
 
@@ -71,9 +92,10 @@ def _assets_index(conn: sqlite3.Connection, user_id: str) -> dict[str, AssetInfo
 
 
 def assets_of(doc: dict) -> set[str]:
-    """Все ассеты, на которые ссылается документ: клипы, звуки, музыка, субтитры."""
+    """Все ассеты, на которые ссылается документ: клипы, звуки, наложения, музыка, субтитры."""
     used = {c["asset_id"] for c in doc.get("clips") or []}
     used |= {s["asset_id"] for s in doc.get("sounds") or []}
+    used |= {o["asset_id"] for o in doc.get("overlays") or []}
     for key in ("music", "subtitles"):
         block = doc.get(key)
         if isinstance(block, dict) and block.get("asset_id"):
@@ -147,7 +169,7 @@ def get_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> dict
     row = conn.execute(
         "SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
     ).fetchone()
-    return _row_to_project(row) if row else None
+    return _row_to_project(row, conn) if row else None
 
 
 def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:

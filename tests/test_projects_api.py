@@ -139,7 +139,11 @@ def test_agent_can_drive_projects_with_a_token(bearer_client, settings):
         f"/api/v1/projects/{p['id']}",
         json={"name": "Агентский", "version": 1, "doc": doc(music={"asset_id": AUDIO, "volume": 0.2})},
     )
-    assert saved.status_code == 200 and saved.json()["doc"]["music"]["volume"] == 0.2
+    # Агент ещё шлёт music — сервер принимает и отдаёт его уже звуком дорожки по кругу.
+    assert saved.status_code == 200, saved.text
+    body = saved.json()["doc"]
+    assert body["music"] is None
+    assert body["sounds"][0]["volume"] == 0.2 and body["sounds"][0]["loop"] is True
 
 
 def test_projects_require_auth(client):

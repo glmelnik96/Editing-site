@@ -291,3 +291,35 @@ def test_every_project_holds_its_assets_until_it_is_deleted(conn, settings):
     assert projects_using_asset(conn, USER, "ast_000000000001") == []
     assert get_project(conn, USER, b["id"]) is not None
 
+
+
+def test_legacy_music_is_read_as_a_looping_sound(conn, settings):
+    """Документы, сохранённые с блоком music, приходят клиенту и сборке уже со звуком дорожки."""
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, email, created_at) VALUES ('usr_000000000009', 'm@ya.ru', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, duration, has_audio, "
+        "created_at, last_access_at) VALUES ('ast_00000000000m', 'usr_000000000009', 'audio', "
+        "'m.mp3', 'mp3', "
+        "1, 'proxy_ready', 180, 1, ?, ?)",
+        (now_iso(), now_iso()),
+    )
+    legacy = {
+        "output": {"aspect": "16:9", "fit": "pad", "fps": 30},
+        "clips": [{"id": "c1", "asset_id": "ast_00000000000m", "in": 0.0, "out": 5.0, "volume": 1}],
+        "music": {"asset_id": "ast_00000000000m", "volume": 0.2, "fade_in": 0, "fade_out": 3,
+                  "loop": True, "duck": True, "speech_volume": 1},
+        "subtitles": None,
+    }
+    conn.execute(
+        "INSERT INTO projects (id, user_id, name, version, doc, created_at, updated_at) "
+        "VALUES ('prj_00000000000m', 'usr_000000000009', 'Старый', 1, ?, ?, ?)",
+        (json.dumps(legacy), now_iso(), now_iso()),
+    )
+    project = get_project(conn, "usr_000000000009", "prj_00000000000m")
+    assert project["doc"]["music"] is None
+    assert project["doc"]["sounds"] == [{
+        "id": "music", "asset_id": "ast_00000000000m", "at": 0.0, "in": 0.0, "out": 180.0,
+        "volume": 0.2, "loop": True, "duck": True, "fade_in": 0, "fade_out": 3,
+    }]

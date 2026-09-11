@@ -12,14 +12,14 @@ import { escapeHtml } from './html'
 import {
   aspectRatio,
   incomingAt,
-  musicVolume,
   previewClipVolume,
-  previewSpeechGain,
   resumePlan,
   seekPlan,
   stepPlan,
   type Incoming,
   soundPlan,
+  duckFactor,
+  type Ducking,
 } from './playback'
 import {
   createSaver,
@@ -27,23 +27,26 @@ import {
   loadProject,
   type Cue,
   type FieldError,
-  type Music,
   type Project,
   type ProjectDoc,
   soundsOf,
   type Sound,
+  overlaysOf,
+  type Overlay,
+  type OverlayPlace,
 } from './project'
 import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { clampTransitions, clipAt, clipAssetIds, clipDuration, fadeInto, insertClip, maxFade, ms, newClipId, percentToZoom, removeClip, splitAt, timelineStart, totalDuration, trimClip, zoomToPercent, type Clip } from './timeline/model'
-import { mountMusic } from './music'
+import { mountInspector, type Selected } from './inspector'
 import { mountRender } from './render'
 import { resolveTab, tabEnabled, type EditorTab } from './editor-tabs'
 import { HOTKEYS, needsClip, shortcutFor, type Shortcut } from './hotkeys'
 import { mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTranscript } from './transcript'
-import { newSoundId, removeSound, setSoundVolume } from './timeline/sounds'
+import { newOverlayId, OVERLAY_SIZE_DEFAULT, overlayBox, overlayPlan, removeOverlay, updateOverlay } from './timeline/overlays'
+import { newSoundId, removeSound, updateSound } from './timeline/sounds'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
 
@@ -53,6 +56,7 @@ const IDLE_POLL_MS = 20000
 // Вид редактора — привычка человека, а не свойство проекта: свёрнутая панель и открытая складка
 // живут в браузере. В документе им делать нечего, там их увидели бы все, кто откроет проект.
 const SIDE_KEY = 'ed.side'
+const PROPS_KEY = 'ed.props'
 const FOLD_KEY = 'ed.fold'
 
 function readPref(key: string, fallback: string): string {
@@ -110,7 +114,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <div id="ed-source" data-panel="source">
             <div id="ed-source-main"></div>
             <div id="ed-transcript"></div>
-            <div id="ed-music"></div>
           </div>
           <div id="ed-subtitles" data-panel="subtitles" hidden></div>
           <section id="ed-renders" data-panel="renders" hidden></section>
@@ -166,19 +169,17 @@ export function mountEditor(el: HTMLElement, projectId: string) {
             </label>
           </span>
         </div>
-        <!-- Свойства одного клипа: строка появляется по выбору. Висеть серой всё время им незачем,
-             к ролику целиком они отношения не имеют. -->
-        <div class="row bar-clip" id="ed-clip-bar">
-          <span class="meta" id="ed-clip-mark">Клип не выбран</span>
-          <label class="clip-vol">Громкость
-            <input id="ed-volume" type="range" min="0" max="2" step="0.01" disabled />
-            <span id="ed-vol-note" class="muted" hidden>в сборке громче превью</span>
-          </label>
-          <label class="clip-fade">Переход, с
-            <input id="ed-fade" class="tc" type="number" min="0" step="0.1" disabled title="В этот клип из предыдущего. Ноль — стык." />
-          </label>
-        </div>
         <div id="ed-timeline"></div>
+      </section>
+      <!-- Свойства выбранного — справа. Раньше стояли строкой над шкалой и гасли по выбору; панель
+           читается сверху вниз, показывает только то, что у куска есть, и сворачивается. -->
+      <section class="props" id="ed-props">
+        <div class="side-head">
+          <button type="button" class="side-fold" id="ed-props-toggle" aria-expanded="true"
+            aria-controls="ed-props-body" title="Свернуть свойства: сцена и шкала станут шире">›</button>
+          <h3 class="props-title">Свойства</h3>
+        </div>
+        <div class="props-body" id="ed-props-body"></div>
       </section>
     </div>
     <div class="card keys" id="ed-keys" hidden>
@@ -198,13 +199,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
   const fitPick = el.querySelector('#ed-fit') as HTMLSelectElement
   const fpsPick = el.querySelector('#ed-fps') as HTMLSelectElement
-  const volumeInput = el.querySelector('#ed-volume') as HTMLInputElement
-  const volumeNote = el.querySelector('#ed-vol-note') as HTMLElement
-  const fadeInput = el.querySelector('#ed-fade') as HTMLInputElement
+  const propsBody = el.querySelector('#ed-props-body') as HTMLElement
+  const propsToggle = el.querySelector('#ed-props-toggle') as HTMLButtonElement
   const history = createHistory<ProjectDoc>(5)
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const playButton = el.querySelector('#ed-play') as HTMLButtonElement
-  const clipMark = el.querySelector('#ed-clip-mark') as HTMLElement
   const splitButton = el.querySelector('#ed-split') as HTMLButtonElement
   const copyButton = el.querySelector('#ed-copy') as HTMLButtonElement
   const deleteButton = el.querySelector('#ed-delete') as HTMLButtonElement
@@ -279,7 +278,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     assetsSeen = true
     const previous = new Map(assetList.map(a => [a.id, a]))
     assetList = list
-    assets = new Map(list.map(a => [a.id, { duration: a.duration, files: { thumbs: a.files.thumbs } }]))
+    assets = new Map(
+      list.map(a => [
+        a.id,
+        { kind: a.kind, hasAudio: a.has_audio ?? null, duration: a.duration, files: { thumbs: a.files.thumbs } },
+      ]),
+    )
     source.setAssets(list)
     // Панель исходника при том же выбранном файле обработчик не дёргает, поэтому свежую карточку
     // в панель текста передаём сами. Иначе доехавшая расшифровка (её мог заказать другой экран,
@@ -287,7 +291,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // она вечно писала бы «Расшифровки ещё нет».
     const picked = source.current()
     if (picked) transcript.setAsset(list.find(a => a.id === picked.id) ?? null)
-    musicPanel.setAssets(list)
     renders?.setAssets(list)
     if (project) {
       const ids = clipAssetIds(project.doc.clips)
@@ -298,10 +301,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       }
       subtitles.setTimeline(project.doc.clips, list)
     }
-    if (project?.doc.music) {
-      const musicAsset = list.find(a => a.id === project?.doc.music?.asset_id)
-      if (musicAsset?.files.proxy) setMusicSrc(musicAsset.files.proxy)
-    }
+    // Свойствам выбранного нужны записи: есть ли у клипа звук, картинка ли наложение.
+    syncSelection()
   }
 
   function pollAssets(): void {
@@ -385,7 +386,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   // Плеер склейки: активный элемент играет, скрытый держит следующий клип на его точке входа.
   const videoA = document.createElement('video')
   const videoB = document.createElement('video')
-  const music = document.createElement('audio')
   let active = videoA
   ;[videoA, videoB].forEach(v => {
     v.preload = 'auto'
@@ -393,15 +393,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stage.appendChild(v)
   })
   videoB.style.display = 'none'
-  music.preload = 'auto'
-
-  /** Тот же адрес, присвоенный заново, всё равно перезапускает загрузку: дорожка встаёт на ноль.
-   * Список ассетов перечитывается раз в три секунды, и без этой проверки музыка начиналась заново
-   * каждые три секунды прямо во время просмотра. Так же огорожены оба элемента video. */
-  function setMusicSrc(src: string): void {
-    if (music.src.endsWith(src)) return
-    music.src = src
-  }
+  // Слой наложений поверх обоих элементов основы. У каждого наложения свой <video>: прокси
+  // картинки — неподвижный ролик, поэтому картинки и видео идут одним путём.
+  const overlayLayer = document.createElement('div')
+  overlayLayer.className = 'ov-layer'
+  stage.appendChild(overlayLayer)
 
   const proxyOf = (assetId: string): string | null => assetList.find(a => a.id === assetId)?.files.proxy ?? null
 
@@ -424,8 +420,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         soundPlayers.delete(id)
       }
     }
-    // Ползунок «Речь» в сборке режет и звуковую дорожку: она влита в речь до музыки.
-    const speech = previewSpeechGain(project.doc.music)
+    // Приглушение считается один раз на тик: кто говорит, известно по клипу под курсором.
+    const duck = cues.some(cue => cue.duck) ? duckFactor(speechDucking()) : 1
     for (const cue of cues) {
       const src = proxyOf(cue.assetId)
       if (!src) continue
@@ -437,13 +433,79 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       }
       if (!player.src.endsWith(src)) player.src = src
       if (Math.abs(player.currentTime - cue.time) > SOUND_DRIFT_SEC) player.currentTime = cue.time
-      player.volume = previewClipVolume(cue.volume, speech)
+      player.volume = previewClipVolume(cue.gain * (cue.duck ? duck : 1))
       if (player.paused) void player.play().catch(() => {})
     }
   }
 
   function pauseSounds(): void {
     soundPlayers.forEach(player => {
+      if (!player.paused) player.pause()
+    })
+  }
+
+  /**
+   * Наложения в превью: по <video> на наложение поверх сцены, в коробке своего пресета.
+   *
+   * Показываются и на паузе — это картинка, а не звук: человек ставит курсор и смотрит, что
+   * лежит поверх кадра. Часы у элементов свои, поэтому на каждом тике подводим их к времени
+   * шкалы, как звуки. Прозрачность — появление и исчезновение, посчитанные по тем же полям,
+   * что в сборке. Порядок в списке — порядок слоёв: последнее наложение сверху.
+   */
+  const overlayPlayers = new Map<string, HTMLVideoElement>()
+
+  function syncOverlays(): void {
+    if (!project) return
+    const overlays = overlaysOf(project.doc)
+    const cues = overlayPlan(overlays, timelineTime, totalDuration(project.doc.clips))
+    const live = new Set(cues.map(cue => cue.id))
+    for (const [id, player] of overlayPlayers) {
+      if (!overlays.some(overlay => overlay.id === id)) {
+        player.remove()
+        player.removeAttribute('src')
+        overlayPlayers.delete(id)
+      } else if (!live.has(id)) {
+        if (!player.paused) player.pause()
+        player.hidden = true
+      }
+    }
+    const aspect = aspectRatio(project.doc.output.aspect)
+    const shown: HTMLVideoElement[] = []
+    for (const cue of cues) {
+      const overlay = overlays.find(item => item.id === cue.id)
+      const src = overlay ? proxyOf(overlay.asset_id) : null
+      if (!overlay || !src) continue
+      let player = overlayPlayers.get(cue.id)
+      if (!player) {
+        player = document.createElement('video')
+        player.className = 'ov'
+        player.preload = 'auto'
+        player.playsInline = true
+        overlayPlayers.set(cue.id, player)
+      }
+      if (!player.src.endsWith(src)) player.src = src
+      const box = overlayBox(overlay.place, overlay.size, aspect)
+      player.style.left = `${box.left}%`
+      player.style.top = `${box.top}%`
+      player.style.width = `${box.width}%`
+      player.style.height = `${box.height}%`
+      player.style.objectPosition = box.align
+      player.style.opacity = String(cue.opacity)
+      player.hidden = false
+      player.muted = cue.volume <= 0
+      player.volume = previewClipVolume(cue.volume)
+      if (Math.abs(player.currentTime - cue.time) > SOUND_DRIFT_SEC) player.currentTime = cue.time
+      if (playing && player.paused) void player.play().catch(() => {})
+      if (!playing && !player.paused) player.pause()
+      shown.push(player)
+    }
+    // Переставляем только когда порядок разошёлся: перестановка на каждом тике — лишняя работа.
+    const inLayer = Array.from(overlayLayer.children)
+    if (shown.some((player, i) => inLayer[i] !== player)) shown.forEach(player => overlayLayer.appendChild(player))
+  }
+
+  function pauseOverlays(): void {
+    overlayPlayers.forEach(player => {
       if (!player.paused) player.pause()
     })
   }
@@ -524,8 +586,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         // У следующего клипа ещё нет прокси: показывать пустой кадр хуже, чем честно встать.
         setPlaying(false)
         active.pause()
-        music.pause()
         pauseSounds()
+        pauseOverlays()
         underTrack('Следующий файл ещё обрабатывается, воспроизведение остановлено')
         return
       }
@@ -540,7 +602,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (clip) active.currentTime = clip.out
       active.pause()
       applyIncoming()
-      music.pause()
     }
     applyPreviewVolumes()
   }
@@ -550,12 +611,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const timeline = mountTimeline(el.querySelector('#ed-timeline') as HTMLElement, {
     onChange: applyClips,
     onSoundsChange: applySounds,
+    onOverlaysChange: applyOverlays,
     onSeek: seek,
-    onSelect: () => {
-      syncBar()
-      syncClipVolume()
-      syncClipFade()
-    },
+    onSelect: syncSelection,
   })
 
   /** Кусок исходника в конец шкалы: приходит и от полосы файла, и от выделения в тексте. */
@@ -597,6 +655,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       in: ms(from),
       out: ms(to),
       volume: 1,
+      loop: false,
+      duck: false,
+      fade_in: 0,
+      fade_out: 0,
     }
     applySounds([...sounds, sound])
     selectClip(sound.id)
@@ -610,9 +672,46 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     return soundsOf(project.doc).find(sound => sound.id === id) ?? null
   }
 
-  /** Честный отказ вместо молчания: со звуком пока умеем не всё, что с клипом. */
-  function soundCannot(): void {
-    underTrack('Звук пока можно двигать, менять ему громкость и удалять')
+  /**
+   * Положить наложение поверх основы под курсор.
+   *
+   * По умолчанию во весь кадр: картинку поверх речи чаще всего кладут как перебивку, а угол,
+   * размер и появление выбирают потом в строке свойств. Звук выключен, пока его не включат.
+   */
+  function addOverlay(assetId: string, from: number, to: number): void {
+    if (!project) return
+    const overlays = overlaysOf(project.doc)
+    const overlay: Overlay = {
+      id: newOverlayId(project.doc.clips, soundsOf(project.doc), overlays),
+      asset_id: assetId,
+      at: ms(timelineTime),
+      in: ms(from),
+      out: ms(to),
+      place: 'full',
+      size: OVERLAY_SIZE_DEFAULT,
+      volume: 0,
+      fade_in: 0,
+      fade_out: 0,
+    }
+    applyOverlays([...overlays, overlay])
+    selectClip(overlay.id)
+    underTrack(`Наложение поверх основы с ${timelineTime.toFixed(1)} с`)
+  }
+
+  /** Выбранное наложение, если выбрано оно: выделение у всех дорожек общее. */
+  function chosenOverlay(): Overlay | null {
+    const id = timeline.selected()
+    if (!project || !id) return null
+    return overlaysOf(project.doc).find(overlay => overlay.id === id) ?? null
+  }
+
+  /** Честный отказ вместо молчания: со звуком и наложением пока умеем не всё, что с клипом. */
+  function laneCannot(): void {
+    underTrack(
+      chosenOverlay()
+        ? 'Наложение пока можно двигать, менять ему место, размер, появление и удалять'
+        : 'Звук пока можно двигать, менять ему громкость и удалять',
+    )
   }
 
   const sourceMain = el.querySelector('#ed-source-main') as HTMLElement
@@ -635,6 +734,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       asset.kind === 'audio'
         ? addSound(asset.id, range.from, range.to)
         : addClip(asset.id, range.from, range.to, false),
+    onOverlay: (asset, range) => addOverlay(asset.id, range.from, range.to),
     onPick: asset => transcript.setAsset(asset),
     onTime: seconds => transcript.setTime(seconds),
     onFold: () => setFold(openFold === 'cut' ? null : 'cut'),
@@ -659,9 +759,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   const savedFold = readPref(FOLD_KEY, 'cut')
   setFold(savedFold === 'words' ? 'words' : savedFold === 'none' ? null : 'cut')
-  const musicPanel = mountMusic(el.querySelector('#ed-music') as HTMLElement, {
-    onChange: applyMusic,
-  })
 
   const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
     onChange: cues => applySubtitles(cues),
@@ -875,22 +972,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     saver.schedule(project)
   }
 
-  function applyMusic(next: Music | null, live = false): void {
+  /** Правка наложений: тот же путь, что у звуков. */
+  function applyOverlays(overlays: Overlay[]): void {
     if (!project) return
-    // live — очередной тик перетаскивания ползунка. В историю кладём состояние до всего
-    // движения: иначе одно перетаскивание вытесняет пять последних настоящих действий.
-    if (!live) remember()
-    project = { ...project, doc: { ...project.doc, music: next } }
-    if (next) {
-      const asset = assetList.find(a => a.id === next.asset_id)
-      if (asset?.files.proxy) setMusicSrc(asset.files.proxy)
-    } else {
-      music.pause()
-      music.removeAttribute('src')
-    }
-    applyPreviewVolumes()
+    remember()
+    project = { ...project, doc: { ...project.doc, overlays } }
+    render()
     saver.schedule(project)
-    renders?.setDoc(project.doc, project.name)
   }
 
   function parseSilences(data: unknown): { start: number; end: number }[] {
@@ -932,31 +1020,30 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function applyPreviewVolumes(): void {
     if (!project) return
-    // Звуки сверяются здесь же: этот вызов стоит на каждом тике, перемотке и пуске.
+    // Звуки и наложения сверяются здесь же: этот вызов стоит на каждом тике, перемотке и пуске.
     syncSounds()
+    syncOverlays()
     const clips = project.doc.clips
     const found = clipAt(clips, timelineTime)
     const hidden = active === videoA ? videoB : videoA
     const incoming = incomingAt(clips, timelineTime)
     const mix = incoming?.mix ?? 0
-    const speech = previewSpeechGain(project.doc.music)
-    active.volume = previewClipVolume(found?.clip.volume ?? 1, speech) * (1 - mix)
+    active.volume = previewClipVolume(found?.clip.volume ?? 1) * (1 - mix)
     const incomingClip = incoming ? clips[incoming.index] : clips[playIndex + 1]
-    hidden.volume = previewClipVolume(incomingClip?.volume ?? 1, speech) * (incoming ? mix : 1)
-    const musicDoc = project.doc.music
-    if (!musicDoc) {
-      music.volume = 0
-      return
+    hidden.volume = previewClipVolume(incomingClip?.volume ?? 1) * (incoming ? mix : 1)
+  }
+
+  /** Карта пауз клипа под курсором: по ней фон приглушается под речь и отпускается в паузах. */
+  function speechDucking(): Ducking | null {
+    if (!project) return null
+    const found = clipAt(project.doc.clips, timelineTime)
+    if (!found) return null
+    const map = analysisCache.get(found.clip.asset_id)
+    if (map === undefined) {
+      void ensureAnalysis(found.clip.asset_id)
+      return null
     }
-    let ducking: { sourceTime: number; silences: { start: number; end: number }[] } | null = null
-    if (musicDoc.duck && found) {
-      const map = analysisCache.get(found.clip.asset_id)
-      if (map === undefined) void ensureAnalysis(found.clip.asset_id)
-      else if (map !== null) {
-        ducking = { sourceTime: found.clip.in + found.offset, silences: map }
-      }
-    }
-    music.volume = musicVolume(musicDoc, timelineTime, totalDuration(clips), ducking)
+    return map ? { sourceTime: found.clip.in + found.offset, silences: map } : null
   }
 
   /**
@@ -975,40 +1062,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     zoomInButton.disabled = !has
     zoomOutButton.disabled = !has
     const sound = chosenSound()
-    copyButton.disabled = !chosen || sound !== null
+    const overlay = chosenOverlay()
+    copyButton.disabled = !chosen || sound !== null || overlay !== null
     deleteButton.disabled = !chosen
-    clipMark.textContent = sound ? 'Выбранный звук' : chosen ? 'Выбранный клип' : 'Клип не выбран'
   }
 
-  function syncClipVolume(): void {
-    const id = timeline.selected()
-    // Громкость — общее свойство клипа и звука, поэтому ползунок один на оба.
-    const clip = project?.doc.clips.find(c => c.id === id) ?? chosenSound()
-    volumeInput.disabled = !clip
-    // Громкость клипа появилась позже самих клипов: у проекта, сохранённого до неё, ключа нет,
-    // и `undefined <= 1` — ложь. Ползунок вставал в "undefined" (браузер молча правил на 1),
-    // а подпись «в сборке громче превью» висела над клипом обычной громкости.
-    const volume = clip?.volume ?? 1
-    if (clip) volumeInput.value = String(volume)
-    volumeNote.hidden = !clip || volume <= 1
-  }
-
-  function syncClipFade(): void {
-    const id = timeline.selected()
-    const clips = project?.doc.clips ?? []
-    const index = clips.findIndex(c => c.id === id)
-    const clip = index >= 0 ? clips[index] : undefined
-    const canFade = index > 0 && clip !== undefined
-    fadeInput.disabled = !canFade
-    if (!clip) {
-      fadeInput.value = ''
-      return
-    }
-    fadeInput.value = String(canFade ? fadeInto(clip, index) : 0)
-    if (canFade) fadeInput.max = String(maxFade(clips[index - 1], clip))
-  }
-
-  /** Волны и кадры записей шкалы: и клипов, и звуков — звуку волна нужна не меньше. */
+  /** Волны и кадры записей шкалы: клипов, звуков и наложений. */
   async function ensureData(clips: { asset_id: string }[]): Promise<void> {
     const ids = new Set(clips.map(c => c.asset_id))
     await Promise.all(
@@ -1034,19 +1093,22 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stage.style.aspectRatio = String(ratio)
     stage.style.maxWidth = `calc(${ratio} * var(--stage-h))`
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
-    timeline.render({ clips: project.doc.clips, sounds: soundsOf(project.doc), assets, data })
+    timeline.render({
+      clips: project.doc.clips,
+      sounds: soundsOf(project.doc),
+      overlays: overlaysOf(project.doc),
+      assets,
+      data,
+    })
     timeline.setPlayhead(timelineTime)
     subtitles.setProject(project)
     subtitles.setTimeline(project.doc.clips, assetList)
-    musicPanel.setMusic(project.doc.music)
     syncBurn()
-    syncBar()
-    syncClipVolume()
-    syncClipFade()
+    syncSelection()
     showTime()
     applyPreviewVolumes()
     renders?.setDoc(project.doc, project.name)
-    void ensureData([...project.doc.clips, ...soundsOf(project.doc)])
+    void ensureData([...project.doc.clips, ...soundsOf(project.doc), ...overlaysOf(project.doc)])
     syncTabs()
   }
 
@@ -1057,8 +1119,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       active.pause()
       const hidden = active === videoA ? videoB : videoA
       hidden.pause()
-      music.pause()
       pauseSounds()
+      pauseOverlays()
       return
     }
     const plan = resumePlan(project.doc.clips, { index: playIndex, sourceTime: active.currentTime })
@@ -1069,7 +1131,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       timeline.setPlayhead(timelineTime)
       showTime()
       applyIncoming()
-      music.pause()
       return
     }
     setPlaying(true)
@@ -1089,7 +1150,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       seek(timelineTime)
     }
     void active.play().catch(showError)
-    if (project.doc.music) void music.play().catch(() => {})
     applyIncoming(incomingAt(project.doc.clips, timelineTime), true)
     applyPreviewVolumes()
   })
@@ -1104,10 +1164,132 @@ export function mountEditor(el: HTMLElement, projectId: string) {
    */
   function selectClip(id: string | null): void {
     timeline.select(id)
-    syncBar()
-    syncClipVolume()
-    syncClipFade()
+    syncSelection()
   }
+
+  /**
+   * Подтянуть всё, что зависит от выбранного: панель кнопок, громкость, переход, свойства
+   * наложения. Одной функцией, потому что выбор меняется из трёх мест — щелчком по шкале, из
+   * кода и при перерисовке, — и однажды одно из них забыло про свойства наложения: у выбранного
+   * звука список «Место» остался доступным от прежнего наложения.
+   */
+  function syncSelection(): void {
+    syncBar()
+    inspector.set(currentSelection())
+  }
+
+  /** Что выбрано на шкале — глазами панели свойств: вид, сам кусок и что у него есть. */
+  function currentSelection(): Selected {
+    const id = timeline.selected()
+    if (!project || !id) return { kind: 'none' }
+    const clips = project.doc.clips
+    const index = clips.findIndex(c => c.id === id)
+    if (index >= 0) {
+      const clip = clips[index]
+      const asset = assetList.find(a => a.id === clip.asset_id)
+      return {
+        kind: 'clip',
+        clip,
+        index,
+        // Пока записи не приехали, звук считаем есть: спрятать ползунок и вернуть его хуже.
+        hasAudio: asset ? asset.kind !== 'image' && asset.has_audio !== false : true,
+        maxFade: index > 0 ? maxFade(clips[index - 1], clip) : 0,
+      }
+    }
+    const sound = soundsOf(project.doc).find(s => s.id === id)
+    if (sound) return { kind: 'sound', sound }
+    const overlay = overlaysOf(project.doc).find(o => o.id === id)
+    if (overlay) {
+      const asset = assetList.find(a => a.id === overlay.asset_id)
+      return { kind: 'overlay', overlay, isImage: asset?.kind === 'image' }
+    }
+    return { kind: 'none' }
+  }
+
+  /**
+   * Одна запись в историю на всё движение ползунка: live-тики её не плодят, а первый кладёт
+   * состояние до движения. Обычная правка (без live) пишет в историю как всегда.
+   */
+  let liveRemembered = false
+  function rememberFor(live: boolean): void {
+    if (live) {
+      if (!liveRemembered) {
+        remember()
+        liveRemembered = true
+      }
+      return
+    }
+    if (!liveRemembered) remember()
+    liveRemembered = false
+  }
+
+  /** Правка клипа из панели: переход перестраивает шкалу, громкость слышна сразу. */
+  function patchClip(patch: Partial<Clip>, live: boolean): void {
+    const id = timeline.selected()
+    if (!project || !id) return
+    const clips = project.doc.clips.map(clip => {
+      if (clip.id !== id) return clip
+      const next = { ...clip, ...patch }
+      if ('transition' in patch && !patch.transition) delete next.transition
+      return next
+    })
+    if ('transition' in patch) {
+      applyClips(clips)
+      return
+    }
+    rememberFor(live)
+    project = { ...project, doc: { ...project.doc, clips } }
+    applyPreviewVolumes()
+    syncSelection()
+    saver.schedule(project)
+  }
+
+  /** Правка звука: повтор меняет длину блока на шкале, остальное слышно сразу и так. */
+  function patchSound(patch: Partial<Sound>, live: boolean): void {
+    const id = timeline.selected()
+    if (!project || !id) return
+    const sounds = updateSound(soundsOf(project.doc), id, patch)
+    if ('loop' in patch) {
+      applySounds(sounds)
+      return
+    }
+    rememberFor(live)
+    project = { ...project, doc: { ...project.doc, sounds } }
+    applyPreviewVolumes()
+    syncSelection()
+    saver.schedule(project)
+  }
+
+  /** Правка наложения: место и размер видны на сцене сразу, шкалу они не трогают. */
+  function patchOverlay(patch: Partial<Overlay>, live: boolean): void {
+    const id = timeline.selected()
+    if (!project || !id) return
+    rememberFor(live)
+    project = { ...project, doc: { ...project.doc, overlays: updateOverlay(overlaysOf(project.doc), id, patch) } }
+    applyPreviewVolumes()
+    syncSelection()
+    saver.schedule(project)
+  }
+
+  const inspector = mountInspector(propsBody, {
+    onClip: patchClip,
+    onSound: patchSound,
+    onOverlay: patchOverlay,
+    onRefuse: underTrack,
+  })
+
+  /** Свернуть панель свойств — как левую: кнопка остаётся, чтобы было чем развернуть. */
+  function setProps(open: boolean): void {
+    grid.classList.toggle('props-off', !open)
+    propsBody.hidden = !open
+    propsToggle.textContent = open ? '›' : '‹'
+    propsToggle.setAttribute('aria-expanded', String(open))
+    propsToggle.title = open ? 'Свернуть свойства: сцена и шкала станут шире' : 'Развернуть свойства'
+    savePref(PROPS_KEY, open ? 'on' : 'off')
+  }
+
+  propsToggle.addEventListener('click', () => setProps(propsBody.hidden))
+  setProps(readPref(PROPS_KEY, 'on') !== 'off')
 
   function splitHere(): void {
     if (!project) return
@@ -1120,6 +1302,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const id = timeline.selected()
     if (!project || !id) return underTrack('Сначала выберите клип на шкале')
     if (chosenSound()) applySounds(removeSound(soundsOf(project.doc), id))
+    else if (chosenOverlay()) applyOverlays(removeOverlay(overlaysOf(project.doc), id))
     else applyClips(removeClip(project.doc.clips, id))
     selectClip(null)
   }
@@ -1268,49 +1451,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     applyOutput({ fps: Number(fpsPick.value) })
   })
 
-  let volumeRemembered = false
-  volumeInput.addEventListener('input', () => {
-    const id = timeline.selected()
-    if (!project || !id) return
-    if (!volumeRemembered) {
-      remember()
-      volumeRemembered = true
-    }
-    const volume = Math.round(Number(volumeInput.value) * 1000) / 1000
-    project = chosenSound()
-      ? { ...project, doc: { ...project.doc, sounds: setSoundVolume(soundsOf(project.doc), id, volume) } }
-      : {
-          ...project,
-          doc: {
-            ...project.doc,
-            clips: project.doc.clips.map(clip => (clip.id === id ? { ...clip, volume } : clip)),
-          },
-        }
-    volumeNote.hidden = volume <= 1
-    applyPreviewVolumes()
-    saver.schedule(project)
-  })
-  volumeInput.addEventListener('change', () => {
-    volumeRemembered = false
-  })
-
-  fadeInput.addEventListener('change', () => {
-    const id = timeline.selected()
-    if (!project || !id) return
-    const clips = project.doc.clips
-    const index = clips.findIndex(c => c.id === id)
-    if (index <= 0) return
-    const duration = Math.max(0, ms(Number(fadeInput.value) || 0))
-    applyClips(clips.map((clip, i) => {
-      if (i !== index) return clip
-      if (duration <= 0) {
-        const cleared = { ...clip }
-        delete cleared.transition
-        return cleared
-      }
-      return { ...clip, transition: { kind: 'fade', duration } }
-    }))
-  })
 
   function undo(): void {
     if (!project) return
@@ -1425,22 +1565,22 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         removeSelected()
         break
       case 'duplicate':
-        if (chosenSound()) soundCannot()
+        if (chosenSound() || chosenOverlay()) laneCannot()
         else duplicateSelected()
         break
       case 'copy':
-        if (chosenSound()) soundCannot()
+        if (chosenSound() || chosenOverlay()) laneCannot()
         else copySelected()
         break
       case 'paste':
         pasteClip()
         break
       case 'trimIn':
-        if (chosenSound()) soundCannot()
+        if (chosenSound() || chosenOverlay()) laneCannot()
         else trimToPlayhead('in')
         break
       case 'trimOut':
-        if (chosenSound()) soundCannot()
+        if (chosenSound() || chosenOverlay()) laneCannot()
         else trimToPlayhead('out')
         break
       case 'prevClip':
@@ -1487,7 +1627,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   return {
     stop(): void {
       pauseSounds()
+      pauseOverlays()
       soundPlayers.forEach(player => player.removeAttribute('src'))
+      overlayPlayers.forEach(player => player.removeAttribute('src'))
       stopped = true
       window.clearTimeout(assetTimer)
       document.removeEventListener('keydown', onKey)
@@ -1501,7 +1643,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (project && saver.pending()) void saver.flush(project).catch(() => {})
       else saver.cancel()
       active.pause()
-      music.pause()
     },
   }
 }

@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import type { Sound } from './project'
 import type { Clip } from './timeline/model'
 import {
   aspectRatio,
   incomingAt,
-  musicVolume,
   nextClip,
   previewClipVolume,
-  previewSpeechGain,
   resumePlan,
   seekPlan,
   stepPlan,
   soundPlan,
+  duckFactor,
+  fadeGain,
 } from './playback'
 
 function clip(id: string, inS: number, outS: number, asset = 'ast_1'): Clip {
@@ -104,55 +105,34 @@ describe('переходы между клипами', () => {
   })
 })
 
-describe('музыка', () => {
-  it('затухает на входе и на выходе', () => {
-    const music = { volume: 0.8, fade_in: 2, fade_out: 2 }
-    expect(musicVolume(music, 0, 10)).toBeCloseTo(0)
-    expect(musicVolume(music, 1, 10)).toBeCloseTo(0.4)
-    expect(musicVolume(music, 5, 10)).toBeCloseTo(0.8)
-    expect(musicVolume(music, 9, 10)).toBeCloseTo(0.4)
-    expect(musicVolume(music, 10, 10)).toBeCloseTo(0)
+describe('края звука', () => {
+  it('появление и затухание — линейно и по краям отрезка', () => {
+    expect(fadeGain(0, 10, 2, 2)).toBeCloseTo(0)
+    expect(fadeGain(1, 10, 2, 2)).toBeCloseTo(0.5)
+    expect(fadeGain(5, 10, 2, 2)).toBeCloseTo(1)
+    expect(fadeGain(9, 10, 2, 2)).toBeCloseTo(0.5)
+    expect(fadeGain(10, 10, 2, 2)).toBeCloseTo(0)
   })
 
-  it('без затуханий держит громкость ровно', () => {
-    expect(musicVolume({ volume: 0.5, fade_in: 0, fade_out: 0 }, 0, 10)).toBe(0.5)
-    expect(musicVolume(null, 1, 10)).toBe(0)
-  })
-
-  it('короткий ролик не даёт затуханиям наложиться', () => {
-    const music = { volume: 1, fade_in: 5, fade_out: 5 }
-    const middle = musicVolume(music, 1, 2)
+  it('без затуханий держит ровно, а короткий отрезок не даёт им наложиться', () => {
+    expect(fadeGain(3, 10, 0, 0)).toBe(1)
+    const middle = fadeGain(1, 2, 5, 5)
     expect(middle).toBeGreaterThan(0)
     expect(middle).toBeLessThanOrEqual(1)
   })
+})
 
-  it('в речи приглушает музыку, в паузе оставляет', () => {
-    const music = { volume: 1, fade_in: 0, fade_out: 0, duck: true }
+describe('приглушение под речь', () => {
+  it('в речи тише, в паузе — как есть', () => {
     const silences = [{ start: 2, end: 4 }]
-    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences })).toBeCloseTo(0.3)
-    expect(musicVolume(music, 3, 10, { sourceTime: 3, silences })).toBeCloseTo(1)
+    expect(duckFactor({ sourceTime: 1, silences })).toBeCloseTo(0.3)
+    expect(duckFactor({ sourceTime: 3, silences })).toBe(1)
   })
 
-  it('без карты пауз дакинг не трогает громкость', () => {
-    const music = { volume: 0.5, fade_in: 0, fade_out: 0, duck: true }
-    expect(musicVolume(music, 1, 10)).toBe(0.5)
-    expect(musicVolume(music, 1, 10, null)).toBe(0.5)
-  })
-
-  it('пустая карта пауз — вся речь, множитель 0.3', () => {
-    const music = { volume: 1, fade_in: 0, fade_out: 0, duck: true }
-    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences: [] })).toBeCloseTo(0.3)
-  })
-
-  it('дакинг умножает уже посчитанный fade', () => {
-    const music = { volume: 0.8, fade_in: 2, fade_out: 0, duck: true }
-    // на 1 с из 2 с затухания gain = 0.4, речь → 0.12
-    expect(musicVolume(music, 1, 10, { sourceTime: 0.5, silences: [] })).toBeCloseTo(0.12)
-  })
-
-  it('без флага duck карта пауз не действует', () => {
-    const music = { volume: 0.5, fade_in: 0, fade_out: 0, duck: false }
-    expect(musicVolume(music, 1, 10, { sourceTime: 1, silences: [] })).toBe(0.5)
+  it('без карты пауз не трогает, пустая карта — вся речь', () => {
+    expect(duckFactor(null)).toBe(1)
+    expect(duckFactor(undefined)).toBe(1)
+    expect(duckFactor({ sourceTime: 1, silences: [] })).toBeCloseTo(0.3)
   })
 })
 
@@ -173,29 +153,16 @@ describe('громкость клипа в превью', () => {
     expect(previewClipVolume(1.7)).toBe(1)
   })
 
-  it('умножает на ползунок речи и тоже режет потолок', () => {
-    expect(previewClipVolume(1, 0.5)).toBe(0.5)
-    expect(previewClipVolume(0.4, 0.5)).toBeCloseTo(0.2)
-    expect(previewClipVolume(2, 0.4)).toBeCloseTo(0.8)
-    expect(previewClipVolume(1.7, 1)).toBe(1)
-  })
-
-  it('без музыки речь не приглушает', () => {
-    expect(previewSpeechGain(null)).toBe(1)
-    expect(previewSpeechGain(undefined)).toBe(1)
-    expect(previewSpeechGain({ speech_volume: 0.3 })).toBe(0.3)
-    expect(previewSpeechGain({})).toBe(1)
-  })
 })
 
 describe('звуковая дорожка в превью', () => {
-  const s = (id: string, at: number, from: number, to: number) =>
-    ({ id, asset_id: `ast_${id}`, at, in: from, out: to, volume: 0.5 })
+  const s = (id: string, at: number, from: number, to: number, over: Partial<Sound> = {}): Sound =>
+    ({ id, asset_id: `ast_${id}`, at, in: from, out: to, volume: 0.5, loop: false, duck: false, fade_in: 0, fade_out: 0, ...over })
 
   it('до своего места звук молчит, внутри играет со своего отрезка записи', () => {
     const list = [s('s1', 2, 10, 14)]
     expect(soundPlan(list, 1.9, 60)).toEqual([])
-    expect(soundPlan(list, 3.5, 60)).toEqual([{ id: 's1', assetId: 'ast_s1', time: 11.5, volume: 0.5 }])
+    expect(soundPlan(list, 3.5, 60)).toEqual([{ id: 's1', assetId: 'ast_s1', time: 11.5, gain: 0.5, duck: false }])
   })
 
   it('конец звука не входит: на стыке двух звучит только второй', () => {
@@ -210,5 +177,19 @@ describe('звуковая дорожка в превью', () => {
 
   it('хвост за концом ролика не звучит, как и в собранном файле', () => {
     expect(soundPlan([s('s1', 8, 0, 10)], 12, 10)).toEqual([])
+  })
+
+  it('звук по кругу идёт до конца ролика, а время внутри записи — по остатку', () => {
+    const list = [s('s1', 1, 10, 14, { loop: true })] // кусок 4 с, с 1 с до конца
+    expect(soundPlan(list, 6.5, 60)[0].time).toBe(11.5) // 5.5 с внутри → второй круг, 1.5 с
+    expect(soundPlan(list, 59, 60)).toHaveLength(1)
+    expect(soundPlan(list, 60, 60)).toEqual([])
+  })
+
+  it('громкость учитывает появление и затухание, а приглушение только помечает', () => {
+    const list = [s('s1', 0, 0, 10, { volume: 1, fade_in: 2, fade_out: 2, duck: true })]
+    expect(soundPlan(list, 1, 60)[0].gain).toBeCloseTo(0.5)
+    expect(soundPlan(list, 5, 60)[0].gain).toBe(1)
+    expect(soundPlan(list, 5, 60)[0].duck).toBe(true)
   })
 })

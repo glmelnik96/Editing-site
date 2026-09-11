@@ -14,6 +14,8 @@ export type Asset = {
   size: number
   status: string
   duration: number | null
+  /** Есть ли звуковая дорожка: у клипа без неё нечего показывать в свойствах и на дорожке звука. */
+  has_audio?: boolean | null
   /** Размер кадра: по нему панель сборки предупреждает, что выбранное больше исходников. */
   width?: number | null
   height?: number | null

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -26,6 +27,11 @@ CLIP_READY_STATUSES = ("ready", "proxy_ready")
 CLIP_KINDS = ("video", "image")
 # Чем можно озвучить: звуковой файл или звук видеозаписи — у последней берётся только дорожка.
 SOUND_KINDS = ("audio", "video")
+# Куда ставить наложение. Пресеты вместо свободных координат: угол, центр, весь кадр и половины
+# закрывают почти всё, а прямоугольник с ручками на сцене — отдельная большая работа.
+OVERLAY_PLACES = ("full", "center", "tl", "tr", "bl", "br", "left", "right")
+OVERLAY_SIZE_MIN = 5
+OVERLAY_SIZE_MAX = 100
 TRANSITION_KINDS = ("fade",)
 TIME_DIGITS = 3
 MAX_CLIP_ID = 64  # идентификатор клипа хранится в документе: без предела клиент раздует его сотней клипов
@@ -278,45 +284,61 @@ def _validate_clip(
     return out
 
 
-def _validate_music(raw: object, assets: dict[str, AssetInfo], errors: _Errors) -> dict | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        errors.add("music", "music должен быть объектом")
-        return None
-    asset_id = raw.get("asset_id")
-    asset = assets.get(asset_id) if isinstance(asset_id, str) else None
-    if asset is None or asset.kind not in ("audio", "video"):
-        errors.add("music.asset_id", "музыкой может быть звуковой или видеоассет владельца")
-        return None
-    volume = _number(raw.get("volume", 0.25))
-    if volume is None or not 0.0 <= volume <= 1.0:
-        errors.add("music.volume", "volume от 0 до 1")
-        return None
-    fades = {}
-    for key in ("fade_in", "fade_out"):
-        value = _number(raw.get(key, 0.0))
-        if value is None or value < 0:
-            errors.add(f"music.{key}", f"{key} не может быть отрицательным")
-            return None
-        fades[key] = _round(value)
-    duck = raw.get("duck", False)
-    if not isinstance(duck, bool):
-        errors.add("music.duck", "duck должен быть true или false")
-        return None
-    speech = _number(raw.get("speech_volume", 1))
+def legacy_music_to_sound(
+    doc: dict, duration_of: Callable[[str], float | None]
+) -> tuple[dict, list[tuple[str, str]]]:
+    """Музыка отдельным блоком ушла: она стала звуком дорожки с повтором и приглушением.
+
+    Старые документы и агент, который ещё шлёт music, переводятся в звук здесь — иначе у двух
+    форм одного и того же были бы две сборки и два превью. Ползунок «Речь» (speech_volume)
+    растворяется в громкости клипов: это то же самое, что он делал в сборке.
+
+    Возвращает документ и причины отказа с полями в терминах music — агент прислал music и
+    ошибку ждёт о нём. Что делать с причинами, решает вызывающий: при сохранении это ошибки,
+    при чтении — запись в журнал.
+    """
+    music = doc.get("music")
+    if not isinstance(music, dict):
+        return doc, []
+    out = dict(doc)
+    out["music"] = None
+    asset_id = music.get("asset_id")
+    duration = duration_of(asset_id) if isinstance(asset_id, str) else None
+    if duration is None or duration <= 0:
+        return out, [("music.asset_id", "музыкой может быть звуковой или видеоассет владельца")]
+    speech = _number(music.get("speech_volume", 1))
     if speech is None or not 0.0 <= speech <= 1.0:
-        errors.add("music.speech_volume", "speech_volume от 0 до 1")
-        return None
-    return {
+        return out, [("music.speech_volume", "speech_volume от 0 до 1")]
+    raw_sounds = doc.get("sounds")
+    if raw_sounds is not None and not isinstance(raw_sounds, list):
+        return out, []  # проверка sounds сама скажет, что это не список
+    sounds = list(raw_sounds or [])
+    clips = doc.get("clips") if isinstance(doc.get("clips"), list) else []
+    taken = {item.get("id") for item in [*sounds, *clips] if isinstance(item, dict)}
+    sound_id, n = "music", 2
+    while sound_id in taken:
+        sound_id, n = f"music_{n}", n + 1
+    sounds.append({
+        "id": sound_id,
         "asset_id": asset_id,
-        "volume": round(volume, 3),
-        "fade_in": fades["fade_in"],
-        "fade_out": fades["fade_out"],
-        "loop": bool(raw.get("loop", True)),
-        "duck": duck,
-        "speech_volume": round(speech, 3),
-    }
+        "at": 0.0,
+        "in": 0.0,
+        "out": duration,
+        "volume": music.get("volume", 0.25),
+        "loop": music.get("loop", True),
+        "duck": music.get("duck", False),
+        "fade_in": music.get("fade_in", 0.0),
+        "fade_out": music.get("fade_out", 0.0),
+    })
+    out["sounds"] = sounds
+    if speech != 1 and clips:
+        out["clips"] = [
+            {**clip, "volume": min(2.0, max(0.0, float(clip.get("volume", 1)) * speech))}
+            if isinstance(clip, dict) and _number(clip.get("volume", 1)) is not None
+            else clip
+            for clip in clips
+        ]
+    return out, []
 
 
 def _validate_sounds(
@@ -329,6 +351,9 @@ def _validate_sounds(
 
     Свисать за конец ролика звуку можно, сборка его обрежет. Отвергать такой документ значило бы
     ломать сохранение всякий раз, когда человек укорачивает видео под уже положенной озвучкой.
+
+    Повтор (loop) тянет кусок до конца ролика — так под ролик кладут музыку. Приглушение (duck)
+    делает звук фоном: под речью он тише. Появление и затухание — в секундах.
     """
     if raw is None:
         return []
@@ -375,8 +400,30 @@ def _validate_sounds(
         if volume is None or not 0.0 <= volume <= 2.0:
             errors.add(f"{where}.volume", "volume от 0 до 2")
             continue
+        flags: dict[str, bool] = {}
+        for key in ("loop", "duck"):
+            value = item.get(key, False)
+            if not isinstance(value, bool):
+                errors.add(f"{where}.{key}", f"{key} должен быть true или false")
+                break
+            flags[key] = value
+        if len(flags) < 2:
+            continue
+        fades: dict[str, float] = {}
+        for key in ("fade_in", "fade_out"):
+            value = _number(item.get(key, 0.0))
+            if value is None or value < 0:
+                errors.add(f"{where}.{key}", f"{key} не может быть отрицательным")
+                break
+            fades[key] = _round(value)
+        if len(fades) < 2:
+            continue
         start, end = _validate_clip_time(where, item, asset, settings, errors)
         if start is None or end is None:
+            continue
+        # У звука по кругу край — конец ролика, а не куска: там затухания зажмёт сборка.
+        if not flags["loop"] and fades["fade_in"] + fades["fade_out"] > end - start + 1e-6:
+            errors.add(f"{where}.fade_out", "появление и затухание вместе длиннее самого звука")
             continue
         sounds.append({
             "id": sound_id,
@@ -385,8 +432,106 @@ def _validate_sounds(
             "in": _round(start),
             "out": _round(end),
             "volume": round(volume, 3),
+            "loop": flags["loop"],
+            "duck": flags["duck"],
+            "fade_in": fades["fade_in"],
+            "fade_out": fades["fade_out"],
         })
     return sounds
+
+
+def _validate_overlays(
+    raw: object, taken: set[str], assets: dict[str, AssetInfo], settings: Settings, errors: _Errors,
+) -> list[dict]:
+    """Наложения: картинка или видео поверх основы, со своим временем на шкале и местом в кадре.
+
+    Как звуки, они не встают в очередь клипов и клипы не сдвигают. Место — пресет, размер — доля
+    ширины кадра. Звук у видеоналожения по умолчанию выключен: иначе поверх речи зазвучал бы
+    второй голос, и человек искал бы, откуда он.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        errors.add("overlays", "overlays должен быть списком")
+        return []
+    if len(raw) > settings.max_clips:
+        errors.add("overlays", f"наложений больше {settings.max_clips}")
+        return []
+    overlays: list[dict] = []
+    # Выделение на шкале одно на клипы, звуки и наложения: общий id сделал бы его неоднозначным.
+    seen = set(taken)
+    for index, item in enumerate(raw):
+        where = f"overlays[{index}]"
+        if not isinstance(item, dict):
+            errors.add(where, "наложение должно быть объектом")
+            continue
+        overlay_id = item.get("id")
+        if overlay_id is None:
+            overlay_id = f"o{index + 1}"
+        elif not isinstance(overlay_id, str) or not overlay_id.strip() or len(overlay_id) > MAX_CLIP_ID:
+            errors.add(f"{where}.id", f"id наложения: непустая строка не длиннее {MAX_CLIP_ID} знаков")
+            continue
+        if overlay_id in seen:
+            errors.add(f"{where}.id", "id наложения повторяется или совпадает с id клипа или звука")
+            continue
+        seen.add(overlay_id)
+        asset_id = item.get("asset_id")
+        asset = assets.get(asset_id) if isinstance(asset_id, str) else None
+        if asset is None or asset.kind not in CLIP_KINDS:
+            errors.add(f"{where}.asset_id", "наложением может быть видеоассет или картинка владельца")
+            continue
+        if asset.status not in CLIP_READY_STATUSES or (asset.duration is None and asset.kind != "image"):
+            errors.add(f"{where}.asset_id", "ассет ещё не готов")
+            continue
+        at = _number(item.get("at"))
+        if at is None or at < 0:
+            errors.add(f"{where}.at", "at — неотрицательное число секунд")
+            continue
+        if at > settings.max_total_duration_sec:
+            errors.add(f"{where}.at", f"at дальше {settings.max_total_duration_sec} с")
+            continue
+        place = item.get("place", "full")
+        if place not in OVERLAY_PLACES:
+            errors.add(f"{where}.place", f"place: {', '.join(OVERLAY_PLACES)}")
+            continue
+        size = _number(item.get("size", 30))
+        if size is None or not OVERLAY_SIZE_MIN <= size <= OVERLAY_SIZE_MAX:
+            errors.add(
+                f"{where}.size", f"size от {OVERLAY_SIZE_MIN} до {OVERLAY_SIZE_MAX} процентов ширины кадра"
+            )
+            continue
+        volume = _number(item.get("volume", 0))
+        if volume is None or not 0.0 <= volume <= 2.0:
+            errors.add(f"{where}.volume", "volume от 0 до 2")
+            continue
+        fades: dict[str, float] = {}
+        for key in ("fade_in", "fade_out"):
+            value = _number(item.get(key, 0.0))
+            if value is None or value < 0:
+                errors.add(f"{where}.{key}", f"{key} не может быть отрицательным")
+                break
+            fades[key] = _round(value)
+        if len(fades) < 2:
+            continue
+        start, end = _validate_clip_time(where, item, asset, settings, errors)
+        if start is None or end is None:
+            continue
+        if fades["fade_in"] + fades["fade_out"] > end - start + 1e-6:
+            errors.add(f"{where}.fade_out", "появление и исчезновение вместе длиннее самого наложения")
+            continue
+        overlays.append({
+            "id": overlay_id,
+            "asset_id": asset_id,
+            "at": _round(at),
+            "in": _round(start),
+            "out": _round(end),
+            "place": place,
+            "size": round(size, 1),
+            "volume": round(volume, 3),
+            "fade_in": fades["fade_in"],
+            "fade_out": fades["fade_out"],
+        })
+    return overlays
 
 
 def _validate_cue_text(raw: object, where: str, errors: _Errors) -> str | None:
@@ -500,12 +645,23 @@ def _validate_subtitles(
 def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Settings) -> dict:
     """Нормализованный документ или ProjectInvalid со списком ошибок.
 
-    Возвращает ровно пять ключей: неизвестные поля отбрасываются, чтобы клиент не мог протащить
+    Возвращает ровно шесть ключей: неизвестные поля отбрасываются, чтобы клиент не мог протащить
     что-то в хранимый документ и получить обратно при чтении.
     """
     errors = _Errors()
     if not isinstance(raw, dict):
         raise ProjectInvalid([{"field": "doc", "message": "документ должен быть объектом"}])
+    # Музыка — до проверки клипов и звуков: она становится одним из звуков и меняет громкость клипов.
+    # Ошибки о ней остаются в терминах music: агент прислал music и ответа ждёт о нём же.
+    legacy_music = raw.get("music")
+    if legacy_music is not None and not isinstance(legacy_music, dict):
+        errors.add("music", "music должен быть объектом")
+    raw, music_problems = legacy_music_to_sound(
+        raw, lambda asset_id: assets[asset_id].duration if asset_id in assets else None
+    )
+    for field, message in music_problems:
+        errors.add(field, message)
+    music_index = len(raw["sounds"]) - 1 if isinstance(legacy_music, dict) and not music_problems else None
 
     output = _validate_output(raw.get("output"), errors)
     raw_clips = raw.get("clips")
@@ -527,9 +683,19 @@ def validate_doc(raw: object, *, assets: dict[str, AssetInfo], settings: Setting
             if clips_duration(clips) > settings.max_total_duration_sec:
                 errors.add("clips", f"ролик длиннее {settings.max_total_duration_sec} с")
 
-    music = _validate_music(raw.get("music"), assets, errors)
+    music = None  # ключ остаётся ради формы документа: агенты читают его как «нет музыки»
     sounds = _validate_sounds(raw.get("sounds"), {c["id"] for c in clips}, assets, settings, errors)
+    if music_index is not None:
+        prefix = f"sounds[{music_index}]."
+        for item in errors.items:
+            if item["field"].startswith(prefix):
+                item["field"] = "music." + item["field"][len(prefix):]
+    taken = {c["id"] for c in clips} | {s["id"] for s in sounds}
+    overlays = _validate_overlays(raw.get("overlays"), taken, assets, settings, errors)
     subtitles = _validate_subtitles(raw.get("subtitles"), assets, settings, errors)
     if errors:
         raise ProjectInvalid(errors.items)
-    return {"output": output, "clips": clips, "sounds": sounds, "music": music, "subtitles": subtitles}
+    return {
+        "output": output, "clips": clips, "sounds": sounds, "overlays": overlays,
+        "music": music, "subtitles": subtitles,
+    }

@@ -11,7 +11,7 @@ import { expect, test } from 'vitest'
  * Ловится это только глазами, а живых проверок вёрстки у нас нет — jsdom не подключён. Поэтому
  * проверяем сам файл стилей.
  */
-const HIDDEN_FLEX = ['#ed-source', '.side-body', '.fold-body']
+const HIDDEN_FLEX = ['#ed-source', '.side-body', '.fold-body', '.props-body']
 
 test('спрятанные панели не остаются на экране из-за display:flex', () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'style.css'), 'utf8')

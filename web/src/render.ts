@@ -7,6 +7,7 @@ import {
   deleteRender,
   listRenders,
   loadJob,
+  overlaysOf,
   soundsOf,
   startRender,
   type JobView,
@@ -27,6 +28,11 @@ const SLOW_K = 1.04
 const WEBM_SLOWDOWN = 2
 // «Только звук» картинку не трогает вовсе и собирается за секунды.
 const AUDIO_ONLY_K = 20
+// Каждое наложение — ещё один декодер и масштабирование поверх основы. Замер на VM: картинка во
+// весь кадр +55 %, видео в углу +30 %; берём 40 % на наложение и не больше четырёх — дальше и
+// так долго, а точность оценки уже не важна.
+const OVERLAY_SLOWDOWN = 0.4
+const OVERLAY_SLOWDOWN_CAP = 4
 const AUDIO_ONLY_KBPS = 192
 // Звук при целевом качестве: столько добавляет к весу файла дорожка AAC.
 const TARGET_AUDIO_KBPS = 160
@@ -120,10 +126,13 @@ export function estimateRenderMinutes(
   durationSec: number,
   quality: RenderQuality,
   format: RenderFormat = 'mp4',
+  overlays = 0,
 ): number {
   const speed = quality === 'draft' || quality === 'preview' ? FAST_K : SLOW_K
   const k = format === 'm4a' ? AUDIO_ONLY_K : format === 'webm' ? speed / WEBM_SLOWDOWN : speed
-  return Math.max(1, Math.ceil(durationSec / k / 60))
+  // У «только звука» картинки нет, и наложения ему ничего не стоят.
+  const slow = format === 'm4a' ? 1 : 1 + OVERLAY_SLOWDOWN * Math.min(overlays, OVERLAY_SLOWDOWN_CAP)
+  return Math.max(1, Math.ceil(((durationSec / k) * slow) / 60))
 }
 
 /**
@@ -158,15 +167,20 @@ function fadeLine(doc: ProjectDoc): string | null {
   return n === 1 ? 'Переход между клипами.' : 'Переходы между клипами.'
 }
 
-function musicLine(doc: ProjectDoc): string | null {
-  if (!doc.music) return null
-  return doc.music.duck ? 'Музыка с приглушением под речь.' : 'Музыка.'
+function duckLine(doc: ProjectDoc): string | null {
+  return soundsOf(doc).some(sound => sound.duck) ? 'Фон приглушается под речь.' : null
 }
 
 function soundsLine(doc: ProjectDoc): string | null {
   const n = soundsOf(doc).length
   if (!n) return null
   return `Звуковая дорожка: ${n} ${plural(n, 'звук', 'звука', 'звуков')}.`
+}
+
+function overlaysLine(doc: ProjectDoc): string | null {
+  const n = overlaysOf(doc).length
+  if (!n) return null
+  return `Поверх основы: ${n} ${plural(n, 'наложение', 'наложения', 'наложений')}.`
 }
 
 function subsLine(doc: ProjectDoc): string | null {
@@ -195,11 +209,13 @@ export function renderSummary(doc: ProjectDoc, options: RenderOptions, durationS
         `${fitWord(doc.output.fit)}, ${doc.output.fps} к/с, ${options.format}${rate}.`,
     )
   }
-  for (const line of [musicLine(doc), soundsLine(doc), fadeLine(doc)]) if (line) parts.push(line)
+  for (const line of [soundsLine(doc), duckLine(doc), overlaysLine(doc), fadeLine(doc)]) {
+    if (line) parts.push(line)
+  }
   // У «только звука» нет кадра, куда вжигать субтитры, и дорожки под них в m4a нет.
   const subs = options.format === 'm4a' ? null : subsLine(doc)
   if (subs) parts.push(subs)
-  const minutes = estimateRenderMinutes(durationSec, options.quality, options.format)
+  const minutes = estimateRenderMinutes(durationSec, options.quality, options.format, overlaysOf(doc).length)
   const bytes = estimateRenderBytes(durationSec, options)
   parts.push(`Около ${minutes} мин, если воркер свободен${bytes ? `; файл около ${fmtSize(bytes)}` : ''}.`)
   return parts.join(' ')

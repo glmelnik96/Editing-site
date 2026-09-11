@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Sound } from '../project'
 import {
+  laneBlocks,
+  laneEnd,
   moveSound,
   newSoundId,
   removeSound,
@@ -16,6 +18,10 @@ const sound = (over: Partial<Sound> = {}): Sound => ({
   in: 10,
   out: 14,
   volume: 1,
+  loop: false,
+  duck: false,
+  fade_in: 0,
+  fade_out: 0,
   ...over,
 })
 
@@ -68,5 +74,19 @@ describe('правка звуков', () => {
       expect(name).toMatch(/^s3_[0-9a-z]+$/)
       expect(['c1', 's1', 's2_abc']).not.toContain(name)
     }
+  })
+})
+
+describe('звук по кругу', () => {
+  it('тянется до конца ролика, а не на длину куска', () => {
+    const looped = sound({ at: 2, in: 0, out: 4, loop: true })
+    expect(laneBlocks([looped], 10, 30)).toEqual([{ id: 's1', left: 20, width: 280 }])
+    expect(laneEnd([looped], 30)).toBe(30)
+    // Без длины ролика раскладка не знает, где конец: берёт кусок как есть.
+    expect(laneBlocks([sound({ at: 2, in: 0, out: 4 })], 10, 30)[0].width).toBe(40)
+  })
+
+  it('положенный за конец ролика не уходит в отрицательную ширину', () => {
+    expect(laneBlocks([sound({ at: 50, in: 0, out: 4, loop: true })], 10, 30)[0].width).toBe(8)
   })
 })

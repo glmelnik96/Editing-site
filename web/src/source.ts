@@ -17,6 +17,8 @@ export type SourceHandlers = {
   onTime?: (seconds: number) => void
   /** Щёлкнули по заголовку складки. Открыть или закрыть решает редактор: складок две. */
   onFold?: () => void
+  /** Положить кусок поверх основы, а не в очередь клипов: картинка-перебивка, видео в углу. */
+  onOverlay?: (asset: Asset, range: { from: number; to: number }) => void
 }
 
 const READY = new Set(['ready', 'proxy_ready'])
@@ -38,6 +40,11 @@ export function sourcePoolNote(readyCount: number): string {
  */
 export function isPlaceable(a: Asset): boolean {
   return (a.kind === 'video' || a.kind === 'image' || a.kind === 'audio') && READY.has(a.status)
+}
+
+/** Что можно положить поверх основы: картинку и видео. Звук идёт на свою дорожку. */
+export function canOverlay(kind: string | undefined): boolean {
+  return kind === 'video' || kind === 'image'
 }
 
 /** Надпись кнопки: куда ляжет кусок. Звук не встаёт в очередь клипов, и кнопка обязана это сказать. */
@@ -85,6 +92,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
         <div class="row">
           <span id="src-range" class="muted">весь файл</span>
           <button id="src-add" type="button" disabled>Добавить в шкалу</button>
+          <button id="src-over" type="button" disabled
+            title="Картинка или видео поверх основы — под курсор шкалы">Поверх видео</button>
         </div>`,
       )}
     </main>`
@@ -103,6 +112,7 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   const inputOut = el.querySelector('#src-out') as HTMLInputElement
   const rangeLabel = el.querySelector('#src-range') as HTMLElement
   const addButton = el.querySelector('#src-add') as HTMLButtonElement
+  const overButton = el.querySelector('#src-over') as HTMLButtonElement
   const note = el.querySelector('#src-note') as HTMLElement
 
   let assets: Asset[] = []
@@ -126,6 +136,7 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
       if (document.activeElement !== secsInput) secsInput.value = String(to)
       rangeLabel.textContent = `картинка на ${formatTimecode(to)}`
       addButton.disabled = to < MIN_PIECE
+      overButton.disabled = addButton.disabled
       return
     }
     const total = current?.duration ?? 0
@@ -145,6 +156,7 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
         (current.kind === 'audio' ? ' — ляжет под курсор' : '')
       : 'весь файл'
     addButton.disabled = !current || to - from < MIN_PIECE
+    overButton.disabled = addButton.disabled || !canOverlay(current?.kind)
   }
 
   /** Ставит границу, не давая ей вывернуться наизнанку или выйти за длительность файла. */
@@ -282,6 +294,10 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   addButton.addEventListener('click', () => {
     if (!current) return
     handlers.onAdd(current, { from, to })
+  })
+  overButton.addEventListener('click', () => {
+    if (!current) return
+    handlers.onOverlay?.(current, { from, to })
   })
 
   return {

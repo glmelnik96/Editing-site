@@ -2,15 +2,6 @@ import { api, ApiError } from './api'
 import type { Clip } from './timeline/model'
 
 export type Output = { aspect: '16:9' | '9:16' | '1:1'; fit: 'pad' | 'crop'; fps: number }
-export type Music = {
-  asset_id: string
-  volume: number
-  fade_in: number
-  fade_out: number
-  loop: boolean
-  duck: boolean
-  speech_volume: number
-}
 export type Cue = { start: number; end: number; text: string }
 export type Subtitles = {
   source: 'file' | 'transcript' | 'cues'
@@ -24,19 +15,65 @@ export type Subtitles = {
  * Кусок звука на своей дорожке под картинкой. В отличие от клипа, у него своё место на шкале —
  * at: озвучка идёт поверх речи клипов и не встаёт в их очередь.
  */
-export type Sound = { id: string; asset_id: string; at: number; in: number; out: number; volume: number }
+/**
+ * Кусок звука на своей дорожке. Повтор (loop) тянет его до конца ролика — так кладут музыку;
+ * приглушение (duck) делает его фоном: под речью клипов тише. Появление и затухание в секундах.
+ */
+export type Sound = {
+  id: string
+  asset_id: string
+  at: number
+  in: number
+  out: number
+  volume: number
+  loop: boolean
+  duck: boolean
+  fade_in: number
+  fade_out: number
+}
+/** Где наложение стоит в кадре: пресеты вместо свободных координат. */
+export type OverlayPlace = 'full' | 'center' | 'tl' | 'tr' | 'bl' | 'br' | 'left' | 'right'
+/**
+ * Картинка или видео поверх основы. Своё время на шкале (at), место в кадре пресетом и размер
+ * в процентах ширины кадра; появление и исчезновение в секундах; звук по умолчанию выключен.
+ */
+export type Overlay = {
+  id: string
+  asset_id: string
+  at: number
+  in: number
+  out: number
+  place: OverlayPlace
+  size: number
+  volume: number
+  fade_in: number
+  fade_out: number
+}
 export type ProjectDoc = {
   output: Output
   clips: Clip[]
   /** У документов, сохранённых до звуковой дорожки, ключа нет вовсе — читать через soundsOf. */
   sounds?: Sound[]
-  music: Music | null
+  /** Появились после звуков: у старых документов ключа тоже нет — читать через overlaysOf. */
+  overlays?: Overlay[]
   subtitles: Subtitles | null
 }
 
 /** Звуки документа. Старый документ ключа не знает, и пустая дорожка честнее падения. */
 export function soundsOf(doc: ProjectDoc): Sound[] {
-  return doc.sounds ?? []
+  // Повтор, приглушение и затухания появились позже самих звуков: у документа в памяти их
+  // может не быть, и `undefined` в галочке читался бы как «снята», а в сложении — как NaN.
+  return (doc.sounds ?? []).map(sound => ({
+    ...sound,
+    loop: sound.loop ?? false,
+    duck: sound.duck ?? false,
+    fade_in: sound.fade_in ?? 0,
+    fade_out: sound.fade_out ?? 0,
+  }))
+}
+
+export function overlaysOf(doc: ProjectDoc): Overlay[] {
+  return doc.overlays ?? []
 }
 
 export type Project = {

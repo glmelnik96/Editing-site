@@ -17,7 +17,8 @@ from server.app.storage import RENDER_FORMATS
 from server.media.timeline import clip_length, clips_duration, fade_into
 
 ASPECT_RATIOS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
-AUDIO_CHAIN = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+AUDIO_RATE = 48000
+AUDIO_CHAIN = f"aresample={AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo"
 SILENCE = "anullsrc=channel_layout=stereo:sample_rate=48000"
 SUBTITLE_STYLE = "FontName=DejaVu Sans,FontSize=24,OutlineColour=&H80000000,BorderStyle=3"
 
@@ -75,6 +76,35 @@ def output_size(aspect: str, short_side: int) -> tuple[int, int]:
     if width_ratio >= height_ratio:
         return _even(short_side * width_ratio / height_ratio), _even(short_side)
     return _even(short_side), _even(short_side * height_ratio / width_ratio)
+
+
+# Отступ угловых наложений от края кадра: доля его ширины, и по вертикали те же пиксели.
+OVERLAY_MARGIN = 0.02
+
+
+def overlay_box(place: str, size: float, width: int, height: int) -> tuple[int, int, str, str]:
+    """Коробка наложения: во что его вписать (ширина, высота) и куда поставить (x, y для overlay).
+
+    Наложение вписывается в коробку с сохранением пропорций, поэтому x и y — выражения через его
+    итоговые w и h: угловые прижимаются к своему углу, остальные центрируются в коробке. Размер
+    значим только у угловых и центра: весь кадр и половины сами задают коробку.
+    """
+    margin = _even(width * OVERLAY_MARGIN)
+    if place == "full":
+        return width, height, "(W-w)/2", "(H-h)/2"
+    half = _even(width / 2)
+    if place == "left":
+        return half, height, f"({half}-w)/2", "(H-h)/2"
+    if place == "right":
+        return half, height, f"{half}+({half}-w)/2", "(H-h)/2"
+    box_w, box_h = _even(width * size / 100), _even(height * size / 100)
+    if place == "center":
+        return box_w, box_h, "(W-w)/2", "(H-h)/2"
+    if place not in ("tl", "tr", "bl", "br"):
+        raise RenderInvalid(f"неизвестное место наложения: {place}")
+    x = str(margin) if place in ("tl", "bl") else f"W-w-{margin}"
+    y = str(margin) if place in ("tl", "tr") else f"H-h-{margin}"
+    return box_w, box_h, x, y
 
 
 def render_short_side(quality: str, settings: Settings, short_side: int | None) -> int:
@@ -170,6 +200,19 @@ def _video_chain(width: int, height: int, fit: str, fps: int) -> str:
     # main timebase do not match». Ставим всем клипам одинаково — разбираться, откуда пришёл
     # кусок, фильтру переходов не должно быть нужно.
     return f"fps={fps},{fitting},setsar=1,settb=AVTB,format=yuv420p"
+
+
+def _fade_parts(item: dict, span: float) -> list[str]:
+    """Появление и затухание звука. Каждое не длиннее половины отрезка: иначе они перекрылись бы."""
+    half = span / 2
+    fade_in = min(float(item.get("fade_in", 0) or 0), half)
+    fade_out = min(float(item.get("fade_out", 0) or 0), half)
+    parts: list[str] = []
+    if fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={fade_in}")
+    if fade_out > 0:
+        parts.append(f"afade=t=out:st={round(span - fade_out, 3)}:d={fade_out}")
+    return parts
 
 
 def _music_chain(music: dict, total: float) -> str:
@@ -337,6 +380,56 @@ def build_render_command(
     # музыки должно слышать и её. duration=first держит длину по склейке клипов, поэтому звук,
     # свисающий за конец ролика, обрезается здесь, а не делает ролик длиннее картинки.
     sound_labels: list[str] = []
+    # Наложения: картинка или видео поверх собранной основы, каждое в коробке своего пресета и
+    # только в своём окне времени. Идут до субтитров — те вжигаются поверх всего. Звук
+    # видеоналожения по умолчанию выключен; включённый вливается в речь вместе со звуками дорожки.
+    for number, overlay in enumerate(doc.get("overlays") or []):
+        source = sources.get(overlay["asset_id"])
+        if source is None:
+            raise RenderInvalid(f"ассет наложения {overlay['asset_id']} недоступен")
+        start = float(overlay["in"])
+        length = round(float(overlay["out"]) - start, 3)
+        at = float(overlay["at"])
+        volume = float(overlay.get("volume", 0) or 0)
+        with_audio = volume > 0 and source.has_audio and not source.still
+        if audio_only and not with_audio:
+            continue  # ни картинки, ни звука: вход был бы лишним
+        if source.still:
+            # Картинку крутим кадрами с частотой ролика ровно столько, сколько она висит.
+            fps = str(int(output["fps"]))
+            args += ["-loop", "1", "-framerate", fps, "-t", str(length), "-i", source.path]
+        else:
+            args += ["-ss", str(start), "-t", str(length), "-i", source.path]
+        overlay_input = index
+        index += 1
+        if not audio_only and size is not None:
+            box_w, box_h, x, y = overlay_box(overlay["place"], float(overlay["size"]), size[0], size[1])
+            parts = [
+                f"scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                "setsar=1",
+                "format=yuva420p",
+            ]
+            fade_in = float(overlay.get("fade_in", 0) or 0)
+            fade_out = float(overlay.get("fade_out", 0) or 0)
+            if fade_in > 0:
+                parts.append(f"fade=t=in:st=0:d={fade_in}:alpha=1")
+            if fade_out > 0:
+                parts.append(f"fade=t=out:st={round(length - fade_out, 3)}:d={fade_out}:alpha=1")
+            # Сдвиг на своё время: кадры наложения совпадают с кадрами основы, а окно enable
+            # решает, когда его рисовать. eof_action=pass: наложение кончилось — основа идёт дальше.
+            parts.append(f"setpts=PTS+{at}/TB")
+            filters.append(f"[{overlay_input}:v]{','.join(parts)}[o{number}]")
+            filters.append(
+                f"{video_out}[o{number}]overlay={x}:{y}:eof_action=pass"
+                f":enable='between(t,{at},{round(at + length, 3)})'[vo{number}]"
+            )
+            video_out = f"[vo{number}]"
+        if with_audio:
+            delay = round(at * 1000)
+            chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
+            filters.append(f"[{overlay_input}:a]{chain},adelay={delay}|{delay}[oa{number}]")
+            sound_labels.append(f"[oa{number}]")
+    ducked: list[str] = []  # фон под приглушение: под речью он тише
     for number, sound in enumerate(doc.get("sounds") or []):
         source = sources.get(sound["asset_id"])
         if source is None:
@@ -345,21 +438,51 @@ def build_render_command(
             continue  # у видеозаписи без звука брать нечего, а [N:a] уронил бы сборку
         start = float(sound["in"])
         length = round(float(sound["out"]) - start, 3)
+        at = float(sound["at"])
+        loop = bool(sound.get("loop"))
+        # Сколько звук занимает на шкале: кусок, а по кругу — до конца ролика.
+        span = round(total - at, 3) if loop else length
+        if span <= 0:
+            continue  # звук по кругу, положенный за конец ролика: слышать его нечему
         args += ["-ss", str(start), "-t", str(length), "-i", source.path]
         sound_input = index
         index += 1
-        delay = round(float(sound["at"]) * 1000)
+        parts = [AUDIO_CHAIN]
+        if loop:
+            # aloop повторяет первые size отсчётов без конца, atrim обрезает по концу ролика.
+            # -stream_loop здесь не годится: с -ss он повторял бы файл целиком, а не кусок.
+            parts.append(f"aloop=loop=-1:size={round(length * AUDIO_RATE)}")
+            parts.append(f"atrim=0:{span}")
+        parts.extend(_fade_parts(sound, span))
         volume = float(sound.get("volume", 1))
-        chain = AUDIO_CHAIN if volume == 1 else f"{AUDIO_CHAIN},volume={volume}"
+        if volume != 1:
+            parts.append(f"volume={volume}")
         # Задержка на обе стороны стерео: AUDIO_CHAIN уже привёл звук к двум каналам.
-        filters.append(f"[{sound_input}:a]{chain},adelay={delay}|{delay}[s{number}]")
-        sound_labels.append(f"[s{number}]")
+        delay = round(at * 1000)
+        parts.append(f"adelay={delay}|{delay}")
+        filters.append(f"[{sound_input}:a]{','.join(parts)}[s{number}]")
+        (ducked if sound.get("duck") else sound_labels).append(f"[s{number}]")
     if sound_labels:
         filters.append(
             f"{audio_out}{''.join(sound_labels)}"
             f"amix=inputs={len(sound_labels) + 1}:duration=first:normalize=0[speech]"
         )
         audio_out = "[speech]"
+    if ducked:
+        # Фон сначала сводится в одно, потом приглушается речью: так и один компрессор, и общий
+        # уровень фона, а не гонка нескольких. Речь раздваивается: одна копия управляет, другая
+        # идёт в микс — одна метка на два входа ffmpeg 6.1 не даёт.
+        if len(ducked) == 1:
+            background = ducked[0]
+        else:
+            filters.append(f"{''.join(ducked)}amix=inputs={len(ducked)}:duration=longest:normalize=0[bg]")
+            background = "[bg]"
+        filters.append(f"{audio_out}asplit=2[bg_sc][bg_mix]")
+        filters.append(
+            f"{background}[bg_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[bg_duck]"
+        )
+        filters.append("[bg_mix][bg_duck]amix=inputs=2:duration=first:normalize=0[bgmixed]")
+        audio_out = "[bgmixed]"
 
     if music:
         source = sources.get(music["asset_id"])

@@ -16,15 +16,9 @@ import {
 const doc: ProjectDoc = {
   output: { aspect: '9:16', fit: 'pad', fps: 30 },
   clips: [],
-  music: {
-    asset_id: 'ast_m',
-    volume: 0.25,
-    fade_in: 0,
-    fade_out: 0,
-    loop: true,
-    duck: true,
-    speech_volume: 1,
-  },
+  sounds: [
+    { id: 'bg', asset_id: 'ast_m', at: 0, in: 0, out: 30, volume: 0.25, loop: true, duck: true, fade_in: 0, fade_out: 0 },
+  ],
   subtitles: {
     source: 'cues',
     asset_id: null,
@@ -155,7 +149,8 @@ describe('сводка вкладки Рендер', () => {
   it('говорит человеческим языком, без argv', () => {
     const text = renderSummary(doc, opts(), 720)
     expect(text).toContain('Высокое: 1080×1920, 9:16, поля, 30 к/с, mp4.')
-    expect(text).toContain('Музыка с приглушением под речь')
+    expect(text).toContain('Звуковая дорожка: 1 звук.')
+    expect(text).toContain('Фон приглушается под речь')
     expect(text).toContain('Субтитры впечатаны в кадр')
     expect(text).toContain('Около 12 мин, если воркер свободен')
     expect(text).not.toContain('ffmpeg')
@@ -163,7 +158,7 @@ describe('сводка вкладки Рендер', () => {
   })
 
   it('у целевого качества называет битрейт и вес', () => {
-    const text = renderSummary({ ...doc, music: null, subtitles: null }, opts({ quality: 'target' }), 10)
+    const text = renderSummary({ ...doc, sounds: [], subtitles: null }, opts({ quality: 'target' }), 10)
     expect(text).toContain('Целевое: 1080×1920, 9:16, поля, 30 к/с, mp4, 4000 кбит/с.')
     expect(text).toContain('файл около')
   })
@@ -177,12 +172,12 @@ describe('сводка вкладки Рендер', () => {
 
   it('без дакинга не обещает приглушение', () => {
     const text = renderSummary(
-      { ...doc, music: { ...doc.music!, duck: false }, subtitles: { ...doc.subtitles!, mode: 'soft' } },
+      { ...doc, sounds: doc.sounds!.map(s => ({ ...s, duck: false })), subtitles: { ...doc.subtitles!, mode: 'soft' } },
       opts(),
       60,
     )
-    expect(text).toContain('Музыка')
-    expect(text).not.toContain('приглушением')
+    expect(text).toContain('Звуковая дорожка')
+    expect(text).not.toContain('приглушается')
     expect(text).toContain('Субтитры отдельной дорожкой')
   })
 
@@ -197,8 +192,8 @@ describe('сводка вкладки Рендер', () => {
       ...doc,
       clips: [clip('c1', 'a'), { ...clip('c2', 'a'), transition: { kind: 'fade' as const, duration: 0.5 } }],
       sounds: [
-        { id: 's1', asset_id: 'x', at: 0, in: 0, out: 1, volume: 1 },
-        { id: 's2', asset_id: 'x', at: 2, in: 0, out: 1, volume: 1 },
+        { id: 's1', asset_id: 'x', at: 0, in: 0, out: 1, volume: 1, loop: false, duck: false, fade_in: 0, fade_out: 0 },
+        { id: 's2', asset_id: 'x', at: 2, in: 0, out: 1, volume: 1, loop: false, duck: false, fade_in: 0, fade_out: 0 },
       ],
     }
     const text = renderSummary(withFade, opts({ quality: 'preview', short_side: 480 }), 5.5)
@@ -226,5 +221,20 @@ describe('подпись готового ролика', () => {
 
   it('старый ролик без записанного кадра — просто его качество и mp4', () => {
     expect(renderLabel({ ...card, quality: 'final' })).toBe('финал · mp4')
+  })
+})
+
+describe('наложения в сводке', () => {
+  it('замедляют сборку, но не звук без картинки', () => {
+    expect(estimateRenderMinutes(720, 'high', 'mp4', 2)).toBe(21)
+    expect(estimateRenderMinutes(720, 'high', 'mp4', 10)).toBe(estimateRenderMinutes(720, 'high', 'mp4', 4))
+    expect(estimateRenderMinutes(720, 'high', 'm4a', 3)).toBe(1)
+  })
+
+  it('называются в сводке, когда есть', () => {
+    const overlay = { id: 'o1', asset_id: 'x', at: 0, in: 0, out: 2, place: 'tr' as const, size: 30, volume: 0, fade_in: 0, fade_out: 0 }
+    const text = renderSummary({ ...doc, overlays: [overlay, { ...overlay, id: 'o2' }] }, opts(), 60)
+    expect(text).toContain('Поверх основы: 2 наложения.')
+    expect(renderSummary(doc, opts(), 60)).not.toContain('Поверх основы')
   })
 })

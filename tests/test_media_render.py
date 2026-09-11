@@ -482,6 +482,45 @@ class TestЗвуковаяДорожка:
         with pytest.raises(RenderInvalid):
             build(doc(sounds=[snd(asset="ast_нет")]))
 
+    def test_звук_по_кругу_повторяет_кусок_до_конца_ролика(self):
+        """Ролик здесь 4 с (клип 1–5), звук с 1 с: кусок 10–14 с повторяется 3 с до конца."""
+        text = joined(build(doc(sounds=[snd(at=1.0, loop=True)])))
+        assert "-ss 10.0 -t 4.0 -i /d/u/assets/ast_m/source.mp3" in text
+        assert "aloop=loop=-1:size=192000,atrim=0:3.0" in text
+        assert "adelay=1000|1000[s0]" in text
+        # -stream_loop здесь нет: с -ss он повторял бы файл целиком, а не кусок.
+        assert "-stream_loop" not in text
+
+    def test_звук_по_кругу_за_концом_ролика_не_попадает_в_сборку(self):
+        text = joined(build(doc(sounds=[snd(at=9.0, loop=True)])))
+        assert "source.mp3" not in text and "amix" not in text
+
+    def test_появление_и_затухание_звука_зажимаются_половиной(self):
+        text = joined(build(doc(sounds=[snd(fade_in=1, fade_out=10)])))  # кусок 4 с
+        assert "afade=t=in:st=0:d=1.0,afade=t=out:st=2.0:d=2.0,adelay=" in text
+
+    def test_приглушаемый_звук_идёт_фоном_и_тише_под_речью(self):
+        text = joined(build(doc(sounds=[snd(duck=True, volume=0.3)])))
+        assert "volume=0.3,adelay=2500|2500[s0]" in text
+        # Фон не вливается в речь, а компрессируется ею.
+        assert "[a][s0]amix" not in text
+        assert "[a]asplit=2[bg_sc][bg_mix]" in text
+        assert "[s0][bg_sc]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[bg_duck]" in text
+        assert "[bg_mix][bg_duck]amix=inputs=2:duration=first:normalize=0[bgmixed]" in text
+        assert "-map [bgmixed]" in text
+
+    def test_несколько_фонов_сводятся_в_один_до_приглушения(self):
+        two = [snd(duck=True), {**snd(duck=True), "id": "s2", "at": 0.0}]
+        text = joined(build(doc(sounds=two)))
+        assert "[s0][s1]amix=inputs=2:duration=longest:normalize=0[bg]" in text
+        assert "[bg][bg_sc]sidechaincompress" in text
+
+    def test_обычный_звук_и_фон_вместе_речь_сначала_потом_приглушение(self):
+        both = [snd(), {**snd(duck=True), "id": "s2"}]
+        text = joined(build(doc(sounds=both)))
+        assert "[a][s0]amix=inputs=2:duration=first:normalize=0[speech]" in text
+        assert "[speech]asplit=2[bg_sc][bg_mix]" in text
+
 
 def value_after(args, flag):
     return args[args.index(flag) + 1]
@@ -580,3 +619,81 @@ class TestНастройкиСборки:
     def test_незнакомый_формат_отвергается(self):
         with pytest.raises(RenderInvalid):
             build_opts(fmt="avi")
+
+
+def ov(asset="ast_p", at=2.0, start=0.0, end=3.0, **over):
+    return {"id": "o1", "asset_id": asset, "at": at, "in": start, "out": end, "place": "tr", "size": 30,
+            "volume": 0, "fade_in": 0, "fade_out": 0, **over}
+
+
+class TestНаложения:
+    """Картинка или видео поверх основы: своя коробка в кадре, своё окно времени, без своего звука
+    по умолчанию. Форма цепочки снята с настоящего ffmpeg: окно enable, сдвиг setpts,
+    eof_action=pass и появление по альфе проверены сборкой, а не предположением."""
+
+    def test_картинка_крутится_кадрами_ровно_своё_время_и_ставится_в_угол(self):
+        args = build(doc(overlays=[ov()]))
+        text = joined(args)
+        assert "-loop 1 -framerate 30 -t 3.0 -i /d/u/assets/ast_p/source.png" in text
+        # Коробка 30 % кадра 1280×720 — 384×216; отступ от края — 2 % ширины, чётный: 26.
+        assert (
+            "scale=384:216:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            "setsar=1,format=yuva420p,setpts=PTS+2.0/TB[o0]"
+        ) in text
+        assert "[v][o0]overlay=W-w-26:26:eof_action=pass:enable='between(t,2.0,5.0)'[vo0]" in text
+        assert "-map [vo0]" in text
+
+    def test_видео_приходит_своим_куском_и_без_звука_пока_его_не_включили(self):
+        text = joined(build(doc(overlays=[ov(asset="ast_1", start=10.0, end=14.0)])))
+        assert "-ss 10.0 -t 4.0 -i /d/u/assets/ast_1/source.mp4" in text
+        assert "-loop" not in text
+        assert "[oa0]" not in text and "amix" not in text
+
+    def test_включённый_звук_наложения_вливается_в_речь_как_звук_дорожки(self):
+        text = joined(build(doc(overlays=[ov(asset="ast_1", start=10.0, end=14.0, volume=0.5)])))
+        assert "volume=0.5,adelay=2000|2000[oa0]" in text
+        assert "[a][oa0]amix=inputs=2:duration=first:normalize=0[speech]" in text
+        assert "-map [speech]" in text
+
+    def test_места_считаются_по_одной_формуле(self):
+        full = joined(build(doc(overlays=[ov(place="full")])))
+        assert "scale=1280:720:force_original_aspect_ratio=decrease" in full
+        assert "overlay=(W-w)/2:(H-h)/2:" in full
+        left = joined(build(doc(overlays=[ov(place="left")])))
+        assert "scale=640:720:force_original_aspect_ratio=decrease" in left
+        assert "overlay=(640-w)/2:(H-h)/2:" in left
+        right = joined(build(doc(overlays=[ov(place="right")])))
+        assert "overlay=640+(640-w)/2:(H-h)/2:" in right
+        bl = joined(build(doc(overlays=[ov(place="bl", size=50)])))
+        assert "scale=640:360:" in bl and "overlay=26:H-h-26:" in bl
+        center = joined(build(doc(overlays=[ov(place="center", size=50)])))
+        assert "overlay=(W-w)/2:(H-h)/2:" in center
+
+    def test_появление_и_исчезновение_идут_по_альфе(self):
+        text = joined(build(doc(overlays=[ov(fade_in=0.5, fade_out=0.5)])))
+        assert "format=yuva420p,fade=t=in:st=0:d=0.5:alpha=1,fade=t=out:st=2.5:d=0.5:alpha=1,setpts=" in text
+
+    def test_субтитры_вжигаются_поверх_наложений(self):
+        subs = {"source": "file", "asset_id": "ast_s", "mode": "burn", "enabled": True}
+        text = joined(build(doc(overlays=[ov()], subtitles=subs)))
+        assert "[vo0]subtitles=" in text
+        assert "-map [vsub]" in text
+
+    def test_два_наложения_ложатся_слоями_по_порядку(self):
+        second = ov(id="o2", asset="ast_1", start=1.0, end=2.0, at=0.0, place="br")
+        text = joined(build(doc(overlays=[ov(), second])))
+        assert "[v][o0]overlay=" in text and "[vo0][o1]overlay=" in text
+        assert "-map [vo1]" in text
+
+    def test_только_звук_берёт_у_наложений_лишь_включённый_звук(self):
+        silent = joined(build_opts(doc(overlays=[ov()]), fmt="m4a"))
+        assert "-loop" not in silent and "overlay=" not in silent
+        with_voice = doc(overlays=[ov(asset="ast_1", start=10.0, end=14.0, volume=1)])
+        loud = joined(build_opts(with_voice, fmt="m4a"))
+        assert "overlay=" not in loud and "[oa0]" in loud and "amix=inputs=2" in loud
+
+    def test_неизвестное_место_и_пропавший_ассет_роняют_сборку_внятно(self):
+        with pytest.raises(RenderInvalid):
+            build(doc(overlays=[ov(place="somewhere")]))
+        with pytest.raises(RenderInvalid):
+            build(doc(overlays=[ov(asset="ast_нет")]))

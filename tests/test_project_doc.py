@@ -97,48 +97,43 @@ def test_output_rules():
     assert errors_of(doc(output={"fps": 24})) == ["output.fps"]
 
 
-def test_music_rules():
+AUDIO = "ast_000000000003"  # звуковая запись на 200 с
+
+
+def test_legacy_music_becomes_a_looping_sound():
+    """Блок music ушёл: старый документ и агент, который его ещё шлёт, получают звук дорожки
+    по кругу с теми же громкостью, приглушением и затуханиями."""
     out = validate_doc(
-        doc(music={"asset_id": "ast_000000000003", "volume": 0.25, "fade_in": 1, "fade_out": 2}),
+        doc(music={"asset_id": AUDIO, "volume": 0.25, "fade_in": 1, "fade_out": 2, "duck": True}),
         assets=ASSETS, settings=S,
     )
-    assert out["music"] == {
-        "asset_id": "ast_000000000003", "volume": 0.25, "fade_in": 1.0, "fade_out": 2.0, "loop": True,
-        "duck": False, "speech_volume": 1.0,
-    }
+    assert out["music"] is None
+    assert out["sounds"] == [{
+        "id": "music", "asset_id": AUDIO, "at": 0.0, "in": 0.0, "out": 200.0,
+        "volume": 0.25, "loop": True, "duck": True, "fade_in": 1.0, "fade_out": 2.0,
+    }]
+
+
+def test_legacy_speech_volume_dissolves_into_clip_volume():
+    """Ползунок «Речь» делал в сборке ровно это — глушил все клипы разом."""
+    out = validate_doc(
+        doc(clips=[clip(volume=1.5)], music={"asset_id": AUDIO, "speech_volume": 0.5}),
+        assets=ASSETS, settings=S,
+    )
+    assert out["clips"][0]["volume"] == 0.75
+    assert out["sounds"][0]["duck"] is False and out["sounds"][0]["loop"] is True
+
+
+def test_legacy_music_keeps_its_place_among_other_sounds():
+    out = validate_doc(
+        doc(sounds=[sound(id="music")], music={"asset_id": AUDIO}), assets=ASSETS, settings=S
+    )
+    assert [s["id"] for s in out["sounds"]] == ["music", "music_2"]
+
+
+def test_legacy_music_with_a_missing_asset_is_still_an_error():
     assert errors_of(doc(music={"asset_id": "ast_000000000004"})) == ["music.asset_id"]
-    assert errors_of(doc(music={"asset_id": "ast_000000000003", "volume": 2})) == ["music.volume"]
-    assert errors_of(doc(music={"asset_id": "ast_000000000003", "fade_in": -1})) == ["music.fade_in"]
-
-
-def test_music_duck_and_speech_volume_defaults():
-    """Нет ключей — старый проект звучит как сейчас: без дакинга, речь на 1."""
-    out = validate_doc(
-        doc(music={"asset_id": "ast_000000000003"}),
-        assets=ASSETS, settings=S,
-    )
-    assert out["music"]["duck"] is False
-    assert out["music"]["speech_volume"] == 1.0
-
-
-def test_music_duck_and_speech_volume_are_kept():
-    out = validate_doc(
-        doc(music={"asset_id": "ast_000000000003", "duck": True, "speech_volume": 0.4}),
-        assets=ASSETS, settings=S,
-    )
-    assert out["music"]["duck"] is True
-    assert out["music"]["speech_volume"] == 0.4
-
-
-def test_music_speech_volume_is_rounded_and_bounded():
-    out = validate_doc(
-        doc(music={"asset_id": "ast_000000000003", "speech_volume": 0.1234}),
-        assets=ASSETS, settings=S,
-    )
-    assert out["music"]["speech_volume"] == 0.123
-    assert errors_of(doc(music={"asset_id": "ast_000000000003", "speech_volume": 1.1})) == [
-        "music.speech_volume"
-    ]
+    assert errors_of(doc(music={"asset_id": "ast_нет"})) == ["music.asset_id"]
     assert errors_of(doc(music={"asset_id": "ast_000000000003", "speech_volume": -0.01})) == [
         "music.speech_volume"
     ]
@@ -177,8 +172,10 @@ def test_music_unknown_keys_are_dropped():
         doc(music={"asset_id": "ast_000000000003", "duck": True, "sidechain": 0.05}),
         assets=ASSETS, settings=S,
     )
-    assert "sidechain" not in out["music"]
-    assert out["music"]["duck"] is True
+    # Музыка стала звуком: лишние ключи не доехали и туда, а приглушение сохранилось.
+    assert out["music"] is None
+    assert "sidechain" not in out["sounds"][0]
+    assert out["sounds"][0]["duck"] is True
 
 
 def test_subtitles_rules():
@@ -337,7 +334,7 @@ def test_all_errors_are_collected_not_just_the_first():
 def test_unknown_keys_are_dropped_not_echoed():
     out = validate_doc(doc(clips=[clip(evil="<script>")], extra=1), assets=ASSETS, settings=S)
     assert "extra" not in out and "evil" not in out["clips"][0]
-    assert set(out) == {"output", "clips", "sounds", "music", "subtitles"}
+    assert set(out) == {"output", "clips", "sounds", "overlays", "music", "subtitles"}
 
 
 def test_not_a_number_times_are_rejected():
@@ -402,7 +399,7 @@ def test_transition_must_be_shorter_than_both_clips():
     ])) == ["clips[1].transition.duration"]
 
 
-def test_transition_does_not_drop_music_fields_from_a():
+def test_transition_keeps_legacy_music_as_sound_and_scales_speech():
     out = validate_doc(
         doc(
             clips=[
@@ -414,11 +411,11 @@ def test_transition_does_not_drop_music_fields_from_a():
         ),
         assets=ASSETS, settings=S,
     )
-    assert out["music"]["duck"] is True
-    assert out["music"]["speech_volume"] == 0.6
-    assert out["music"]["volume"] == 0.2
-    assert out["clips"][0]["volume"] == 0.8
-    assert out["clips"][1]["volume"] == 1.2
+    # Музыка — звук по кругу с приглушением, а ползунок «Речь» растворился в громкости клипов.
+    assert out["music"] is None
+    assert out["sounds"][0]["duck"] is True and out["sounds"][0]["volume"] == 0.2
+    assert out["clips"][0]["volume"] == 0.48
+    assert out["clips"][1]["volume"] == 0.72
     assert out["clips"][1]["transition"]["duration"] == 0.4
 
 
@@ -510,9 +507,10 @@ def sound(**over) -> dict:
 def test_звук_ложится_на_свою_дорожку_со_своим_временем():
     """У звука своё место на шкале — at: он идёт поверх речи клипов, а не в их очередь."""
     out = validate_doc(doc(sounds=[sound()]), assets=ASSETS, settings=S)
-    assert out["sounds"] == [
-        {"id": "s1", "asset_id": SND, "at": 2.0, "in": 0.0, "out": 3.0, "volume": 1.0}
-    ]
+    assert out["sounds"] == [{
+        "id": "s1", "asset_id": SND, "at": 2.0, "in": 0.0, "out": 3.0, "volume": 1.0,
+        "loop": False, "duck": False, "fade_in": 0.0, "fade_out": 0.0,
+    }]
 
 
 def test_без_звуков_дорожка_пустая_а_не_пропавшая():
@@ -542,3 +540,79 @@ def test_звук_может_свисать_за_конец_ролика():
         doc(sounds=[sound(at=100.0, **{"in": 0.0, "out": 150.0})]), assets=ASSETS, settings=S
     )
     assert out["sounds"][0]["at"] == 100.0
+
+
+def overlay(**over) -> dict:
+    return {"asset_id": PIC, "at": 1.0, "in": 0.0, "out": 4.0, **over}
+
+
+def test_наложение_получает_умолчания_и_своё_время_на_шкале():
+    """Место — весь кадр, размер 30 % ширины, звук выключен: поверх речи не должен зазвучать
+    второй голос, пока человек сам этого не попросил."""
+    out = validate_doc(doc(overlays=[overlay()]), assets=ASSETS, settings=S)
+    assert out["overlays"] == [{
+        "id": "o1", "asset_id": PIC, "at": 1.0, "in": 0.0, "out": 4.0,
+        "place": "full", "size": 30.0, "volume": 0.0, "fade_in": 0.0, "fade_out": 0.0,
+    }]
+
+
+def test_старый_документ_читается_с_пустыми_наложениями():
+    assert validate_doc(doc(), assets=ASSETS, settings=S)["overlays"] == []
+
+
+def test_наложение_проверяется_по_месту_размеру_громкости_и_появлению():
+    assert errors_of(doc(overlays=[overlay(place="somewhere")])) == ["overlays[0].place"]
+    assert errors_of(doc(overlays=[overlay(size=0)])) == ["overlays[0].size"]
+    assert errors_of(doc(overlays=[overlay(size=101)])) == ["overlays[0].size"]
+    assert errors_of(doc(overlays=[overlay(volume=3)])) == ["overlays[0].volume"]
+    assert errors_of(doc(overlays=[overlay(fade_in=-1)])) == ["overlays[0].fade_in"]
+    # Появление 3 с и исчезновение 2 с при длине 4 с накладываются друг на друга.
+    assert errors_of(doc(overlays=[overlay(fade_in=3, fade_out=2)])) == ["overlays[0].fade_out"]
+    assert errors_of(doc(overlays=[overlay(at=-1)])) == ["overlays[0].at"]
+    assert errors_of(doc(overlays="картинка")) == ["overlays"]
+
+
+def test_наложением_может_быть_видео_или_картинка_но_не_звук():
+    video = overlay(asset_id="ast_000000000001", **{"in": 10.0, "out": 14.0})
+    out = validate_doc(doc(overlays=[video]), assets=ASSETS, settings=S)
+    assert out["overlays"][0]["asset_id"] == "ast_000000000001"
+    assert errors_of(doc(overlays=[overlay(asset_id="ast_000000000003")])) == ["overlays[0].asset_id"]
+    assert errors_of(doc(overlays=[overlay(asset_id="ast_000000000004")])) == ["overlays[0].asset_id"]
+    # Видеоналожение — тот же кусок записи, что и клип: за длительность файла не выходит.
+    assert errors_of(doc(overlays=[overlay(asset_id="ast_000000000001", **{"in": 0.0, "out": 500.0})])) == [
+        "overlays[0].out"
+    ]
+    assert errors_of(doc(overlays=[overlay(out=S.max_still_sec + 1)])) == ["overlays[0].out"]
+
+
+def test_id_наложения_не_совпадает_ни_с_клипом_ни_со_звуком():
+    """Выделение на шкале одно на все дорожки: общий id сделал бы его неоднозначным."""
+    assert errors_of(doc(overlays=[overlay(id="c1")])) == ["overlays[0].id"]
+    assert errors_of(doc(sounds=[sound(id="x")], overlays=[overlay(id="x")])) == ["overlays[0].id"]
+    assert errors_of(doc(overlays=[overlay(id="y"), overlay(id="y")])) == ["overlays[1].id"]
+
+
+def test_sound_defaults_are_plain_and_flags_are_kept():
+    """Без флагов звук — просто кусок; повтор и приглушение включают явно."""
+    out = validate_doc(doc(sounds=[sound()]), assets=ASSETS, settings=S)
+    assert out["sounds"][0] == {
+        "id": "s1", "asset_id": SND, "at": 2.0, "in": 0.0, "out": 3.0, "volume": 1.0,
+        "loop": False, "duck": False, "fade_in": 0.0, "fade_out": 0.0,
+    }
+    music_like = validate_doc(
+        doc(sounds=[sound(loop=True, duck=True, fade_in=1, fade_out=1, volume=0.3)]),
+        assets=ASSETS, settings=S,
+    )["sounds"][0]
+    assert (music_like["loop"], music_like["duck"], music_like["fade_in"], music_like["fade_out"]) == (
+        True, True, 1.0, 1.0,
+    )
+
+
+def test_sound_flags_and_fades_are_checked():
+    assert errors_of(doc(sounds=[sound(loop="да")])) == ["sounds[0].loop"]
+    assert errors_of(doc(sounds=[sound(duck=1)])) == ["sounds[0].duck"]
+    assert errors_of(doc(sounds=[sound(fade_in=-1)])) == ["sounds[0].fade_in"]
+    # Кусок 3 с: появление 2 и затухание 2 перекрылись бы. По кругу край — конец ролика, там
+    # затухания зажмёт сборка, поэтому те же числа проходят.
+    assert errors_of(doc(sounds=[sound(fade_in=2, fade_out=2)])) == ["sounds[0].fade_out"]
+    assert validate_doc(doc(sounds=[sound(fade_in=2, fade_out=2, loop=True)]), assets=ASSETS, settings=S)

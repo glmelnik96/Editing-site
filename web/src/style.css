@@ -745,11 +745,17 @@ main.card {
   color: var(--muted);
 }
 
+/* Три колонки: исходники, сцена со шкалой, свойства выбранного. Боковые сворачиваются до кнопки. */
 .editor {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr) minmax(220px, 0.8fr);
   gap: 16px;
-  padding: 16px 24px;
+  /* Снизу больше, чем сверху: шкала — последнее на странице, и с равными полями она
+     прибивалась к краю окна, а полосе прокрутки под ней не оставалось воздуха. */
+  padding: 16px 24px 56px;
+}
+.editor.props-off {
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr) auto;
 }
 /* Левая колонка: исходник, текст и точки сохранения друг под другом, все видны без прокрутки.
  * Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
@@ -795,7 +801,10 @@ main.card {
 /* Свёрнутая панель сжимается до своей кнопки, а освободившееся место забирают сцена и шкала:
    монтируют, глядя на кадр и на шкалу, исходники нужны только когда берут новый кусок. */
 .editor.side-off {
-  grid-template-columns: auto minmax(320px, 1fr);
+  grid-template-columns: auto minmax(320px, 1fr) minmax(220px, 0.8fr);
+}
+.editor.side-off.props-off {
+  grid-template-columns: auto minmax(320px, 1fr) auto;
 }
 .editor.side-off .tabs {
   display: none;
@@ -847,6 +856,88 @@ main.card {
   color: var(--muted);
   font-size: 13px;
   margin-left: 4px;
+}
+
+/* --- Панель свойств выбранного --- */
+.props {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: start;
+  min-width: 0;
+}
+.props-title {
+  margin: 0;
+  align-self: center;
+}
+.props-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+.props-body[hidden] {
+  display: none;
+}
+.editor.props-off .props-title {
+  display: none;
+}
+.pr-title {
+  margin: 0;
+  font-size: 15px;
+}
+.pr-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.pr-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pr-row .tc {
+  width: 84px;
+}
+.pr-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pr-range input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+.pr-range output {
+  min-width: 36px;
+  text-align: right;
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.pr-note {
+  font-size: 12px;
+}
+.pr-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.pr-pair {
+  display: flex;
+  gap: 12px;
+}
+.pr-hint {
+  margin: 0;
+  font-size: 13px;
 }
 
 /* --- Складка: два способа отрезать кусок, развёрнут не больше одного --- */
@@ -956,6 +1047,25 @@ main.card {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+/* Слой наложений поверх сцены: у каждого наложения своя коробка в процентах кадра, а внутри
+   коробки кадр вписан и прижат к своему углу — те же правила, что у сборки. Сцена и есть кадр:
+   её пропорция равна пропорции вывода. Слой сквозной для указателя. */
+.stage {
+  position: relative;
+}
+.ov-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.stage .ov-layer video {
+  position: absolute;
+  grid-area: auto;
+  object-fit: contain;
+}
+.stage.crop .ov-layer video {
+  object-fit: contain;
 }
 .player {
   display: block;
@@ -1115,16 +1225,52 @@ main.card {
   position: relative;
 }
 
-/* --- Звуковая дорожка: своя колея под клипами --- */
-.sound-track {
+/* Звук клипов — колея под дорожкой видео. Блоки повторяют блоки клипов и живут в том же слое
+   .blocks; ручек подрезки у них нет — подрезают на видео. */
+.track-audio {
   position: relative;
   height: 52px;
+}
+.audio-block {
+  top: 3px;
+  background: color-mix(in srgb, var(--paper) 7%, var(--panel));
+}
+/* Подпись колеи: V1/V2 — видео, A1/A2 — звук. Липнет к левому краю, когда шкалу прокручивают:
+   без подписей четыре одинаковые полосы читались как одна каша. */
+.lane-tag {
+  position: sticky;
+  left: 6px;
+  top: 3px;
+  display: inline-block;
+  z-index: 4;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 6px;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* --- Свободные колеи: звуки под клипами, наложения над ними --- */
+.sound-track,
+.overlay-track {
+  position: relative;
+  height: 52px;
+}
+.sound-track {
   margin-top: 4px;
   border-top: 1px dashed var(--line);
 }
+.overlay-track {
+  margin-bottom: 4px;
+  border-bottom: 1px dashed var(--line);
+}
 /* Пустая колея видна всегда — появляющаяся переставляла бы шкалу под руками, — и подпись в ней
    говорит, откуда сюда класть. Сквозная для указателя: щелчок по пустому месту перематывает. */
-.sound-track.empty::before {
+.sound-track.empty::before,
+.overlay-track.empty::before {
   content: attr(data-empty);
   position: absolute;
   left: 8px;
@@ -1134,30 +1280,35 @@ main.card {
   white-space: nowrap;
   pointer-events: none;
 }
-/* Звук — родственник клипа, но с другим фоном: с одного взгляда видно, что это не картинка,
-   а то, что звучит поверх неё. */
-.sound-block {
+/* Кусок колеи — родственник клипа, но со своим фоном: с одного взгляда видно, что это не
+   картинка основы. Звук зеленоватый, наложение светлее панели. */
+.lane-block {
   position: absolute;
   top: 3px;
   height: 44px;
   overflow: hidden;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--brand) 22%, var(--panel));
   border: 1px solid var(--line);
   cursor: grab;
   user-select: none;
   touch-action: none;
   z-index: 1;
 }
-.sound-block.selected {
+.sound-block {
+  background: color-mix(in srgb, var(--brand) 22%, var(--panel));
+}
+.overlay-block {
+  background: color-mix(in srgb, var(--paper) 14%, var(--panel));
+}
+.lane-block.selected {
   outline: 2px solid var(--brand-hover);
   z-index: 2;
 }
-.sound-block.dragging {
+.lane-block.dragging {
   cursor: grabbing;
   opacity: 0.85;
 }
-.sound-block .label {
+.lane-block .label {
   position: absolute;
   left: 6px;
   top: 3px;
@@ -1166,10 +1317,17 @@ main.card {
   text-shadow: 0 1px 2px #000;
   z-index: 1;
 }
-.sound-block .wave {
+.lane-block .wave {
   position: absolute;
   left: 0;
   top: 0;
+}
+/* Кадры наложения: размер клетки ставит разметка под высоту блока. */
+.lane-block .frame {
+  position: absolute;
+  top: 0;
+  background-repeat: no-repeat;
+  opacity: 0.55;
 }
 
 /* Красная риска текущего кадра — конвенция монтажных программ; другого красного
@@ -1279,15 +1437,6 @@ main.card {
   pointer-events: none;
 }
 
-.music-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0;
-}
-.music-row input[type='range'] {
-  flex: 1;
-}
 /* Панель над шкалой: три группы через тонкую черту — просмотр, правка шкалы, каким выйдет файл.
    Одной строкой без границ четырнадцать кнопок читались как один список равных по важности вещей,
    и «Разрезать» стояло рядом с «30 к/с», хотя это разговоры о разном. */
@@ -1317,13 +1466,6 @@ main.card {
 }
 
 /* Свойства выбранного клипа: своя рамка, потому что это разговор про один кусок, а не про ролик. */
-.bar-clip {
-  align-items: center;
-  gap: 16px;
-  padding: 8px 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
 
 .clip-vol {
   display: inline-flex;
