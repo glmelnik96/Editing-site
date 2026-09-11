@@ -22,12 +22,12 @@ describe('сцена в верхнем ряду', () => {
 
 describe('боковые колонки', () => {
   it('свойствам 45 % остатка, исходникам — остальное', () => {
-    expect(sideWidths(1232, 530)).toEqual({ side: 368, props: 302 })
+    expect(sideWidths(1232, 530)).toEqual({ side: 377, props: 309 })
   })
 
   it('свойства не шире 380 и не уже 240', () => {
     expect(sideWidths(1872, 700).props).toBe(PROPS_MAX)
-    expect(sideWidths(1232, 680).props).toBe(PROPS_MIN)
+    expect(sideWidths(1232, 700).props).toBe(PROPS_MIN)
   })
 
   it('колонки, сцена и зазоры занимают всю ширину', () => {

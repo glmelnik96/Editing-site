@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   downloadFileName,
+  fitFrame,
   fmtDuration,
   fmtSize,
   needsPolling,
@@ -49,5 +50,24 @@ describe('имя файла для скачивания', () => {
     expect(withoutExt('10.09.2026.mov')).toBe('10.09.2026')
     expect(withoutExt('без расширения')).toBe('без расширения')
     expect(withoutExt('.hidden')).toBe('.hidden')
+  })
+})
+
+describe('кадр записи в коробке', () => {
+  it('16:9 — во всю коробку', () => {
+    expect(fitFrame(1920, 1080)).toEqual({ width: 96, height: 54 })
+  })
+
+  it('4:3 и вертикальный — во всю высоту, поля по бокам', () => {
+    expect(fitFrame(640, 480)).toEqual({ width: 72, height: 54 })
+    expect(fitFrame(1080, 1920)).toEqual({ width: 30, height: 54 })
+  })
+
+  it('шире 16:9 — во всю ширину, поля сверху и снизу', () => {
+    expect(fitFrame(2560, 1080)).toEqual({ width: 96, height: 41 })
+  })
+
+  it('без размеров — как 16:9', () => {
+    expect(fitFrame(0, 0)).toEqual({ width: 96, height: 54 })
   })
 })

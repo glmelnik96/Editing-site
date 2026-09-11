@@ -30,7 +30,7 @@ export type Shell = {
 export function mountShell(root: HTMLElement): Shell {
   root.innerHTML = `
     <header class="bar">
-      <a href="#/" style="font-family:var(--font-display);font-weight:300;font-size:20px;color:var(--paper);text-decoration:none">Editing site</a>
+      <a href="#/" class="bar-logo">Editing site</a>
       <span></span>
       <nav class="row" id="shell-nav" style="margin:0;--row-gap:16px"></nav>
     </header>

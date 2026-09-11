@@ -15,9 +15,8 @@ const ROW_STEP_MS = 40
 const CARD_STYLE = [
   'display:flex',
   'flex-direction:column',
-  'gap:8px',
-  'min-height:220px',
-  'padding:28px',
+  'gap:var(--space-2)',
+  'padding:var(--space-4)',
   'color:var(--paper)',
   'text-decoration:none',
 ].join(';')

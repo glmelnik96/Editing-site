@@ -61,7 +61,7 @@ describe('монтажка по высоте окна', () => {
 
   it('шкала: заголовки дорожек в своём столбце, высоты колей из переменных, полоса прокрутки на месте', () => {
     expect(rule('.timeline')).toMatch(/overflow-x:\s*scroll/)
-    expect(rule('.tl-frame')).toMatch(/grid-template-columns:\s*120px/)
+    expect(rule('.tl-frame')).toMatch(/grid-template-columns:\s*88px/)
     expect(css).not.toContain('.lane-tag')
     const lanes: [string, string][] = [
       ['.track', '--lane-track'],

@@ -92,9 +92,15 @@
   --dur-base: 200ms;
   --dur-slow: 300ms;
 
-  /* Высота элементов управления: кнопки и поля — md, мелкие кнопки панели и вкладки — sm. */
-  --control-sm: 32px;
-  --control-md: 40px;
+  /* Высота элементов управления: кнопки и поля — md, мелкие кнопки панели и сегменты — sm.
+     Плотно, как в монтажных программах: крупные кнопки забирали место и глушили акценты. */
+  --control-sm: 24px;
+  --control-md: 28px;
+
+  /* Контролы — чуть светлее панели, с различимой рамкой: системная кнопка, а не пилюля. */
+  --surface-control: #242424;
+  --surface-control-hover: #2e2e2e;
+  --border-control: #3a3a3a;
 
   /* Глобальные слои. Порядок внутри шкалы (блоки, ручки, игла) местный и здесь не живёт. */
   --z-dropdown: 10;
@@ -104,14 +110,15 @@
   --z-toast: 70;
   --z-tooltip: 80;
 
-  /* Скругления; у кнопок наше назначение — 14 px. */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-  --radius-control: 14px;
-  --radius-2xl: 16px;
-  --radius-full: 999px;
+  /* Скругления — технические, 2 px у всего: у панелей, карточек, кнопок, полей и сегментов.
+     Тяжёлые скругления делали блоки крупными и спорили с прямоугольной шкалой. */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
+  --radius-control: 2px;
+  --radius-2xl: 2px;
+  --radius-full: 2px;
 
   /* Размеры шрифта: текст и заголовки .display-* (имена как у классов). */
   --text-xs: 12px;
@@ -155,7 +162,7 @@ body {
   margin: 0;
   background: var(--ink);
   color: var(--paper);
-  font: 400 var(--text-md)/1.45 var(--font-text);
+  font: 400 var(--text-sm)/1.45 var(--font-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -173,23 +180,23 @@ a:hover {
 h1,
 h2,
 h3 {
-  margin: 0 0 var(--space-3);
-  font-family: var(--font-display);
-  font-weight: 300;
-  letter-spacing: -0.015em;
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-text);
+  font-weight: 400;
+  letter-spacing: 0;
 }
 h1 {
-  font-size: var(--display-l);
-  line-height: 1;
-  margin-bottom: var(--space-4);
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  margin-bottom: var(--space-3);
 }
 h2 {
-  font-size: var(--display-m);
-  line-height: 1.1;
+  font-size: var(--text-lg);
+  line-height: 1.25;
 }
 h3 {
-  font-size: var(--text-2xl);
-  line-height: 1.15;
+  font-size: var(--text-md);
+  line-height: 1.3;
 }
 
 p {
@@ -205,7 +212,7 @@ textarea {
   background: var(--panel);
   border: 1px solid var(--border-field);
   border-radius: var(--radius-xl);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   transition: border-color var(--dur-fast) var(--ease);
 }
 /* Высота полей и списков — общая с кнопками: строки форм выравниваются сами. */
@@ -285,33 +292,35 @@ pre {
   line-height: 0.98;
   letter-spacing: -0.015em;
 }
+/* Заголовки экранов и секций — текстовым шрифтом: крупный светлый Display читался как лендинг,
+   а не как рабочий инструмент. Display остаётся у входа (.display-xl). */
 .display-l {
-  font-family: var(--font-display);
-  font-weight: 300;
-  font-size: var(--display-l);
-  line-height: 1;
-  letter-spacing: -0.015em;
+  font-family: var(--font-text);
+  font-weight: 400;
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  letter-spacing: 0;
 }
 .display-m {
-  font-family: var(--font-display);
-  font-weight: 300;
-  font-size: var(--display-m);
-  line-height: 1.1;
-  letter-spacing: -0.01em;
+  font-family: var(--font-text);
+  font-weight: 400;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+  letter-spacing: 0;
 }
 .lead {
-  font-weight: 300;
-  font-size: var(--text-xl);
+  font-weight: 400;
+  font-size: var(--text-md);
   line-height: 1.45;
   color: var(--muted);
 }
 .small {
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: 1.4;
 }
 .meta {
-  font-size: var(--text-sm);
-  line-height: 1.3;
+  font-size: var(--text-xs);
+  line-height: 1.35;
   color: var(--muted);
 }
 /* Цифры моноширинного вида, а не моноширинный шрифт: таймкоды в столбце не пляшут,
@@ -336,7 +345,7 @@ pre {
   justify-content: center;
   gap: var(--space-2);
   min-height: var(--control-md);
-  padding: 0 var(--space-5);
+  padding: 0 var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   background: none;
@@ -360,10 +369,11 @@ pre {
   color: var(--brand-ink);
 }
 .btn-ghost {
-  border-color: var(--line);
+  border-color: var(--border-control);
+  background: var(--surface-control);
 }
 .btn-ghost:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--brand);
+  background: var(--surface-control-hover);
 }
 .btn-icon {
   width: var(--control-md);
@@ -391,20 +401,27 @@ button,
   justify-content: center;
   gap: var(--space-2);
   min-height: var(--control-md);
-  padding: 0 var(--space-3-5);
-  border: 1px solid var(--line);
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-control);
-  background: var(--panel);
+  background: var(--surface-control);
   color: var(--paper);
   font: inherit;
   line-height: 1.2;
   text-decoration: none;
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease);
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
-button:hover:not(:disabled):not([aria-disabled='true']),
+/* Наведение светлит кнопку, как в монтажных программах. :where — чтобы у вкладок, складок и
+   сегментов оставалось своё наведение: у них своя форма, и заливка им не к лицу. */
+button:where(:hover:not(:disabled):not([aria-disabled='true'])),
 .button:hover {
-  border-color: var(--brand);
+  background: var(--surface-control-hover);
+}
+button:focus-visible,
+.btn:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 button:disabled,
 button[aria-disabled='true'] {
@@ -424,7 +441,7 @@ button[aria-disabled='true'] {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-2xl);
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-3) var(--space-4);
 }
 /* Карточка-ссылка: наведение зеленит рамку. Тени в системе нет, и рамка — единственное,
    чем поверхность может показать, что она кликается. */
@@ -447,10 +464,10 @@ main.card {
 
 .field {
   width: 100%;
-  padding: var(--space-3) var(--space-3-5);
+  padding: var(--space-1-5) var(--space-2);
   background: var(--panel);
   color: var(--paper);
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-xl);
   font: inherit;
   transition: border-color var(--dur-fast) var(--ease);
@@ -464,11 +481,11 @@ main.card {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-5);
-  padding: var(--space-1) var(--space-2-5);
-  border: 1px solid var(--line);
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-full);
   background: var(--panel);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: 1.3;
   color: var(--muted);
 }
@@ -476,7 +493,7 @@ main.card {
 .screen {
   max-width: 1120px;
   margin-inline: auto;
-  padding: var(--space-6);
+  padding: var(--space-4) var(--space-6);
 }
 @media (max-width: 719px) {
   .screen {
@@ -491,7 +508,7 @@ main.card {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: var(--stack-gap, var(--space-4));
+  gap: var(--stack-gap, var(--space-3));
 }
 .row {
   display: flex;
@@ -597,6 +614,20 @@ main.card {
   gap: var(--space-6);
 }
 .door-note { max-width: 640px; }
+/* Вход общий с Presentation Remote и VideoBoard — у него прежний вид: технические токены
+   остального сервиса сюда не доходят. */
+.door {
+  --radius-control: 14px;
+  --control-md: 40px;
+  font-size: var(--text-md);
+}
+.door .lead {
+  font-weight: 300;
+  font-size: var(--text-xl);
+}
+.door .btn {
+  padding: 0 var(--space-5);
+}
 @media (min-width: 768px) {
   .door { padding-top: 14vh; }
 }
@@ -611,7 +642,7 @@ main.card {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: stretch;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 /* Инструмент в стороне от пути: заметен, но не спорит с шагами за внимание. */
 .side-tool { color: var(--muted); }
@@ -624,7 +655,7 @@ main.card {
 .step-arrow {
   margin-top: auto;
   color: var(--dim);
-  font-size: var(--text-2xl);
+  font-size: var(--text-lg);
   line-height: 1;
 }
 .step-key .step-arrow { color: var(--brand); }
@@ -647,7 +678,7 @@ main.card {
   gap: var(--space-2);
   align-items: center;
   text-align: center;
-  padding: var(--space-10) var(--space-6);
+  padding: var(--space-6) var(--space-4);
   border-style: dashed;
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease);
@@ -659,9 +690,12 @@ main.card {
 .asset-card,
 .token-card {
   gap: var(--space-4);
-  align-items: center;
   margin: 0;
 }
+.token-card { align-items: center; }
+/* Карточка записи — колонка: по центру её строка сжималась и вставала посередине плашки.
+   Строка во всю ширину: кадр и имя слева, статус и действие справа. */
+.asset-card { align-items: stretch; }
 .asset-name,
 .token-name { flex: 1 1 auto; gap: var(--space-0-5); min-width: 0; }
 .asset-name > span:first-child,
@@ -681,7 +715,7 @@ main.card {
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--space-4);
+  gap: var(--space-2);
 }
 .tile {
   display: flex;
@@ -701,7 +735,7 @@ main.card {
 .project-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 .project-title { overflow-wrap: anywhere; }
 
@@ -717,19 +751,18 @@ main.card {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  /* 48 px: отступы по 8 и кнопки по 32. На высоте окна каждая строка на счету. */
-  padding: var(--space-2) var(--space-6);
+  /* Плотная строка: на высоте окна каждая строка на счету. */
+  padding: var(--space-1-5) var(--space-3);
 }
 .project-bar .btn {
   min-height: var(--control-sm);
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
 }
 /* Имя в одну строку, полное — в подсказке: длинное имя в две строки съедало бы место у сцены. */
 .project-name {
   min-width: 0;
-  font-family: var(--font-display);
-  font-weight: 300;
-  font-size: var(--text-2xl);
+  font-weight: 400;
+  font-size: var(--text-md);
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
@@ -774,7 +807,7 @@ main.card {
   align-items: center;
   gap: var(--space-1-5);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   cursor: pointer;
   user-select: none;
 }
@@ -784,18 +817,21 @@ main.card {
 }
 .burn input { accent-color: var(--brand); }
 
+/* Вкладки — подписи с чертой под выбранной, как у панелей монтажных программ, а не пилюли. */
 .tabs {
   display: flex;
   flex-wrap: nowrap;
-  gap: var(--space-1);
+  gap: 0;
   min-width: 0;
   margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
 }
 .tab {
-  min-height: var(--control-sm);
-  padding: 0 var(--space-2-5);
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  min-height: var(--control-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: none;
   color: var(--muted);
   font: inherit;
@@ -813,9 +849,9 @@ main.card {
 .tab:disabled:hover,
 .tab[aria-disabled='true']:hover { color: var(--muted); }
 .tab.on {
-  color: var(--brand-ink);
-  background: var(--brand);
-  border-color: var(--brand);
+  color: var(--paper);
+  background: none;
+  border-bottom-color: var(--brand);
 }
 /* Карточка реплики: время, текст как он ляжет в кадр, и подсказка, если сервер такое не примет. */
 .cue {
@@ -847,7 +883,7 @@ main.card {
   background: var(--brand);
   vertical-align: middle;
 }
-.tab.on.news::after { background: var(--brand-ink); }
+.tab.on.news::after { background: var(--brand); }
 
 /* Правила работающего интерфейса: перенесены из прежнего файла и перекрашены
  * на токены. Устройство панелей не менялось. */
@@ -858,8 +894,13 @@ main.card {
   display: flex;
   gap: var(--space-4);
   align-items: center;
-  padding: var(--space-3-5) var(--space-6);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--line);
+}
+.bar-logo {
+  font-size: var(--text-md);
+  color: var(--paper);
+  text-decoration: none;
 }
 .bar span {
   flex: 1;
@@ -892,9 +933,9 @@ body.editor-fit #shell-screen {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr) minmax(240px, 0.8fr);
   grid-template-rows: minmax(240px, 1fr) auto auto;
-  column-gap: var(--space-4);
+  column-gap: var(--space-2);
   row-gap: var(--space-2);
-  padding: 0 var(--space-6) var(--space-3);
+  padding: 0 var(--space-3) var(--space-2);
 }
 /* Сетка появляется целиком, когда пришёл проект и посчитан размер сцены: иначе панели переезжали
    бы у человека на глазах. */
@@ -907,12 +948,12 @@ body.editor-fit #shell-screen {
   min-width: 0;
 }
 .editor > .bar-edit {
-  margin: var(--space-1) 0 0;
+  margin: 0;
   flex-wrap: nowrap;
 }
 /* Ошибка загрузки и отказ проверки — под строкой проекта: под сеткой их не видно. */
 #ed-error {
-  margin: 0 var(--space-6) var(--space-2);
+  margin: 0 var(--space-3) var(--space-2);
   max-height: 30vh;
   overflow: auto;
 }
@@ -980,7 +1021,7 @@ body.editor-fit #shell-screen {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   color: var(--muted);
 }
 .render-opts select,
@@ -998,7 +1039,7 @@ body.editor-fit #shell-screen {
 }
 .rnd-title {
   margin: 0;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   color: var(--text-primary);
 }
 /* Прилипает к низу прокручиваемой колонки; поля карточки выбирает отрицательным отступом,
@@ -1007,8 +1048,8 @@ body.editor-fit #shell-screen {
   position: sticky;
   bottom: 0;
   z-index: 1;
-  margin: var(--space-2) calc(-1 * var(--space-6)) 0;
-  padding: var(--space-3) var(--space-6);
+  margin: var(--space-2) calc(-1 * var(--space-4)) 0;
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
@@ -1016,7 +1057,7 @@ body.editor-fit #shell-screen {
 /* Подпись масштаба — тише кнопок: она объясняет ползунок, а не зовёт нажать. */
 .zoom-label {
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   margin-left: var(--space-1);
 }
 
@@ -1037,8 +1078,8 @@ body.editor-fit #shell-screen {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3-5);
-  padding: var(--space-4) var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-3);
   overflow-y: auto;
 }
 .props-body[hidden] {
@@ -1053,8 +1094,8 @@ body.editor-fit #shell-screen {
 }
 .seg legend {
   padding: 0;
-  margin-bottom: var(--space-1-5);
-  font-size: var(--text-sm);
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
   color: var(--muted);
 }
 .seg-items {
@@ -1082,10 +1123,10 @@ body.editor-fit #shell-screen {
   display: inline-flex;
   align-items: center;
   min-height: calc(var(--control-sm) - 2 * var(--space-0-5) - 2px);
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-full);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   white-space: nowrap;
   transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
@@ -1102,10 +1143,11 @@ body.editor-fit #shell-screen {
 }
 
 /* --- «Ролик» внизу свойств: пропорция и вписывание всего ролика --- */
+/* «Таймлайн» — наверху свойств, под ним свойства куска. */
 .roll {
   flex: none;
-  border-top: 1px solid var(--line);
-  padding: var(--space-2) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-1) var(--space-3) var(--space-2);
 }
 .roll-head {
   width: 100%;
@@ -1122,13 +1164,13 @@ body.editor-fit #shell-screen {
 .roll-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding-top: var(--space-2);
+  gap: var(--space-2);
+  padding-top: var(--space-1);
 }
 
 .pr-title {
   margin: 0;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
 }
 .pr-sub {
   margin: var(--space-1) 0 0;
@@ -1186,13 +1228,12 @@ body.editor-fit #shell-screen {
   justify-content: flex-start; /* кнопка во всю ширину: текст слева, а не по центру */
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) 0;
+  padding: var(--space-1-5) 0;
   border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: none;
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   text-align: left;
 }
 .fold-mark {
@@ -1220,7 +1261,34 @@ body.editor-fit #shell-screen {
 #ed-source {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
+}
+/* Исходник, фрагмент и реплика — одно окно: у вложенных карточек своих рамок нет. */
+.src-window .card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.src-window .card > .fold,
+.src-window .card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* «Положить на таймлайн» — системная подпись над кнопками, как у группы в монтажной программе. */
+.src-put {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.src-add-row {
+  margin: 0;
+}
+.src-cut-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--dim);
 }
 #ed-source[hidden] {
   display: none;
@@ -1368,7 +1436,7 @@ body.editor-fit #shell-screen {
   display: block;
   width: 100%;
   max-width: 640px;
-  margin: var(--space-3) 0;
+  margin: 0;
   background: var(--ink);
   border-radius: var(--radius-xl);
 }
@@ -1386,7 +1454,7 @@ body.editor-fit #shell-screen {
   --clip-block: 72px;
   --lane-block: 44px;
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 88px minmax(0, 1fr);
   overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1403,8 +1471,8 @@ body.editor-fit #shell-screen {
 .tl-head {
   display: flex;
   align-items: center;
-  padding: 0 var(--space-3);
-  font-size: var(--text-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -1786,9 +1854,9 @@ body.editor-fit #shell-screen {
   display: inline-flex;
   align-items: center;
   flex-wrap: nowrap; /* группа переносится целиком: без обрывков вроде одинокого «+» */
-  gap: var(--space-2);
-  padding-left: var(--space-4);
-  margin-right: var(--space-4);
+  gap: var(--space-1-5);
+  padding-left: var(--space-2-5);
+  margin-right: var(--space-2-5);
   border-left: 1px solid var(--line);
 }
 /* Первая группа идёт без черты: висящая слева линия читалась бы как обрыв. */
@@ -1949,13 +2017,13 @@ body.editor-fit #shell-screen {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--space-3) 0;
 }
 #shell-work[hidden] { display: none; }
 .work-row {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: var(--space-2-5) var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
 }
 
 /* --- Кабинет доступа --- */

@@ -155,26 +155,40 @@ export function loadAsset(id: string): Promise<Asset> {
 
 /* ═══ Кадр из полоски ═══════════════════════════════════════════════════════ */
 
-const FRAME_H = 90 // высота места под кадр; ширину задаёт пропорция самого кадра
+const FRAME_W = 96 // коробка под кадр — 16:9; кадр другой пропорции встаёт в неё целиком, с полями
+const FRAME_H = 54
 const FRAME_AT = 0.1 // кадр берём не с нуля: первый кадр записи слишком часто чёрный
 
-const FRAME_STYLE = [
-  `height:${FRAME_H}px`,
-  'width:160px',
+// Коробка одна у всех записей — столбец имён ровный при любой пропорции кадра.
+const SLOT_STYLE = [
+  'display:flex',
+  'align-items:center',
+  'justify-content:center',
   'flex:0 0 auto',
-  'border-radius:12px',
+  `width:${FRAME_W}px`,
+  `height:${FRAME_H}px`,
+  'overflow:hidden',
+  'border-radius:var(--radius-xl)',
   'background-color:var(--line)',
-  'background-repeat:no-repeat',
 ].join(';')
+
+const FRAME_STYLE = [`width:${FRAME_W}px`, `height:${FRAME_H}px`, 'flex:0 0 auto', 'background-repeat:no-repeat'].join(';')
+
+/** Кадр в коробке целиком, без обрезки: упирается в её ширину или в высоту. */
+export function fitFrame(width: number, height: number): { width: number; height: number } {
+  const ratio = width > 0 && height > 0 ? width / height : FRAME_W / FRAME_H
+  const w = Math.min(FRAME_W, FRAME_H * ratio)
+  return { width: Math.round(w), height: Math.round(w / ratio) }
+}
 
 /**
  * Место под кадр из полоски. Сам кадр приезжает позже: раскладку спрайта надо сначала загрузить,
- * а список должен появиться сразу — поэтому здесь только пустая рамка и ссылки для `paintFrames`.
+ * а список должен появиться сразу — поэтому здесь только пустая коробка и ссылки для `paintFrames`.
  */
 export function frameHtml(a: Asset): string {
-  if (!a.files.thumbs || !a.files.thumbs_meta) return `<span style="${FRAME_STYLE}"></span>`
-  return `<span style="${FRAME_STYLE}" data-frame="${a.id}"
-    data-sprite="${a.files.thumbs}" data-meta="${a.files.thumbs_meta}" data-at="${(a.duration ?? 0) * FRAME_AT}"></span>`
+  if (!a.files.thumbs || !a.files.thumbs_meta) return `<span style="${SLOT_STYLE}"></span>`
+  return `<span style="${SLOT_STYLE}"><span style="${FRAME_STYLE}" data-frame="${a.id}"
+    data-sprite="${a.files.thumbs}" data-meta="${a.files.thumbs_meta}" data-at="${(a.duration ?? 0) * FRAME_AT}"></span></span>`
 }
 
 /**
@@ -194,7 +208,9 @@ export function paintFrames(root: ParentNode, cache: Map<string, Promise<AssetDa
         const index = Math.min(thumbs.count - 1, Math.max(0, raw))
         const col = index % thumbs.cols
         const row = Math.floor(index / thumbs.cols)
-        box.style.width = `${Math.round((FRAME_H * thumbs.width) / thumbs.height)}px`
+        const fit = fitFrame(thumbs.width, thumbs.height)
+        box.style.width = `${fit.width}px`
+        box.style.height = `${fit.height}px`
         box.style.backgroundImage = `url('${sprite}')`
         box.style.backgroundSize = `${thumbs.cols * 100}% ${thumbs.rows * 100}%`
         box.style.backgroundPosition = `${thumbs.cols > 1 ? (col / (thumbs.cols - 1)) * 100 : 0}%

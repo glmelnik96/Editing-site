@@ -210,7 +210,7 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   function teamCard(a: TeamAsset): string {
     const owner = ownerLabel(a)
     const state = a.status === 'failed' ? ' pill-bad' : ''
-    return `<article class="card asset-card" style="padding:14px 20px">
+    return `<article class="card asset-card">
       <div class="row" style="margin:0;align-items:center;gap:16px">
         <div class="stack asset-name">
           <span>${escapeHtml(a.original_name)}</span>

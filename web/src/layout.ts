@@ -11,8 +11,8 @@ export const PROPS_MIN = 240
 export const PROPS_MAX = 380
 /** Доля свойств в ширине, оставшейся после сцены: остальное — исходникам, им нужнее. */
 export const PROPS_SHARE = 0.45
-/** Зазор между колонками сетки — var(--space-4). */
-export const COLUMN_GAP = 16
+/** Зазор между колонками сетки — var(--space-2). */
+export const COLUMN_GAP = 8
 
 export type Box = { width: number; height: number }
 
