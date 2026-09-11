@@ -42,9 +42,10 @@ export const COMPACT_QUERY = '(max-height: 759px)'
  * Высоты шкалы. Колея — полоса дорожки, блок — кусок на ней (ниже колеи на отступы), клетка
  * кадра — кадр из спрайта: у клипа он выше блока и срезается его краем, как было всегда.
  *
- * Волну читают, чтобы найти паузы: от её высоты прямо зависит, попадёт человек резом в тишину
- * или в слово. Поэтому колея звука клипов в низком режиме теряет меньше остальных (52 → 44),
- * а волна всегда во всю высоту блока.
+ * Блоки втрое ниже прежних (клип 24 px вместо 72): шкала отдаёт высоту сцене. Каждая колея выше
+ * своего блока на 4 px — блок стоит в ней по центру (`top: 2px` в стилях). Подпись в блоке —
+ * одна строка по центру, она помещается и в низком режиме. Волна всегда во всю высоту блока:
+ * по ней ищут паузы, чтобы попасть резом в тишину, а не в слово.
  */
 export type LaneSizes = {
   overlay: number
@@ -58,10 +59,10 @@ export type LaneSizes = {
 }
 
 const NORMAL: LaneSizes = {
-  overlay: 52, track: 76, audio: 52, sound: 52, clipBlock: 72, clipFrame: 90, audioBlock: 44, laneBlock: 44,
+  overlay: 20, track: 28, audio: 20, sound: 20, clipBlock: 24, clipFrame: 30, audioBlock: 16, laneBlock: 16,
 }
 const COMPACT: LaneSizes = {
-  overlay: 36, track: 60, audio: 44, sound: 36, clipBlock: 56, clipFrame: 70, audioBlock: 36, laneBlock: 28,
+  overlay: 18, track: 24, audio: 18, sound: 18, clipBlock: 20, clipFrame: 25, audioBlock: 14, laneBlock: 14,
 }
 
 export function laneSizes(compact: boolean): LaneSizes {

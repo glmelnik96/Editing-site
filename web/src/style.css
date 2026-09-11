@@ -1447,12 +1447,12 @@ body.editor-fit #shell-screen {
    их ставит шкала из laneSizes (layout.ts): те же числа рисуют кадры и волну. Значения здесь —
    обычный режим, до первой отрисовки. */
 .tl-frame {
-  --lane-overlay: 52px;
-  --lane-track: 76px;
-  --lane-audio: 52px;
-  --lane-sound: 52px;
-  --clip-block: 72px;
-  --lane-block: 44px;
+  --lane-overlay: 20px;
+  --lane-track: 28px;
+  --lane-audio: 20px;
+  --lane-sound: 20px;
+  --clip-block: 24px;
+  --lane-block: 16px;
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   overflow: hidden;
@@ -1594,7 +1594,6 @@ body.editor-fit #shell-screen {
 .block .label {
   position: absolute;
   left: 6px;
-  top: 4px;
   font-size: var(--text-xs);
   color: #fff;
   text-shadow: 0 1px 2px #000;
@@ -1649,7 +1648,6 @@ body.editor-fit #shell-screen {
   height: var(--lane-audio);
 }
 .audio-block {
-  top: 3px;
   background: color-mix(in srgb, var(--paper) 7%, var(--panel));
 }
 /* --- Свободные колеи: звуки под клипами, наложения над ними --- */
@@ -1683,7 +1681,7 @@ body.editor-fit #shell-screen {
    картинка основы. Звук зеленоватый, наложение светлее панели. */
 .lane-block {
   position: absolute;
-  top: 3px;
+  top: 2px;
   height: var(--lane-block);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1709,15 +1707,22 @@ body.editor-fit #shell-screen {
 .lane-block .label {
   position: absolute;
   left: 6px;
-  top: 3px;
   font-size: var(--text-xs);
   color: #fff;
   text-shadow: 0 1px 2px #000;
   z-index: 1;
 }
-/* Подпись куска — в одну строку: в узком клипе она ломалась в столбик («a2 / 0.6 / с»). */
+/* Подпись куска — одна строка по центру блока: в узком клипе она ломалась в столбик
+   («a2 / 0.6 / с»), а с отступом сверху в низком блоке уезжала за нижний край. Подложка —
+   потому что волна во всю высоту низкого блока иначе перечёркивает подпись посередине. */
 .block .label,
 .lane-block .label {
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 14px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 60%, transparent);
   max-width: calc(100% - 12px);
   overflow: hidden;
   white-space: nowrap;

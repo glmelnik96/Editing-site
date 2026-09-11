@@ -70,5 +70,9 @@ describe('монтажка по высоте окна', () => {
       ['.overlay-track', '--lane-overlay'],
     ]
     for (const [selector, variable] of lanes) expect(rule(selector)).toContain(`var(${variable})`)
+    // Колея выше блока на 4 px (layout.ts): блок стоит в ней по центру.
+    expect(rule('.block')).toMatch(/top:\s*2px/)
+    expect(rule('.lane-block')).toMatch(/top:\s*2px/)
+    expect(rule('.audio-block')).not.toMatch(/top:/)
   })
 })
