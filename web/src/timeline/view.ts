@@ -206,7 +206,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     node: HTMLElement, assetId: string, from: number, to: number, left: number, width: number, frames: boolean,
   ): Strip {
     const box = document.createElement('div')
-    box.className = 'tiles'
+    box.className = 'wave-tiles'
     node.prepend(box)
     return { box, assetId, from, to, left, width, frames }
   }
@@ -214,7 +214,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   /** Одна плитка: кадры своего отрезка и волна шириной с плитку — далеко от предела холста. */
   function tileNode(s: Strip, tile: Tile): HTMLElement {
     const node = document.createElement('div')
-    node.className = 'tile'
+    node.className = 'wave-tile'
     node.dataset.i = String(tile.index)
     node.style.left = `${tile.x0}px`
     node.style.width = `${tile.x1 - tile.x0}px`
@@ -251,10 +251,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       const size = tileWidth(s.frames ? (info?.thumbs?.width ?? null) : null)
       const wanted = visibleTiles(s.left, s.width, from, to, size)
       const keep = new Set(wanted.map(tile => String(tile.index)))
-      s.box.querySelectorAll<HTMLElement>('.tile').forEach(node => {
+      s.box.querySelectorAll<HTMLElement>('.wave-tile').forEach(node => {
         if (!keep.has(node.dataset.i ?? '')) node.remove()
       })
-      const have = new Set(Array.from(s.box.querySelectorAll<HTMLElement>('.tile'), node => node.dataset.i))
+      const have = new Set(Array.from(s.box.querySelectorAll<HTMLElement>('.wave-tile'), node => node.dataset.i))
       for (const tile of wanted) {
         if (!have.has(String(tile.index))) s.box.appendChild(tileNode(s, tile))
       }
