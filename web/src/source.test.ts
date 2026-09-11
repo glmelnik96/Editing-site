@@ -34,7 +34,7 @@ test('на шкалу идут готовые видео, картинки и з
 })
 
 test('кнопка говорит, куда ляжет кусок', () => {
-  expect(addLabel('audio')).toBe('Положить на звуковую дорожку')
+  expect(addLabel('audio')).toBe('Положить на дорожку «Звуки»')
   expect(addLabel('video')).toBe('Добавить в шкалу')
   expect(addLabel(undefined)).toBe('Добавить в шкалу')
 })

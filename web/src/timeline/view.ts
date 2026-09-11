@@ -6,6 +6,7 @@
  */
 import { fmtDuration } from '../assets'
 import { escapeHtml } from '../html'
+import { COMPACT_QUERY, laneSizes, type LaneSizes } from '../layout'
 import { pieceLabel } from '../names'
 import type { Overlay, Sound } from '../project'
 import { barsFor, sliceThumbs, type AssetData, type ThumbsMeta } from '../strip'
@@ -42,14 +43,6 @@ export type RenderInput = {
   pxPerSec: number
 }
 
-const TRACK_HEIGHT = 72
-// Высота клетки кадра: у клипа как в спрайте, у куска колеи — под её низкий блок.
-const CLIP_FRAME_H = 90
-const LANE_FRAME_H = 44
-// Волну читают, чтобы найти паузы: от её высоты прямо зависит, попадёт человек резом в тишину
-// или в слово. Рисуем от середины в обе стороны — при той же высоте блока это вдвое больше
-// размаха, чем полоска от низа.
-const WAVE_HEIGHT = 44
 const HANDLE_PX = 8
 // Выбранный блок поднимается над соседями, чтобы его обводку не срезал следующий клип.
 // Число живёт внутри слоя .blocks, наружу — к игле и призраку — оно не вылезает.
@@ -62,15 +55,19 @@ export function emptyTrackHint(clipCount: number): string {
   return clipCount === 0 ? 'Добавьте кусок из исходников' : ''
 }
 
-function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
+/**
+ * Волна во всю высоту блока (laneSizes). Рисуем от середины в обе стороны — при той же высоте
+ * блока это вдвое больше размаха, чем полоска от низа.
+ */
+function waveCanvas(bars: number[], width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(width))
-  canvas.height = WAVE_HEIGHT
+  canvas.height = height
   canvas.className = 'wave'
   const ctx = canvas.getContext('2d')
   if (ctx) {
     ctx.fillStyle = 'rgba(255,255,255,.8)'
-    const middle = WAVE_HEIGHT / 2
+    const middle = height / 2
     bars.forEach((value, x) => {
       const half = Math.max(0.5, (value / 255) * middle)
       ctx.fillRect(x, middle - half, 1, half * 2)
@@ -82,27 +79,37 @@ function waveCanvas(bars: number[], width: number): HTMLCanvasElement {
 /** Шкала: возвращает управление для редактора. */
 export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   el.innerHTML = `
-    <div class="timeline" id="tl-view">
-      <div class="ruler" id="tl-ruler"></div>
-      <!-- Полоса перемотки и дорожка в одной колее: игла проходит их насквозь, и её хват
-           оказывается в полосе — там, где по нему и надо попадать. -->
-      <div class="lane" id="tl-lane">
-        <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
-        <!-- Наложения — колея над клипами: картинка или видео поверх основы лежат по своему
-             времени и клипы не сдвигают. Пустая видна всегда, как и звуковая. -->
-        <div class="overlay-track empty" id="tl-overlays"
-          data-empty="Наложения: картинка или видео поверх основы. В «Исходниках» — кнопка «Поверх видео»"><i class="lane-tag" title="Вторая дорожка видео: наложения">V2</i></div>
-        <div class="track" id="tl-track"><i class="lane-tag" title="Первая дорожка видео: клипы">V1</i><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
-        <!-- Звук клипов — своя колея под картинкой, привязанная к ней: блок звука повторяет блок
-             клипа, выбирается и двигается вместе с ним. Так на шкале две дорожки видео и две
-             звука, а волну речи читают на своей высоте, не деля место с кадрами. -->
-        <div class="track-audio" id="tl-clip-audio"><i class="lane-tag" title="Первая дорожка звука: звук клипов">A1</i><div class="blocks" id="tl-audio-blocks"></div></div>
-        <!-- Звуковая дорожка — своя колея под клипами: звук лежит по своему времени и клипы не
-             сдвигает. Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу
-             под руками, а подпись в ней объясняет, откуда туда класть. -->
-        <div class="sound-track empty" id="tl-sounds"
-          data-empty="Звуковая дорожка: озвучка, шумы и музыка поверх речи. Положите звук из «Исходников»"><i class="lane-tag" title="Вторая дорожка звука: звуки со своим местом">A2</i></div>
-        <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
+    <div class="tl-frame" id="tl-frame">
+      <!-- Заголовки дорожек — словами и в своём столбце, который не прокручивается: плашки
+           V2/V1/A1/A2 на самой ленте закрывали подпись первого клипа и ничего не объясняли. -->
+      <div class="tl-heads">
+        <div class="tl-head-top"></div>
+        <div class="tl-head tl-head-overlay" title="Картинки и видео поверх клипов">Наложения</div>
+        <div class="tl-head tl-head-track" title="Клипы ролика по порядку">Клипы</div>
+        <div class="tl-head tl-head-audio" title="Звук клипов — двигается вместе с ними">Звук клипов</div>
+        <div class="tl-head tl-head-sound" title="Озвучка, шумы и музыка со своим местом">Звуки</div>
+      </div>
+      <div class="timeline" id="tl-view">
+        <div class="ruler" id="tl-ruler"></div>
+        <!-- Полоса перемотки и дорожка в одной колее: игла проходит их насквозь, и её хват
+             оказывается в полосе — там, где по нему и надо попадать. -->
+        <div class="lane" id="tl-lane">
+          <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
+          <!-- Наложения — колея над клипами: картинка или видео поверх основы лежат по своему
+               времени и клипы не сдвигают. Пустая видна всегда, как и звуки. -->
+          <div class="overlay-track empty" id="tl-overlays"
+            data-empty="Картинка или видео поверх клипов. В «Исходниках» — кнопка «Поверх видео»"></div>
+          <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
+          <!-- Звук клипов — своя колея под картинкой, привязанная к ней: блок звука повторяет блок
+               клипа, выбирается и двигается вместе с ним, а волну речи читают на своей высоте. -->
+          <div class="track-audio" id="tl-clip-audio"><div class="blocks" id="tl-audio-blocks"></div></div>
+          <!-- Звуки — своя колея под клипами: звук лежит по своему времени и клипы не сдвигает.
+               Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу под руками,
+               а подпись в ней объясняет, откуда туда класть. -->
+          <div class="sound-track empty" id="tl-sounds"
+            data-empty="Озвучка, шумы и музыка поверх речи. Положите звук из «Исходников»"></div>
+          <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
+        </div>
       </div>
     </div>
     <div class="tl-hint muted" id="tl-hint"></div>`
@@ -123,6 +130,26 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   // До какого момента под шкалой стоит сказанное: перерисовка его не трогает.
   let sayUntil = 0
   const hint = el.querySelector('#tl-hint') as HTMLElement
+  const frame = el.querySelector('#tl-frame') as HTMLElement
+  // Низкие дорожки — в окне ниже 760 px (layout.ts): числа одни на стили и на кадры с волной.
+  const compactQuery = window.matchMedia(COMPACT_QUERY)
+  let sizes: LaneSizes = laneSizes(compactQuery.matches)
+  function applySizes(): void {
+    frame.style.setProperty('--lane-overlay', `${sizes.overlay}px`)
+    frame.style.setProperty('--lane-track', `${sizes.track}px`)
+    frame.style.setProperty('--lane-audio', `${sizes.audio}px`)
+    frame.style.setProperty('--lane-sound', `${sizes.sound}px`)
+    frame.style.setProperty('--clip-block', `${sizes.clipBlock}px`)
+    frame.style.setProperty('--lane-block', `${sizes.laneBlock}px`)
+  }
+  applySizes()
+  // Окно стало ниже 760 px или выше — колеи меняют высоту, блоки с кадрами и волной собираются заново.
+  const onCompact = () => {
+    sizes = laneSizes(compactQuery.matches)
+    applySizes()
+    render()
+  }
+  compactQuery.addEventListener('change', onCompact)
 
   let current: RenderInput = {
     clips: [],
@@ -214,14 +241,14 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       node.className = `block${clip.id === selected ? ' selected' : ''}${fade > 0 ? ' has-fade' : ''}`
       node.style.left = `${block.left}px`
       node.style.width = `${block.width}px`
-      node.style.height = `${TRACK_HEIGHT}px`
+      node.style.height = `${sizes.clipBlock}px`
       node.style.zIndex = clip.id === selected ? String(SELECTED_Z) : String(index + 1)
       if (fade > 0) node.style.setProperty('--fade-px', `${Math.max(6, ms(fade * current.pxPerSec))}px`)
       node.dataset.id = clip.id
       node.dataset.index = String(index)
       node.innerHTML = blockHtml(clip)
       // Кадры — на дорожке видео, волна — на дорожке звука под ней.
-      strips.push(strip(node, clip.asset_id, clip.in, clip.out, block.left, block.width, true, false))
+      strips.push(strip(node, clip.asset_id, clip.in, clip.out, block.left, block.width, true, false, sizes.clipFrame, 0))
       blocksBox.appendChild(node)
       const asset = current.assets.get(clip.asset_id)
       // Пока запись не приехала, звук считаем есть: блок, который то появляется, то исчезает, хуже.
@@ -231,11 +258,11 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       audio.className = `block audio-block${clip.id === selected ? ' selected' : ''}`
       audio.style.left = `${block.left}px`
       audio.style.width = `${block.width}px`
-      audio.style.height = `${LANE_FRAME_H}px`
+      audio.style.height = `${sizes.audioBlock}px`
       audio.style.zIndex = clip.id === selected ? String(SELECTED_Z) : String(index + 1)
       audio.dataset.id = clip.id
       audio.dataset.index = String(index)
-      strips.push(strip(audio, clip.asset_id, clip.in, clip.out, block.left, block.width, false, true, LANE_FRAME_H))
+      strips.push(strip(audio, clip.asset_id, clip.in, clip.out, block.left, block.width, false, true, 0, sizes.audioBlock))
       audioBox.appendChild(audio)
     })
     soundLane.paint(current.sounds)
@@ -259,6 +286,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     frames: boolean
     wave: boolean
     frameHeight: number
+    waveHeight: number
   }
   let strips: Strip[] = []
   let paintQueued = false
@@ -266,18 +294,17 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   /** Завести полосу блока: пустой слой плиток первым ребёнком, чтобы подпись и ручки были поверх. */
   function strip(
     node: HTMLElement, assetId: string, from: number, to: number, left: number, width: number,
-    frames: boolean, wave = true, frameHeight = CLIP_FRAME_H,
+    frames: boolean, wave: boolean, frameHeight: number, waveHeight: number,
   ): Strip {
     const box = document.createElement('div')
     box.className = 'wave-tiles'
     node.prepend(box)
-    return { box, assetId, from, to, left, width, frames, wave, frameHeight }
+    return { box, assetId, from, to, left, width, frames, wave, frameHeight, waveHeight }
   }
 
   /**
-   * Раскладка спрайта под высоту клетки блока: у клипа кадр 90 px, у куска колеи — 44.
-   * Смещения и размеры фона считаются от этих же чисел, поэтому спрайт просто масштабируется,
-   * а не режется по высоте.
+   * Раскладка спрайта под высоту клетки блока (laneSizes). Смещения и размеры фона считаются от
+   * неё же, поэтому спрайт просто масштабируется, а не режется по высоте.
    */
   function cellMeta(s: Strip, meta: ThumbsMeta): ThumbsMeta {
     const scale = s.frameHeight / meta.height
@@ -309,7 +336,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     if (s.wave) {
       const range = tileRange(tile, s.width, s.from, s.to)
       const width = tile.x1 - tile.x0
-      node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, range, Math.round(width)), width))
+      node.appendChild(waveCanvas(barsFor(info?.peaks ?? null, range, Math.round(width)), width, s.waveHeight))
     }
     return node
   }
@@ -360,8 +387,9 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   }
 
   view.addEventListener('scroll', schedulePaint, { passive: true })
-  // Шкала шире или уже без прокрутки — сворачивание левой панели, окно браузера: видимое меняется.
-  new ResizeObserver(schedulePaint).observe(view)
+  // Шкала шире или уже без прокрутки — окно браузера, режим дорожек: видимое меняется.
+  const resize = new ResizeObserver(schedulePaint)
+  resize.observe(view)
 
   /** Догнать то, что приходило во время переноса. Зовётся, когда drag уже снят. */
   function flushPending(): void {
@@ -624,7 +652,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           const label = pieceLabel(current.assets.get(item.asset_id)?.name, item.id, length)
           node.innerHTML = `<span class="label" title="${escapeHtml(item.id)}">${escapeHtml(label)}</span>`
           strips.push(
-            strip(node, item.asset_id, item.in, item.out, block.left, block.width, lane.frames, lane.wave, LANE_FRAME_H),
+            strip(node, item.asset_id, item.in, item.out, block.left, block.width, lane.frames, lane.wave, sizes.laneBlock, sizes.laneBlock),
           )
           laneTrack.appendChild(node)
         })
@@ -722,6 +750,11 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     },
     selected(): string | null {
       return selected
+    },
+    /** Уход с экрана: слушатели окна живут дольше шкалы, их надо снять. */
+    stop(): void {
+      compactQuery.removeEventListener('change', onCompact)
+      resize.disconnect()
     },
   }
 }

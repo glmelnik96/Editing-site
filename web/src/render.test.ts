@@ -150,7 +150,7 @@ describe('сводка вкладки Рендер', () => {
   it('говорит человеческим языком, без argv', () => {
     const text = renderSummary(doc, opts(), 720)
     expect(text).toContain('Высокое: 1080×1920, 9:16, поля, 30 к/с, mp4.')
-    expect(text).toContain('Звуковая дорожка: 1 звук.')
+    expect(text).toContain('Дорожка «Звуки»: 1 звук.')
     expect(text).toContain('Фон приглушается под речь')
     expect(text).toContain('Субтитры впечатаны в кадр')
     expect(text).toContain('Около 12 мин, если очередь свободна')
@@ -177,7 +177,7 @@ describe('сводка вкладки Рендер', () => {
       opts(),
       60,
     )
-    expect(text).toContain('Звуковая дорожка')
+    expect(text).toContain('Дорожка «Звуки»')
     expect(text).not.toContain('приглушается')
     expect(text).toContain('Субтитры отдельной дорожкой')
   })
@@ -188,7 +188,7 @@ describe('сводка вкладки Рендер', () => {
     expect(empty).not.toContain('Субтитры')
   })
 
-  it('называет переходы и звуковую дорожку, если они есть', () => {
+  it('называет переходы и дорожку «Звуки», если они есть', () => {
     const withFade = {
       ...doc,
       clips: [clip('c1', 'a'), { ...clip('c2', 'a'), transition: { kind: 'fade' as const, duration: 0.5 } }],
@@ -199,7 +199,7 @@ describe('сводка вкладки Рендер', () => {
     }
     const text = renderSummary(withFade, opts({ quality: 'preview', short_side: 480 }), 5.5)
     expect(text).toContain('Переход между клипами')
-    expect(text).toContain('Звуковая дорожка: 2 звука.')
+    expect(text).toContain('Дорожка «Звуки»: 2 звука.')
   })
 })
 

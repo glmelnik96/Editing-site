@@ -40,11 +40,13 @@ import { assetData, type AssetData } from './strip'
 import { formatTimecode, parseTimecode } from './timecode'
 import { clampTransitions, clipAt, clipAssetIds, clipDuration, fadeInto, insertClip, maxFade, ms, newClipId, percentToZoom, removeClip, splitAt, timelineStart, totalDuration, trimClip, zoomToPercent, type Clip } from './timeline/model'
 import { mountInspector, type Selected } from './inspector'
+import { sideWidths, stageBox } from './layout'
 import { mountRender } from './render'
+import { mountRoll } from './roll'
 import { resolveTab, tabEnabled, type EditorTab } from './editor-tabs'
 import { HOTKEYS, needsClip, shortcutFor, type Shortcut } from './hotkeys'
 import { isPlaceable, mountSource } from './source'
-import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
+import { cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTranscript } from './transcript'
 import { newOverlayId, OVERLAY_SIZE_DEFAULT, overlayBox, overlayPlan, removeOverlay, updateOverlay } from './timeline/overlays'
 import { newSoundId, removeSound, updateSound } from './timeline/sounds'
@@ -57,10 +59,8 @@ import { pageTitle } from './titles'
 /** Шаг опроса записей, когда ничего не обрабатывается и не расшифровывается. */
 const IDLE_POLL_MS = 20000
 
-// Вид редактора — привычка человека, а не свойство проекта: свёрнутая панель и открытая складка
-// живут в браузере. В документе им делать нечего, там их увидели бы все, кто откроет проект.
-const SIDE_KEY = 'ed.side'
-const PROPS_KEY = 'ed.props'
+// Вид редактора — привычка человека, а не свойство проекта: открытая складка живёт в браузере.
+// В документе ей делать нечего, там её увидели бы все, кто откроет проект.
 const FOLD_KEY = 'ed.fold'
 
 function readPref(key: string, fallback: string): string {
@@ -81,9 +81,9 @@ function savePref(key: string, value: string): void {
 
 export function mountEditor(el: HTMLElement, projectId: string) {
   el.innerHTML = `
-    <div class="project-bar row">
+    <div class="project-bar">
       <a class="btn btn-ghost" href="#/projects">← Проекты</a>
-      <strong id="ed-name" class="display-m project-name">Проект</strong>
+      <strong id="ed-name" class="project-name">Проект</strong>
       <span class="small" id="ed-state">загрузка…</span>
       <span id="ed-notice" class="meta"></span>
       <div class="saves" id="ed-saves">
@@ -93,19 +93,16 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         <div class="saves-panel" id="ed-saves-panel" hidden></div>
       </div>
     </div>
+    <pre id="ed-error" hidden></pre>
     <div class="editor" id="ed-grid">
       <section class="side">
-        <!-- Голова панели не прокручивается вместе с её содержимым: вкладки нужны с любого места
-             списка, а кнопке сворачивания уезжать нельзя вовсе — свернув панель, ею же и
-             разворачивают обратно. -->
+        <!-- Вкладки не прокручиваются вместе с содержимым панели: они нужны с любого места списка. -->
         <div class="side-head">
           <nav class="tabs" id="ed-tabs">
             <button type="button" class="tab" data-tab="source">Исходники</button>
             <button type="button" class="tab" data-tab="subtitles">Субтитры</button>
             <button type="button" class="tab" data-tab="renders">Рендер</button>
           </nav>
-          <button type="button" class="side-fold" id="ed-side-toggle" aria-expanded="true"
-            aria-controls="ed-side-body" title="Свернуть панель: ролик и шкала станут шире">‹</button>
         </div>
         <div class="side-body" id="ed-side-body">
           <div id="ed-source" data-panel="source">
@@ -116,71 +113,50 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           <section id="ed-renders" data-panel="renders" hidden></section>
         </div>
       </section>
-      <section>
+      <section class="stage-cell" id="ed-stage-cell">
         <div class="stage" id="ed-stage"></div>
-        <!-- Три группы, разделённые чертой: просмотр, правка шкалы, каким выйдет файл. Раньше
-             все четырнадцать кнопок стояли одной строкой одинаковой громкости, и было не видно,
-             что настройка кадра и разрез клипа — разговоры о разном. -->
-        <div class="row bar-edit">
-          <span class="bar-group" id="ed-undo-group">
-            <button id="ed-undo" type="button" title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
-            <button id="ed-redo" type="button" title="Вернуть отменённое (Ctrl+Shift+Z)">Вернуть</button>
-          </span>
-          <span class="bar-group" id="ed-play-group">
-            <button id="ed-play" type="button" title="Играть (пробел)">▶</button>
-            <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
-            <span class="muted" id="ed-total"></span>
-          </span>
-          <span class="bar-group" id="ed-help-group">
-            <button id="ed-help" type="button" class="btn-square" title="Горячие клавиши (?)"
-              aria-label="Горячие клавиши" aria-expanded="false">?</button>
-          </span>
-          <span class="bar-group" id="ed-edit-group">
-            <button id="ed-split" type="button" title="Разрезать по курсору (S)">Разрезать</button>
-            <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
-            <button id="ed-delete" type="button" title="Удалить выбранный кусок (Del)">Удалить</button>
-          </span>
-          <span class="bar-group" id="ed-zoom-group">
-            <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
-                 — к громкости, к переходу, — а не к масштабу шкалы. -->
-            <label class="zoom-label" for="ed-zoom">Масштаб</label>
-            <button id="ed-zoom-out" type="button" class="btn-square" title="Мельче (−); на минимуме — весь ролик">−</button>
-            <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
-              title="Масштаб шкалы" />
-            <button id="ed-zoom-in" type="button" class="btn-square" title="Крупнее (+)">+</button>
-          </span>
-          <span class="bar-group" id="ed-out-group">
-            <select id="ed-aspect" title="Пропорция кадра">
-              <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
-            </select>
-            <select id="ed-fit" title="Вписывание">
-              <option value="pad">поля</option>
-              <option value="crop">обрезка</option>
-            </select>
-            <select id="ed-fps" title="Кадры в секунду">
-              <option value="25">25 к/с</option>
-              <option value="30">30 к/с</option>
-              <option value="50">50 к/с</option>
-              <option value="60">60 к/с</option>
-            </select>
-            <label class="burn">
-              <input id="ed-burn" type="checkbox" disabled />
-              Субтитры
-            </label>
-          </span>
-        </div>
-        <div id="ed-timeline"></div>
       </section>
-      <!-- Свойства выбранного — справа. Раньше стояли строкой над шкалой и гасли по выбору; панель
-           читается сверху вниз, показывает только то, что у куска есть, и сворачивается. -->
+      <!-- Свойства выбранного — справа от сцены. Раньше стояли строкой над шкалой и гасли по выбору;
+           панель читается сверху вниз и показывает только то, что у куска есть. Заголовка над ней
+           нет: она сама называет, что выбрано. -->
       <section class="props" id="ed-props">
-        <div class="side-head">
-          <button type="button" class="side-fold" id="ed-props-toggle" aria-expanded="true"
-            aria-controls="ed-props-body" title="Свернуть свойства: сцена и шкала станут шире">›</button>
-          <h3 class="props-title">Свойства</h3>
-        </div>
         <div class="props-body" id="ed-props-body"></div>
+        <!-- «Ролик» прибит к низу панели: пропорцию и вписывание видно и при выбранном куске. -->
+        <section class="roll" id="ed-roll" aria-label="Настройки ролика"></section>
       </section>
+      <!-- Одна строка во всю ширину, группы через черту: отмена, просмотр, правка шкалы, масштаб;
+           «?» — у правого края. Настройки готового файла живут в «Свойствах» и во вкладке «Рендер»:
+           рядом с «Разрезать» они читались как ещё одна правка шкалы. -->
+      <div class="row bar-edit">
+        <span class="bar-group" id="ed-undo-group">
+          <button id="ed-undo" type="button" title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
+          <button id="ed-redo" type="button" title="Вернуть отменённое (Ctrl+Shift+Z)">Вернуть</button>
+        </span>
+        <span class="bar-group" id="ed-play-group">
+          <button id="ed-play" type="button" title="Играть (пробел)">▶</button>
+          <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
+          <span class="muted" id="ed-total"></span>
+        </span>
+        <span class="bar-group" id="ed-edit-group">
+          <button id="ed-split" type="button" title="Разрезать по курсору (S)">Разрезать</button>
+          <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
+          <button id="ed-delete" type="button" title="Удалить выбранный кусок (Del)">Удалить</button>
+        </span>
+        <span class="bar-group" id="ed-zoom-group">
+          <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
+               — к громкости, к переходу, — а не к масштабу шкалы. -->
+          <label class="zoom-label" for="ed-zoom">Масштаб</label>
+          <button id="ed-zoom-out" type="button" class="btn-square" title="Мельче (−); на минимуме — весь ролик">−</button>
+          <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
+            title="Масштаб шкалы" />
+          <button id="ed-zoom-in" type="button" class="btn-square" title="Крупнее (+)">+</button>
+        </span>
+        <span class="bar-group" id="ed-help-group">
+          <button id="ed-help" type="button" class="btn-square" title="Горячие клавиши (?)"
+            aria-label="Горячие клавиши" aria-expanded="false">?</button>
+        </span>
+      </div>
+      <div id="ed-timeline"></div>
     </div>
     <div class="card keys" id="ed-keys" hidden>
       <h3 class="display-m" style="margin:0">Горячие клавиши</h3>
@@ -188,19 +164,17 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         row => `<dt><kbd>${escapeHtml(row.keys)}</kbd></dt><dd>${escapeHtml(row.what)}</dd>`,
       ).join('')}</dl>
     </div>
-    <pre id="ed-error" hidden></pre>`
+`
 
+  // Экран по высоте окна — только пока жив редактор: остальные экраны прокручиваются как раньше.
+  document.body.classList.add('editor-fit')
   const nameBox = el.querySelector('#ed-name') as HTMLElement
   const stateBox = el.querySelector('#ed-state') as HTMLElement
   const noticeBox = el.querySelector('#ed-notice') as HTMLElement
   const stage = el.querySelector('#ed-stage') as HTMLElement
   const totalBox = el.querySelector('#ed-total') as HTMLElement
   const errorBox = el.querySelector('#ed-error') as HTMLPreElement
-  const aspectPick = el.querySelector('#ed-aspect') as HTMLSelectElement
-  const fitPick = el.querySelector('#ed-fit') as HTMLSelectElement
-  const fpsPick = el.querySelector('#ed-fps') as HTMLSelectElement
   const propsBody = el.querySelector('#ed-props-body') as HTMLElement
-  const propsToggle = el.querySelector('#ed-props-toggle') as HTMLButtonElement
   const history = createHistory<ProjectDoc>()
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const redoButton = el.querySelector('#ed-redo') as HTMLButtonElement
@@ -214,13 +188,10 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const helpButton = el.querySelector('#ed-help') as HTMLButtonElement
   const keysCard = el.querySelector('#ed-keys') as HTMLElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
-  const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
-  const burnLabel = el.querySelector('label.burn') as HTMLLabelElement
   const saves = el.querySelector('#ed-saves') as HTMLElement
   const savesToggle = el.querySelector('#ed-saves-toggle') as HTMLButtonElement
   const grid = el.querySelector('#ed-grid') as HTMLElement
-  const sideBody = el.querySelector('#ed-side-body') as HTMLElement
-  const sideToggle = el.querySelector('#ed-side-toggle') as HTMLButtonElement
+  const stageCell = el.querySelector('#ed-stage-cell') as HTMLElement
   const savesPanel = el.querySelector('#ed-saves-panel') as HTMLElement
 
   let project: Project | null = null
@@ -865,12 +836,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     saver.schedule(project)
   }
 
-  function syncBurn(): void {
-    const subs = project?.doc.subtitles
-    burnBox.disabled = !cuesReady(subs)
-    burnBox.checked = burnEnabled(subs)
-  }
-
   function applyEnabled(on: boolean): void {
     if (!project || !cuesReady(project.doc.subtitles)) return
     remember()
@@ -878,11 +843,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       ...project,
       doc: { ...project.doc, subtitles: { ...project.doc.subtitles, enabled: on } },
     }
-    syncBurn()
+    renders?.setDoc(project.doc, project.name)
     saver.schedule(project)
   }
-
-  burnBox.addEventListener('change', () => applyEnabled(burnBox.checked))
 
   /* ═══ Вкладки левой колонки ═══════════════════════════════════════════════
    *
@@ -917,18 +880,18 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (mounted.has(name) || !booted) return
     mounted.add(name)
     if (name === 'renders') {
-      renders = mountRender(
-        panels.get('renders') as HTMLElement,
-        projectId,
-        async () => {
+      renders = mountRender(panels.get('renders') as HTMLElement, projectId, {
+        onBeforeStart: async () => {
           if (project && saver.pending()) await saver.flush(project)
         },
-        () => markNews('renders'),
-        n => {
+        onReady: () => markNews('renders'),
+        onCount: n => {
           hasReadyRender = n > 0
           syncTabs()
         },
-      )
+        onOutput: applyOutput,
+        onBurn: applyEnabled,
+      })
       if (project) renders.setDoc(project.doc, project.name)
       // Записи нужны подписи о битрейте и кадре исходников: панель рождается позже списка.
       renders.setAssets(assetList)
@@ -969,26 +932,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function onSavesPointerDown(event: PointerEvent): void {
     if (!saves.contains(event.target as Node)) closeSaves()
   }
-
-  /**
-   * Свернуть левую колонку: ролик и шкала занимают её место, сцена становится выше.
-   *
-   * Монтируют, глядя на шкалу и на кадр, а исходники нужны только когда берут новый кусок.
-   * Кнопка остаётся на месте свёрнутой панели — иначе развернуть её было бы нечем.
-   */
-  function setSide(open: boolean): void {
-    grid.classList.toggle('side-off', !open)
-    sideBody.hidden = !open
-    sideToggle.textContent = open ? '‹' : '›'
-    sideToggle.setAttribute('aria-expanded', String(open))
-    sideToggle.title = open
-      ? 'Свернуть панель: ролик и шкала станут шире'
-      : 'Развернуть панель исходников'
-    savePref(SIDE_KEY, open ? 'on' : 'off')
-  }
-
-  sideToggle.addEventListener('click', () => setSide(sideBody.hidden))
-  setSide(readPref(SIDE_KEY, 'on') !== 'off')
 
   savesToggle.addEventListener('click', () => {
     if (!savesPanel.hidden) {
@@ -1134,7 +1077,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       picked: pickedKind(),
       canUndo: history.canUndo(),
       canRedo: history.canRedo(),
-      cuesReady: cuesReady(project?.doc.subtitles),
     })
     setBlocked(playButton, blocks.play)
     setBlocked(splitButton, blocks.split)
@@ -1147,7 +1089,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // Поле — не кнопка: остаётся disabled, причина — в подсказке.
     gotoInput.disabled = blocks.play !== null
     gotoInput.title = blocks.play ?? 'Перейти к таймкоду'
-    burnLabel.title = blocks.burn ?? 'Впечатать субтитры в кадр'
   }
 
   /** Волны и кадры записей шкалы: клипов, звуков и наложений. */
@@ -1166,16 +1107,39 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (!stopped) timeline.render({ data })
   }
 
+  /**
+   * Сцена и боковые колонки — по месту в окне (layout.ts): сцена во всю высоту верхнего ряда,
+   * ширина по пропорции, остаток делят исходники и свойства. Пересчёт — при смене окна, высоты
+   * шкалы или полосы хода и при смене пропорции. Тот же результат ничего не пишет, поэтому
+   * наблюдатель не зацикливается на собственной правке колонок.
+   */
+  let fitted = ''
+  function fitStage(): void {
+    if (!project) return
+    // Ширину берём у самой сетки, а не у шкалы: шкала растянута по колонкам, которые ставим мы же,
+    // и мерить ею место значило бы замкнуть круг — сетка перестала бы следовать за окном.
+    const style = getComputedStyle(grid)
+    const gridWidth = grid.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const box = stageBox(gridWidth, stageCell.clientHeight, aspectRatio(project.doc.output.aspect))
+    const { props } = sideWidths(gridWidth, box.width)
+    const key = `${gridWidth}:${box.width}x${box.height}`
+    if (key === fitted) return
+    fitted = key
+    // Исходники — остаток (1fr): даже если окно поменяется раньше пересчёта, сетка не разойдётся.
+    grid.style.gridTemplateColumns = `minmax(0, 1fr) ${box.width}px ${props}px`
+    stage.style.width = `${box.width}px`
+    stage.style.height = `${box.height}px`
+  }
+  const fitObserver = new ResizeObserver(() => fitStage())
+  fitObserver.observe(grid)
+  fitObserver.observe(stageCell)
+
   function render(): void {
     if (!project) return
     nameBox.textContent = project.name
     document.title = pageTitle(project.name)
-    aspectPick.value = project.doc.output.aspect
-    fitPick.value = project.doc.output.fit
-    fpsPick.value = String(project.doc.output.fps)
-    const ratio = aspectRatio(project.doc.output.aspect)
-    stage.style.aspectRatio = String(ratio)
-    stage.style.maxWidth = `calc(${ratio} * var(--stage-h))`
+    nameBox.title = project.name
+    fitStage()
     stage.classList.toggle('crop', project.doc.output.fit === 'crop')
     timeline.render({
       clips: project.doc.clips,
@@ -1188,7 +1152,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     syncZoomSlider() // нижняя граница масштаба зависит от длины ролика
     subtitles.setProject(project)
     subtitles.setTimeline(project.doc.clips, assetList)
-    syncBurn()
     syncSelection()
     showTime()
     applyPreviewVolumes()
@@ -1263,6 +1226,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function syncSelection(): void {
     syncBar()
     inspector.set(currentSelection())
+    if (project) roll.set(project.doc.output, pickedKind() !== 'none')
   }
 
   /** Что выбрано на шкале — глазами панели свойств: вид, сам кусок и что у него есть. */
@@ -1368,19 +1332,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onOverlay: patchOverlay,
     onRefuse: underTrack,
   })
-
-  /** Свернуть панель свойств — как левую: кнопка остаётся, чтобы было чем развернуть. */
-  function setProps(open: boolean): void {
-    grid.classList.toggle('props-off', !open)
-    propsBody.hidden = !open
-    propsToggle.textContent = open ? '›' : '‹'
-    propsToggle.setAttribute('aria-expanded', String(open))
-    propsToggle.title = open ? 'Свернуть свойства: сцена и шкала станут шире' : 'Развернуть свойства'
-    savePref(PROPS_KEY, open ? 'on' : 'off')
-  }
-
-  propsToggle.addEventListener('click', () => setProps(propsBody.hidden))
-  setProps(readPref(PROPS_KEY, 'on') !== 'off')
+  // Пропорция и вписывание всего ролика — внизу «Свойств». Правка — как любая: история, сохранение.
+  const roll = mountRoll(el.querySelector('#ed-roll') as HTMLElement, { onChange: applyOutput })
 
   function splitHere(): void {
     if (!project) return
@@ -1518,10 +1471,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   deleteButton.addEventListener('click', () => {
     if (!explainBlocked(deleteButton)) removeSelected()
   })
-  // Галочка — поле: серая не нажимается, поэтому причину говорит подпись вокруг неё.
-  burnLabel.addEventListener('click', () => {
-    if (burnBox.disabled) underTrack(burnLabel.title)
-  })
   helpButton.addEventListener('click', () => showKeys(keysCard.hidden))
   /**
    * Масштаб меняют и кнопками, и ползунком: ползунок обязан показывать то, что вышло. Ноль
@@ -1554,17 +1503,6 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     render()
     saver.schedule(project)
   }
-
-  aspectPick.addEventListener('change', () => {
-    applyOutput({ aspect: aspectPick.value as '16:9' | '9:16' | '1:1' })
-  })
-  fitPick.addEventListener('change', () => {
-    applyOutput({ fit: fitPick.value as 'pad' | 'crop' })
-  })
-  fpsPick.addEventListener('change', () => {
-    applyOutput({ fps: Number(fpsPick.value) })
-  })
-
 
   function undo(): void {
     if (!project) return
@@ -1752,6 +1690,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     booted = true
     syncTabs()
     render()
+    // Сетка появляется целиком — с размером сцены и колонками под этот проект.
+    grid.classList.add('ready')
     // Без перемотки оба элемента video остаются без src, и открытый проект встречает человека
     // чёрным прямоугольником под полной шкалой.
     if (loaded.doc.clips.length) seek(0)
@@ -1762,6 +1702,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   return {
     stop(): void {
+      document.body.classList.remove('editor-fit')
+      fitObserver.disconnect()
       pauseSounds()
       pauseOverlays()
       soundPlayers.forEach(player => player.removeAttribute('src'))
@@ -1773,6 +1715,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       renders?.stop()
       subtitles.stop()
       transcript.stop()
+      timeline.stop()
       // Уход с экрана не повод терять последнюю правку: она могла не дожить до конца задержки.
       // Отказ здесь гасим: экран уже разбирается, показывать ошибку некому, а необработанный
       // отказ промиса всплыл бы в консоль. О сбое уже сказал onError.

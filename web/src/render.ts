@@ -1,6 +1,7 @@
 /** Панель сборки: настройки ролика, запуск, ход задания, список готовых роликов со скачиванием. */
 import { ApiError, isRetryable } from './api'
 import { downloadFileName, fmtDuration, fmtSize, fmtWhen, type Asset } from './assets'
+import { BURN_BLOCKED } from './blocked'
 import { escapeHtml } from './html'
 import {
   cancelJob,
@@ -13,13 +14,31 @@ import {
   startRender,
   type JobListItem,
   type JobView,
+  type Output,
   type ProjectDoc,
   type RenderCard,
   type RenderFormat,
   type RenderOptions,
   type RenderQuality,
 } from './project'
+import { ASPECT_ITEMS, FIT_HINT, FIT_ITEMS, FPS_ITEMS } from './roll'
+import { segmentedHtml, setSegmented } from './segmented'
+import { burnEnabled, cuesReady } from './subtitles'
 import { fadeInto, totalDuration } from './timeline/model'
+
+/** Что панель сборки просит у редактора. */
+export type RenderHandlers = {
+  /** Дописать несохранённое: собрать надо то, что человек видит на шкале. */
+  onBeforeStart: () => Promise<void>
+  /** Сборка готова — точка новости на вкладке. */
+  onReady?: () => void
+  /** Сколько готовых роликов: от этого зависит, жива ли вкладка. */
+  onCount?: (n: number) => void
+  /** Правка настроек ролика: пропорция, вписывание, кадры в секунду. */
+  onOutput: (patch: Partial<Output>) => void
+  /** Вшивать ли субтитры в кадр. */
+  onBurn: (on: boolean) => void
+}
 
 const POLL_MS = 2000
 // Во сколько раз быстрее реального времени собирает свободный воркер (замерено на ВМ): пресет
@@ -176,7 +195,7 @@ function duckLine(doc: ProjectDoc): string | null {
 function soundsLine(doc: ProjectDoc): string | null {
   const n = soundsOf(doc).length
   if (!n) return null
-  return `Звуковая дорожка: ${n} ${plural(n, 'звук', 'звука', 'звуков')}.`
+  return `Дорожка «Звуки»: ${n} ${plural(n, 'звук', 'звука', 'звуков')}.`
 }
 
 function overlaysLine(doc: ProjectDoc): string | null {
@@ -271,13 +290,7 @@ export function runningRenderFromJobs(items: JobListItem[], projectId: string): 
   return live[0] ?? null
 }
 
-export function mountRender(
-  el: HTMLElement,
-  projectId: string,
-  onBeforeStart: () => Promise<void>,
-  onReady?: () => void,
-  onCount?: (n: number) => void,
-) {
+export function mountRender(el: HTMLElement, projectId: string, handlers: RenderHandlers) {
   let docName = ''
   let doc: ProjectDoc | null = null
   let assets: Asset[] = []
@@ -287,37 +300,55 @@ export function mountRender(
   el.innerHTML = `
     <main class="card">
       <h3>Сборка</h3>
-      <div class="render-opts">
-        <label>Формат
-          <select id="rnd-format">
-            <option value="mp4">MP4 — откроется везде</option>
-            <option value="webm">WebM — для сайта</option>
-            <option value="m4a">Только звук (m4a)</option>
-          </select>
-        </label>
-        <label>Качество
-          <select id="rnd-quality">
-            <option value="preview">Превью — быстро и легко</option>
-            <option value="medium">Среднее</option>
-            <option value="high">Высокое — не хуже исходников</option>
-            <option value="target">Целевое — свой битрейт</option>
-          </select>
-        </label>
-        <label>Битрейт, кбит/с
-          <input id="rnd-bitrate" class="tc" type="number" min="300" max="50000" step="100" />
-        </label>
-        <label>Разрешение
-          <select id="rnd-size"></select>
-        </label>
-      </div>
-      <p class="meta" id="rnd-sources"></p>
+      <!-- Сначала — каким будет ролик, потом — каким файлом его отдать: список разрешений зависит
+           от пропорции. Пропорция и вписывание — те же, что внизу «Свойств». -->
+      <section class="rnd-block" aria-label="Ролик">
+        <p class="rnd-title">Ролик</p>
+        ${segmentedHtml('rnd-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
+        ${segmentedHtml('rnd-fit', 'Вписывание', FIT_ITEMS, 'pad', FIT_HINT)}
+        ${segmentedHtml('rnd-fps', 'Кадров в секунду', FPS_ITEMS, '30')}
+        <label class="burn"><input id="rnd-burn" type="checkbox" /> Вшить субтитры</label>
+        <p class="meta" id="rnd-burn-note" hidden></p>
+      </section>
+      <section class="rnd-block" aria-label="Файл">
+        <p class="rnd-title">Файл</p>
+        <div class="render-opts">
+          <label>Формат
+            <select id="rnd-format">
+              <option value="mp4">MP4 — откроется везде</option>
+              <option value="webm">WebM — для сайта</option>
+              <option value="m4a">Только звук (m4a)</option>
+            </select>
+          </label>
+          <label>Качество
+            <select id="rnd-quality">
+              <option value="preview">Превью — быстро и легко</option>
+              <option value="medium">Среднее</option>
+              <option value="high">Высокое — не хуже исходников</option>
+              <option value="target">Целевое — свой битрейт</option>
+            </select>
+          </label>
+          <label>Битрейт, кбит/с
+            <input id="rnd-bitrate" class="tc" type="number" min="300" max="50000" step="100" />
+          </label>
+          <label>Разрешение
+            <select id="rnd-size"></select>
+          </label>
+        </div>
+        <p class="meta" id="rnd-sources"></p>
+      </section>
       <div class="muted stack" id="rnd-summary"></div>
-      <div class="row">
-        <button id="rnd-start" type="button">Собрать</button>
-      </div>
-      <div id="rnd-job" hidden>
-        <span class="muted" id="rnd-status"></span>
-        <button id="rnd-cancel" type="button">Отменить сборку</button>
+      <!-- «Собрать» и ход сборки прилипают к низу панели: в невысоком окне их видно без прокрутки.
+           Итог стоит прямо над ними и прокручивается с настройками: прилипший вместе с кнопкой,
+           он в пять строк закрывал в низкой панели все настройки. -->
+      <div class="rnd-go">
+        <div class="row">
+          <button id="rnd-start" type="button">Собрать</button>
+        </div>
+        <div id="rnd-job" hidden>
+          <span class="muted" id="rnd-status"></span>
+          <button id="rnd-cancel" type="button">Отменить сборку</button>
+        </div>
       </div>
       <ul id="rnd-list" class="versions"><li class="muted">Пока нет</li></ul>
       <pre id="rnd-error" hidden></pre>
@@ -334,6 +365,8 @@ export function mountRender(
   const cancelButton = el.querySelector('#rnd-cancel') as HTMLButtonElement
   const list = el.querySelector('#rnd-list') as HTMLElement
   const errorBox = el.querySelector('#rnd-error') as HTMLPreElement
+  const burnBox = el.querySelector('#rnd-burn') as HTMLInputElement
+  const burnNote = el.querySelector('#rnd-burn-note') as HTMLElement
 
   let jobId: string | null = null
   let timer: number | undefined
@@ -402,6 +435,29 @@ export function mountRender(
     change({ bitrate_kbps: kbps })
   })
 
+  /** Настройки ролика — из документа: правка в «Свойствах» или отмена видна здесь сразу. */
+  function syncRoll(): void {
+    if (!doc) return
+    setSegmented(el, 'rnd-aspect', doc.output.aspect)
+    setSegmented(el, 'rnd-fit', doc.output.fit)
+    setSegmented(el, 'rnd-fps', String(doc.output.fps))
+    const ready = cuesReady(doc.subtitles)
+    burnBox.disabled = !ready
+    burnBox.checked = burnEnabled(doc.subtitles)
+    burnNote.hidden = ready
+    burnNote.textContent = ready ? '' : BURN_BLOCKED
+  }
+
+  // Правку ролика панель не держит у себя: её применяет редактор — в историю, в сохранение,
+  // на сцену — и возвращает сюда через setDoc.
+  el.addEventListener('change', event => {
+    const input = event.target as HTMLInputElement
+    if (input.name === 'rnd-aspect') handlers.onOutput({ aspect: input.value as Output['aspect'] })
+    else if (input.name === 'rnd-fit') handlers.onOutput({ fit: input.value as Output['fit'] })
+    else if (input.name === 'rnd-fps') handlers.onOutput({ fps: Number(input.value) })
+  })
+  burnBox.addEventListener('change', () => handlers.onBurn(burnBox.checked))
+
   function showJob(status: JobView['status']): void {
     jobBox.hidden = false
     const running = adopted ? 'Сборка уже идёт — ход вверху' : 'Собираю — ход вверху'
@@ -434,7 +490,7 @@ export function mountRender(
     if (stopped) return
     const { renders } = await listRenders(projectId)
     if (stopped) return
-    onCount?.(renders.length)
+    handlers.onCount?.(renders.length)
     list.innerHTML = renders.map(row).join('') || '<li class="muted">Пока нет</li>'
     list.querySelectorAll<HTMLButtonElement>('button[data-drop]').forEach(b =>
       b.addEventListener('click', async () => {
@@ -480,7 +536,7 @@ export function mountRender(
     window.clearTimeout(timer)
     if (job.status === 'failed') showError(job.error || 'Сборка не удалась')
     if (job.status === 'done') {
-      onReady?.()
+      handlers.onReady?.()
       await refresh().catch(showError)
     }
   }
@@ -509,7 +565,7 @@ export function mountRender(
     startButton.disabled = true
     try {
       // Сначала дописываем несохранённое: собрать надо то, что человек видит на шкале.
-      await onBeforeStart()
+      await handlers.onBeforeStart()
     } catch (e) {
       // Правка до сервера не дошла — воркер собрал бы прошлую версию. Молчать тут нельзя:
       // человек получил бы чужой ролик и не понял, почему в нём нет его последних правок.
@@ -557,6 +613,7 @@ export function mountRender(
       }
       doc = next
       empty = next.clips.length === 0
+      syncRoll()
       sync()
     },
     /** Записи проекта: по ним подпись называет битрейт и кадр исходников. */

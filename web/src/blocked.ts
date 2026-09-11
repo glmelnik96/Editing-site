@@ -13,7 +13,6 @@ export type EditorState = {
   picked: PickedKind
   canUndo: boolean
   canRedo: boolean
-  cuesReady: boolean
 }
 
 export type EditorBlocks = {
@@ -24,10 +23,12 @@ export type EditorBlocks = {
   remove: string | null
   undo: string | null
   redo: string | null
-  burn: string | null
 }
 
 export const EMPTY_TIMELINE = 'Шкала пустая — сначала добавьте кусок из «Исходников»'
+
+/** Вшивать нечего — одна причина для всего редактора. */
+export const BURN_BLOCKED = 'Сначала сделайте субтитры во вкладке «Субтитры»'
 
 export function editorBlocks(s: EditorState): EditorBlocks {
   const empty = s.hasClips ? null : EMPTY_TIMELINE
@@ -40,7 +41,6 @@ export function editorBlocks(s: EditorState): EditorBlocks {
     remove: s.picked === 'none' ? 'Выберите клип, звук или наложение на шкале' : null,
     undo: s.canUndo ? null : 'Отменять пока нечего',
     redo: s.canRedo ? null : 'Возвращать нечего',
-    burn: s.cuesReady ? null : 'Сначала сделайте субтитры во вкладке «Субтитры»',
   }
 }
 

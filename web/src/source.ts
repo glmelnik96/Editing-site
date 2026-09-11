@@ -50,7 +50,7 @@ export function canOverlay(kind: string | undefined): boolean {
 
 /** Надпись кнопки: куда ляжет кусок. Звук не встаёт в очередь клипов, и кнопка обязана это сказать. */
 export function addLabel(kind: string | undefined): string {
-  return kind === 'audio' ? 'Положить на звуковую дорожку' : 'Добавить в шкалу'
+  return kind === 'audio' ? 'Положить на дорожку «Звуки»' : 'Добавить в шкалу'
 }
 
 export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
@@ -59,10 +59,19 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   // разворачивать, чтобы просто сменить запись.
   el.innerHTML = `
     <main class="card">
-      <h3>Исходники</h3>
       <select id="src-pick"><option value="">— выберите файл —</option></select>
-      <div id="src-player"></div>
+      <!-- Главное действие — сразу под выбором файла: в низкой панели монтажки (258 px на 1280×800)
+           плеер и фрагмент уводили «Добавить в шкалу» под прокрутку. Подпись слева говорит, что
+           ляжет на шкалу: весь файл или отмеченный кусок. Заголовка «Исходники» нет — его называет
+           вкладка. -->
+      <div class="row src-add-row">
+        <span id="src-range" class="muted">весь файл</span>
+        <button id="src-add" type="button">Добавить в шкалу</button>
+        <button id="src-over" type="button"
+          title="Картинка или видео поверх основы — под курсор шкалы">Поверх видео</button>
+      </div>
       <p class="muted" id="src-note"></p>
+      <div id="src-player"></div>
       ${foldHtml(
         'src-cut',
         'Взять фрагмент',
@@ -89,12 +98,6 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
               <input id="src-secs" class="tc" type="number" min="0.5" max="${STILL_MAX}" step="0.5" />
             </label>
           </div>
-        </div>
-        <div class="row">
-          <span id="src-range" class="muted">весь файл</span>
-          <button id="src-add" type="button">Добавить в шкалу</button>
-          <button id="src-over" type="button"
-            title="Картинка или видео поверх основы — под курсор шкалы">Поверх видео</button>
         </div>`,
       )}
     </main>`

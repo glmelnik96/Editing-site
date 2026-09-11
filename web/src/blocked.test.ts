@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { EMPTY_TIMELINE, editorBlocks, sourceBlocks, tabBlock } from './blocked'
+import { BURN_BLOCKED, EMPTY_TIMELINE, editorBlocks, sourceBlocks, tabBlock } from './blocked'
 
-const base = { hasClips: true, picked: 'clip' as const, canUndo: true, canRedo: true, cuesReady: true }
+const base = { hasClips: true, picked: 'clip' as const, canUndo: true, canRedo: true }
 
 describe('почему кнопка серая', () => {
   it('всё можно — причин нет', () => {
@@ -24,11 +24,14 @@ describe('почему кнопка серая', () => {
     expect(editorBlocks({ ...base, picked: 'sound' }).remove).toBeNull()
   })
 
-  it('история и субтитры говорят своё', () => {
-    const b = editorBlocks({ ...base, canUndo: false, canRedo: false, cuesReady: false })
+  it('история говорит своё', () => {
+    const b = editorBlocks({ ...base, canUndo: false, canRedo: false })
     expect(b.undo).toBe('Отменять пока нечего')
     expect(b.redo).toBe('Возвращать нечего')
-    expect(b.burn).toBe('Сначала сделайте субтитры во вкладке «Субтитры»')
+  })
+
+  it('причина серых субтитров — одна строка для «Рендера»', () => {
+    expect(BURN_BLOCKED).toBe('Сначала сделайте субтитры во вкладке «Субтитры»')
   })
 })
 
