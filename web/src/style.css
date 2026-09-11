@@ -1127,7 +1127,8 @@ main.card {
   position: absolute;
   top: 2px;
   overflow: hidden;
-  border-radius: 12px;
+  /* Углы прямые, как и у всего на шкале: скругление съедало края, а где клип начинается и где
+     кончается — на шкале главное. */
   background: var(--clip);
   border: 1px solid var(--line);
   cursor: grab;
@@ -1216,7 +1217,6 @@ main.card {
   z-index: 2;
   pointer-events: none;
   border: 2px dashed var(--brand-hover);
-  border-radius: 12px;
   background: color-mix(in srgb, var(--brand) 14%, transparent);
 }
 /* Полоса перемотки и дорожка в одной колее: игла проходит обе насквозь, поэтому её хват
@@ -1287,7 +1287,6 @@ main.card {
   top: 3px;
   height: 44px;
   overflow: hidden;
-  border-radius: 10px;
   border: 1px solid var(--line);
   cursor: grab;
   user-select: none;
