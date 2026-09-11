@@ -5,6 +5,6 @@ import { expect, test } from 'vitest'
 
 test('hover ключевой кнопки оставляет тёмный текст', () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'style.css'), 'utf8')
-  const hover = css.match(/\.btn-key:hover:not\(:disabled\)\s*\{[^}]+\}/)
+  const hover = css.match(/\.btn-key:hover:not\(:disabled\)(?::not\(\[aria-disabled='true'\]\))?\s*\{[^}]+\}/)
   expect(hover?.[0]).toContain('color: var(--brand-ink)')
 })
