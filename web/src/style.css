@@ -714,12 +714,38 @@ main.card {
 /* Шапка проекта: название, состояние сохранения и подсказка. Общая шапка приложения одна
    на всё, второй здесь быть не должно. */
 .project-bar {
-  align-items: baseline;
-  gap: var(--space-4);
-  padding: 0 var(--space-6);
-  margin: var(--space-4) 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* 48 px: отступы по 8 и кнопки по 32. На высоте окна каждая строка на счету. */
+  padding: var(--space-2) var(--space-6);
 }
-.project-name { overflow-wrap: anywhere; }
+.project-bar .btn {
+  min-height: var(--control-sm);
+  padding: 0 var(--space-3);
+}
+/* Имя в одну строку, полное — в подсказке: длинное имя в две строки съедало бы место у сцены. */
+.project-name {
+  min-width: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#ed-state {
+  flex: none;
+  white-space: nowrap;
+}
+/* Уведомление уступает место первым: длинное не выталкивает «Версии» за край. */
+#ed-notice {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .project-bar .saves {
   margin-left: auto;
@@ -843,26 +869,60 @@ main.card {
   color: var(--muted);
 }
 
-/* Три колонки: исходники, сцена со шкалой, свойства выбранного. Боковые сворачиваются до кнопки. */
+/* Экран редактора — по высоте окна: шкала целиком внизу, сцена берёт остаток. Класс ставит сам
+   редактор на время жизни экрана, остальные экраны прокручиваются как раньше. */
+body.editor-fit #app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+body.editor-fit #shell-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Сетка: сверху исходники, сцена и свойства, под ними во всю ширину строка инструментов и шкала.
+   Верхний ряд не ниже 240 px — меньше сцена бесполезна, тогда страница прокручивается. Колонки
+   ставит редактор из layout.ts по ширине окна и пропорции ролика; здесь — начальные, до первого
+   расчёта, пока сетка ещё не видна. */
 .editor {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr) minmax(220px, 0.8fr);
-  gap: var(--space-4);
-  /* Снизу больше, чем сверху: шкала — последнее на странице, и с равными полями она
-     прибивалась к краю окна, а полосе прокрутки под ней не оставалось воздуха. */
-  padding: var(--space-4) var(--space-6) var(--space-14);
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr) minmax(240px, 0.8fr);
+  grid-template-rows: minmax(240px, 1fr) auto auto;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  padding: 0 var(--space-6) var(--space-3);
 }
-.editor.props-off {
-  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr) auto;
+/* Сетка появляется целиком, когда пришёл проект и посчитан размер сцены: иначе панели переезжали
+   бы у человека на глазах. */
+.editor:not(.ready) {
+  visibility: hidden;
 }
-/* Левая колонка: исходник, текст и точки сохранения друг под другом, все видны без прокрутки.
- * Без этого третья секция в .editor сдвигает сцену со шкалой в узкую колонку и на вторую строку. */
+.editor > .bar-edit,
+.editor > #ed-timeline {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.editor > .bar-edit {
+  margin: var(--space-1) 0 0;
+  flex-wrap: nowrap;
+}
+/* Ошибка загрузки и отказ проверки — под строкой проекта: под сеткой их не видно. */
+#ed-error {
+  margin: 0 var(--space-6) var(--space-2);
+  max-height: 30vh;
+  overflow: auto;
+}
+/* Левая колонка: вкладки и панель со своей прокруткой во всю высоту верхнего ряда. */
 .side {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  align-self: start;
+  gap: var(--space-2);
   min-width: 0;
+  min-height: 0;
 }
 .side-head {
   display: flex;
@@ -874,43 +934,20 @@ main.card {
   min-width: 0;
   margin-bottom: 0;
 }
-/* Кнопка сворачивания стоит вне прокручиваемого тела: свернув панель, ею же разворачивают
-   обратно, и уехать вместе с содержимым она не может. */
-.side-fold {
-  flex: none;
-  min-height: var(--control-sm);
-  min-width: var(--control-sm);
-  padding: 0 var(--space-2-5);
-  line-height: 1.2;
-}
 .side-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   /* Своя прокрутка: в колонке три панели — исходник с плеером, текст расшифровки и музыка, —
-     и вместе они выше экрана. Без этого прокрутка страницы уносила сцену и шкалу вверх, а
-     монтировать, не видя шкалы, нельзя. */
-  max-height: calc(100vh - 200px);
+     и вместе они выше верхнего ряда. Прокручивается панель, а не страница: шкала на месте. */
   overflow-y: auto;
   /* Полосе прокрутки нужен зазор, иначе она ложится на рамки карточек. */
   padding-right: var(--space-1);
 }
 .side-body[hidden] {
   display: none;
-}
-/* Свёрнутая панель сжимается до своей кнопки, а освободившееся место забирают сцена и шкала:
-   монтируют, глядя на кадр и на шкалу, исходники нужны только когда берут новый кусок. */
-.editor.side-off {
-  grid-template-columns: auto minmax(320px, 1fr) minmax(220px, 0.8fr);
-}
-.editor.side-off.props-off {
-  grid-template-columns: auto minmax(320px, 1fr) auto;
-}
-.editor.side-off .tabs {
-  display: none;
-}
-.editor.side-off .stage {
-  --stage-h: 68vh;
 }
 .side .card {
   margin: 0;
@@ -951,6 +988,31 @@ main.card {
   width: 100%;
 }
 
+/* --- Вкладка «Рендер»: ролик, файл и прилипающая сборка --- */
+.rnd-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+.rnd-title {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+/* Прилипает к низу прокручиваемой колонки; поля карточки выбирает отрицательным отступом,
+   чтобы черта шла от края до края. */
+.rnd-go {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: var(--space-2) calc(-1 * var(--space-6)) 0;
+  padding: var(--space-3) var(--space-6);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
 /* Подпись масштаба — тише кнопок: она объясняет ползунок, а не зовёт нажать. */
 .zoom-label {
   color: var(--muted);
@@ -959,34 +1021,111 @@ main.card {
 }
 
 /* --- Панель свойств выбранного --- */
+/* Рамка на всю панель: сверху прокручиваются свойства куска, снизу прибит блок «Ролик». */
 .props {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  align-self: start;
   min-width: 0;
-}
-.props-title {
-  margin: 0;
-  align-self: center;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-2xl);
+  background: var(--panel);
 }
 .props-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3-5);
   padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-2xl);
-  background: var(--panel);
-  max-height: calc(100vh - 200px);
   overflow-y: auto;
 }
 .props-body[hidden] {
   display: none;
 }
-.editor.props-off .props-title {
-  display: none;
+/* --- Переключатель сегментами: радиокнопки полосой (segmented.ts) --- */
+.seg {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
 }
+.seg legend {
+  padding: 0;
+  margin-bottom: var(--space-1-5);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.seg-items {
+  display: inline-flex;
+  padding: var(--space-0-5);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-full);
+  background: var(--ink);
+}
+.seg-item {
+  position: relative;
+  display: inline-flex;
+  margin: 0;
+  cursor: pointer;
+}
+/* Радиокнопка прозрачна, но на месте: щелчок, стрелки и фокус достаются ей. */
+.seg-item input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.seg-item span {
+  display: inline-flex;
+  align-items: center;
+  min-height: calc(var(--control-sm) - 2 * var(--space-0-5) - 2px);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.seg-item:hover span {
+  color: var(--paper);
+}
+.seg-item input:checked + span {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+.seg-item input:focus-visible + span {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* --- «Ролик» внизу свойств: пропорция и вписывание всего ролика --- */
+.roll {
+  flex: none;
+  border-top: 1px solid var(--line);
+  padding: var(--space-2) var(--space-5) var(--space-3);
+}
+.roll-head {
+  width: 100%;
+  justify-content: flex-start;
+  min-height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--text-sm);
+}
+.roll-head .fold-mark {
+  color: var(--muted);
+}
+.roll-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
 .pr-title {
   margin: 0;
   font-size: var(--text-md);
@@ -1122,8 +1261,14 @@ main.card {
 
 /* --- Сцена и плеер --- */
 
-/* Высота сцены ограничена, а ширину задаёт пропорция вывода (редактор ставит max-width от неё):
-   иначе 9:16 растягивает сцену на полторы страницы и шкала уезжает под сгиб. */
+/* Ячейка сцены — вся высота верхнего ряда. Размер самой сцены ставит редактор (layout.ts):
+   высота ряда, ширина по пропорции вывода, — поэтому 9:16 не растягивает сцену вниз. */
+.stage-cell {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
 .stage {
   background: var(--ink);
   border: 1px solid var(--line);
@@ -1131,9 +1276,6 @@ main.card {
   overflow: hidden;
   display: grid;
   place-items: center;
-  --stage-h: 52vh;
-  max-height: var(--stage-h);
-  margin-inline: auto;
 }
 /* Кадр всегда занимает сцену целиком, с сохранением пропорций: прокси меньше сцены (640 px по
    длинной стороне), и по max-width он вставал бы в свою натуральную величину, оставляя поля.
@@ -1233,9 +1375,64 @@ main.card {
 
 /* --- Шкала --- */
 
+/* Рамка шкалы: столбец заголовков дорожек и лента с прокруткой. Высоты колей — переменные,
+   их ставит шкала из laneSizes (layout.ts): те же числа рисуют кадры и волну. Значения здесь —
+   обычный режим, до первой отрисовки. */
+.tl-frame {
+  --lane-overlay: 52px;
+  --lane-track: 76px;
+  --lane-audio: 52px;
+  --lane-sound: 52px;
+  --clip-block: 72px;
+  --lane-block: 44px;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-2xl);
+}
+.tl-heads {
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 45%, var(--panel));
+}
+/* Над колеями — линейка (18 px) и полоса перемотки (16 px). */
+.tl-head-top {
+  height: 34px;
+}
+.tl-head {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Отступы и черты — те же, что у колей, иначе заголовки разъедутся с дорожками. */
+.tl-head-overlay {
+  height: var(--lane-overlay);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px dashed var(--line);
+}
+.tl-head-track {
+  height: var(--lane-track);
+}
+.tl-head-audio {
+  height: var(--lane-audio);
+}
+.tl-head-sound {
+  height: var(--lane-sound);
+  margin-top: var(--space-1);
+  border-top: 1px dashed var(--line);
+}
+
 .timeline {
   position: relative;
-  overflow-x: auto;
+  /* Полоса прокрутки всегда на месте: появляясь, когда ролик перестаёт помещаться, она меняла
+     высоту шкалы. */
+  overflow-x: scroll;
   /* Протаскивание по шкале — это перенос клипа или перемотка, но браузер по умолчанию считает
      его выделением текста: промахнулся мимо блока — и вместо движения по ленте выделил подписи.
      Своё выделение шкала рисует сама, чужое ей не нужно. */
@@ -1244,9 +1441,6 @@ main.card {
      делаем её толще системной и видимой, а не ниткой в три пикселя. */
   scrollbar-width: auto;
   scrollbar-color: var(--muted) var(--panel);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-2xl);
   /* Клип — приглушённый зелёный: он из того же семейства, что кнопка действия,
    * но не спорит с ней за внимание. Ручки и подсветка — светлее клипа. */
   --clip: color-mix(in srgb, var(--brand) 24%, var(--ink));
@@ -1265,7 +1459,7 @@ main.card {
 }
 .track {
   position: relative;
-  height: 76px;
+  height: var(--lane-track);
 }
 /* Блоки живут в своём слое. У них есть собственные номера по глубине — переходы рисуются
    внахлёст, выбранный поднимается над соседями, — и без отдельного слоя эта игра вылезала
@@ -1368,7 +1562,7 @@ main.card {
 .drop-ghost {
   position: absolute;
   top: 2px;
-  height: 72px;
+  height: var(--clip-block);
   z-index: 2;
   pointer-events: none;
   border: 2px dashed var(--brand-hover);
@@ -1384,41 +1578,22 @@ main.card {
    .blocks; ручек подрезки у них нет — подрезают на видео. */
 .track-audio {
   position: relative;
-  height: 52px;
+  height: var(--lane-audio);
 }
 .audio-block {
   top: 3px;
   background: color-mix(in srgb, var(--paper) 7%, var(--panel));
 }
-/* Подпись колеи: V1/V2 — видео, A1/A2 — звук. Липнет к левому краю, когда шкалу прокручивают:
-   без подписей четыре одинаковые полосы читались как одна каша. */
-.lane-tag {
-  position: sticky;
-  left: 6px;
-  top: 3px;
-  display: inline-block;
-  z-index: 4;
-  font-size: var(--text-xs);
-  line-height: 1;
-  padding: var(--space-0-5) var(--space-1);
-  border-radius: var(--radius-md);
-  color: var(--dim);
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
-  pointer-events: none;
-  user-select: none;
-}
-
 /* --- Свободные колеи: звуки под клипами, наложения над ними --- */
-.sound-track,
-.overlay-track {
-  position: relative;
-  height: 52px;
-}
 .sound-track {
+  position: relative;
+  height: var(--lane-sound);
   margin-top: var(--space-1);
   border-top: 1px dashed var(--line);
 }
 .overlay-track {
+  position: relative;
+  height: var(--lane-overlay);
   margin-bottom: var(--space-1);
   border-bottom: 1px dashed var(--line);
 }
@@ -1429,7 +1604,8 @@ main.card {
   content: attr(data-empty);
   position: absolute;
   left: 8px;
-  top: 17px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--dim);
   font-size: var(--text-xs);
   white-space: nowrap;
@@ -1440,7 +1616,7 @@ main.card {
 .lane-block {
   position: absolute;
   top: 3px;
-  height: 44px;
+  height: var(--lane-block);
   overflow: hidden;
   border: 1px solid var(--line);
   cursor: grab;
@@ -1599,9 +1775,8 @@ main.card {
   pointer-events: none;
 }
 
-/* Панель над шкалой: три группы через тонкую черту — просмотр, правка шкалы, каким выйдет файл.
-   Одной строкой без границ четырнадцать кнопок читались как один список равных по важности вещей,
-   и «Разрезать» стояло рядом с «30 к/с», хотя это разговоры о разном. */
+/* Строка инструментов над шкалой: группы через тонкую черту — отмена, просмотр, правка шкалы,
+   масштаб. Одной строкой без границ кнопки читались как один список равных по важности вещей. */
 .bar-edit {
   align-items: center;
   gap: 0;
@@ -1621,10 +1796,23 @@ main.card {
   padding-left: 0;
   border-left: 0;
 }
-/* Настройки вывода уходят вправо: их задают раз на проект, а не в каждой правке. */
-#ed-out-group {
+/* «?» — у правого края строки, без черты: от групп правки его отделяет пустое место. */
+#ed-help-group {
   margin-left: auto;
   margin-right: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+/* Длительность не толкает строку: цифры одной ширины и место под «из 1:23:45.6». */
+#ed-total {
+  min-width: 12ch;
+  font-variant-numeric: tabular-nums;
+}
+/* Уже 1220 px строка целиком не помещается — переносится по группам, как раньше. */
+@media (max-width: 1219px) {
+  .editor > .bar-edit {
+    flex-wrap: wrap;
+  }
 }
 
 /* Свойства выбранного клипа: своя рамка, потому что это разговор про один кусок, а не про ролик. */
