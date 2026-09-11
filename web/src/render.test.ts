@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Asset } from './assets'
-import type { ProjectDoc, RenderOptions } from './project'
+import type { JobListItem, ProjectDoc, RenderOptions } from './project'
 import {
   estimateRenderBytes,
   estimateRenderMinutes,
@@ -8,6 +8,7 @@ import {
   outputSize,
   renderLabel,
   renderSummary,
+  runningRenderFromJobs,
   sizeOptions,
   sourceStats,
   sourcesLine,
@@ -236,5 +237,43 @@ describe('наложения в сводке', () => {
     const text = renderSummary({ ...doc, overlays: [overlay, { ...overlay, id: 'o2' }] }, opts(), 60)
     expect(text).toContain('Поверх основы: 2 наложения.')
     expect(renderSummary(doc, opts(), 60)).not.toContain('Поверх основы')
+  })
+})
+
+describe('подхват идущей сборки', () => {
+  const listed = (over: Partial<JobListItem>): JobListItem => ({
+    id: 'job_1',
+    type: 'render',
+    status: 'running',
+    progress: 0.5,
+    error: null,
+    created_at: '2026-09-11T10:00:00Z',
+    finished_at: null,
+    label: 'Ролик',
+    cancelable: true,
+    quality: 'medium',
+    target_id: 'prj_1',
+    owner_email: 'li@example.com',
+    owner_name: 'Лиза',
+    ...over,
+  })
+
+  it('находит живую сборку своего проекта; чужие проекты и другие задания не берёт', () => {
+    const jobs = [
+      listed({ id: 'job_other', target_id: 'prj_2' }),
+      listed({ id: 'job_conv', type: 'convert' }),
+      listed({ id: 'job_done', status: 'done' }),
+      listed({ id: 'job_mine' }),
+    ]
+    expect(runningRenderFromJobs(jobs, 'prj_1')?.id).toBe('job_mine')
+    expect(runningRenderFromJobs(jobs, 'prj_3')).toBeNull()
+  })
+
+  it('из нескольких берёт самую раннюю: она и выполняется', () => {
+    const jobs = [
+      listed({ id: 'job_late', status: 'queued', created_at: '2026-09-11T10:05:00Z' }),
+      listed({ id: 'job_early', created_at: '2026-09-11T10:00:00Z' }),
+    ]
+    expect(runningRenderFromJobs(jobs, 'prj_1')?.id).toBe('job_early')
   })
 })

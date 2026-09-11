@@ -7,6 +7,7 @@
  */
 import { POLL_MS } from './assets'
 import { escapeHtml } from './html'
+import { ownedBy, ownerLabel } from './overview'
 import { cancelJob, listJobs, type JobListItem, type RenderQuality } from './project'
 
 export const FLASH_MS = 2000
@@ -20,6 +21,8 @@ export type WorkJob = {
   label: string
   cancelable: boolean
   quality: RenderQuality | null
+  /** Чьё, если не моё: админ видит ход всей команды, и без имени не понять, чья это сборка. */
+  owner: string | null
 }
 
 export type UploadWork = {
@@ -75,11 +78,12 @@ const QUALITY_OF: Record<RenderQuality, string> = {
 }
 
 export function jobTitle(job: WorkJob): string {
+  const who = job.owner ? ` · ${job.owner}` : ''
   if (job.type === 'render') {
     const kind = QUALITY_OF[job.quality ?? 'draft'] ?? QUALITY_OF.draft
-    return `Сборка ${kind} «${job.label}»`
+    return `Сборка ${kind} «${job.label}»${who}`
   }
-  return `${VERB[job.type]} «${job.label}»`
+  return `${VERB[job.type]} «${job.label}»${who}`
 }
 
 function live(status: WorkJob['status']): boolean {
@@ -209,7 +213,8 @@ export function emptyWork(): WorkState {
   return { jobs: [], uploads: [], dismissed: [], heldFailed: [], flashes: [], uploadFails: [] }
 }
 
-export function toWorkJob(job: JobListItem): WorkJob {
+/** myEmail — чья это шапка: свои задания идут без подписи, чужие подписаны владельцем. */
+export function toWorkJob(job: JobListItem, myEmail: string): WorkJob {
   return {
     id: job.id,
     type: job.type,
@@ -219,6 +224,7 @@ export function toWorkJob(job: JobListItem): WorkJob {
     label: job.label,
     cancelable: job.cancelable,
     quality: job.quality,
+    owner: ownedBy(job, myEmail) ? null : ownerLabel(job),
   }
 }
 
@@ -233,12 +239,13 @@ export type TrackedUpload = {
 
 export type WorkControls = {
   trackUpload: (name: string) => TrackedUpload
-  start: () => void
+  start: (myEmail: string) => void
   stop: () => void
 }
 
 export function mountWork(el: HTMLElement): WorkControls {
   let state = emptyWork()
+  let myEmail = ''
   let running = false
   let stale = false
   let seq = 0
@@ -330,7 +337,7 @@ export function mountWork(el: HTMLElement): WorkControls {
       const { jobs } = await listJobs()
       if (!running) return
       stale = false
-      state = foldIncoming(state, jobs.map(toWorkJob), Date.now())
+      state = foldIncoming(state, jobs.map(job => toWorkJob(job, myEmail)), Date.now())
     } catch {
       if (!running) return
       stale = true
@@ -338,7 +345,8 @@ export function mountWork(el: HTMLElement): WorkControls {
     draw()
   }
 
-  function start(): void {
+  function start(email: string): void {
+    myEmail = email
     if (running) return
     running = true
     void poll()

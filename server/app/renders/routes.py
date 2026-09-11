@@ -1,7 +1,8 @@
 """Готовые ролики и ход заданий: /api/v1/renders, /api/v1/jobs.
 
 Всё фильтруется по владельцу: чужой идентификатор даёт 404, а не 403 — существование чужих
-объектов наружу не подтверждаем.
+объектов наружу не подтверждаем. Исключение — админ: он видит задания и ролики всей команды,
+как видит её проекты и записи.
 """
 from __future__ import annotations
 
@@ -43,6 +44,9 @@ class JobListItem(BaseModel):
     cancelable: bool
     quality: str | None
     target_id: str
+    # Чьё задание. Обычному человеку отдаём только его собственные, админу — всей команды.
+    owner_email: str
+    owner_name: str
 
 
 class JobList(BaseModel):
@@ -96,7 +100,7 @@ def list_jobs(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> JobList:
-    rows = list_jobs_for_user(conn, user.id, now=utcnow())
+    rows = list_jobs_for_user(conn, user.id, now=utcnow(), everyone=user.role == "admin")
     return JobList(jobs=[JobListItem(**row) for row in rows])
 
 

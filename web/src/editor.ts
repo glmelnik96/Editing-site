@@ -247,6 +247,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     stop: () => void
     setDoc: (doc: ProjectDoc, name?: string) => void
     setAssets: (list: Asset[]) => void
+    wake: () => void
   } | null = null
   let assetTimer = 0
   const analysisCache = new Map<string, { start: number; end: number }[] | null>()
@@ -873,6 +874,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function showTab(name: EditorTab): void {
     if (!tabEnabled(name, clipCount(), hasReadyRender)) return
+    const reopened = name !== tab && mounted.has(name)
     tab = name
     panels.forEach((panel, key) => {
       panel.hidden = key !== name
@@ -882,6 +884,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       if (button.dataset.tab === name) button.classList.remove('news')
     })
     openPanel(name)
+    // Вкладку открыли снова: сборку могли поставить, пока панель жила в тени.
+    if (reopened && name === 'renders') renders?.wake()
   }
 
   tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>

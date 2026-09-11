@@ -62,13 +62,17 @@ export function ownerLabel(owner: { owner_email: string; owner_name: string }): 
   return owner.owner_name.trim() || owner.owner_email
 }
 
+/** Моё ли это. Почту сравниваем без регистра и пробелов: так же её хранит сервер. */
+export function ownedBy(item: { owner_email: string }, myEmail: string): boolean {
+  return item.owner_email.trim().toLowerCase() === myEmail.trim().toLowerCase()
+}
+
 /**
  * Только чужое. Своё человек и так видит в своём списке сразу над этим, а одно и то же дважды
- * подряд — шум. Почту сравниваем без регистра и пробелов: так же её хранит сервер.
+ * подряд — шум.
  */
 export function othersOnly<T extends { owner_email: string }>(items: T[], myEmail: string): T[] {
-  const me = myEmail.trim().toLowerCase()
-  return items.filter(item => item.owner_email.trim().toLowerCase() !== me)
+  return items.filter(item => !ownedBy(item, myEmail))
 }
 
 export function loadTeamProjects(): Promise<TeamProject[]> {

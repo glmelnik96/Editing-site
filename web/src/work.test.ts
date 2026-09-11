@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { FLASH_MS, foldIncoming, jobTitle, workRows, type WorkJob, type WorkState } from './work'
+import type { JobListItem } from './project'
+import { FLASH_MS, foldIncoming, jobTitle, toWorkJob, workRows, type WorkJob, type WorkState } from './work'
 
 const job = (over: Partial<WorkJob> = {}): WorkJob => ({
   id: 'job_1',
@@ -10,6 +11,7 @@ const job = (over: Partial<WorkJob> = {}): WorkJob => ({
   label: 'Нарезка.mp4',
   cancelable: false,
   quality: null,
+  owner: null,
   ...over,
 })
 
@@ -39,6 +41,41 @@ describe('подписи', () => {
     )
     expect(jobTitle(job({ type: 'render', quality: null, label: 'Ролик' }))).toBe('Сборка черновика «Ролик»')
     expect(jobTitle(job({ type: 'convert', label: 'утренний.mp3' }))).toBe('Конвертер «утренний.mp3»')
+  })
+
+  it('подписывает чужое задание владельцем', () => {
+    expect(jobTitle(job({ owner: 'Лиза' }))).toBe('Анализ «Нарезка.mp4» · Лиза')
+    expect(jobTitle(job({ type: 'render', quality: 'medium', label: 'Ролик', owner: 'Лиза' }))).toBe(
+      'Сборка в среднем качестве «Ролик» · Лиза',
+    )
+  })
+})
+
+describe('чьё задание', () => {
+  const listed = (over: Partial<JobListItem> = {}): JobListItem => ({
+    id: 'job_1',
+    type: 'render',
+    status: 'running',
+    progress: 0.4,
+    error: null,
+    created_at: '',
+    finished_at: null,
+    label: 'Ролик',
+    cancelable: true,
+    quality: 'medium',
+    target_id: 'prj_1',
+    owner_email: 'li@example.com',
+    owner_name: 'Лиза',
+    ...over,
+  })
+
+  it('своё без подписи, даже если почта написана иначе', () => {
+    expect(toWorkJob(listed(), ' Li@Example.com ').owner).toBeNull()
+  })
+
+  it('чужое подписано именем, а без имени — почтой', () => {
+    expect(toWorkJob(listed(), 'me@example.com').owner).toBe('Лиза')
+    expect(toWorkJob(listed({ owner_name: ' ' }), 'me@example.com').owner).toBe('li@example.com')
   })
 })
 

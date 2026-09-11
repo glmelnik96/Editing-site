@@ -77,7 +77,7 @@ cd web && npm test
 
 ### Рендер (M3)
 
-- `POST /api/v1/projects/{id}/render` `{quality: "draft" | "final"}` → `202` и `job_id`. Ход одного задания — `GET /api/v1/jobs/{job_id}` (`progress` от 0 до 1), отмена — `POST /api/v1/jobs/{job_id}/cancel`. `GET /api/v1/jobs` — список своих заданий в `queued`/`running` и закончившихся за последние 30 с; у строки есть `label`, `cancelable`, у сборки `quality`.
+- `POST /api/v1/projects/{id}/render` `{quality: "draft" | "final"}` → `202` и `job_id`. Ход одного задания — `GET /api/v1/jobs/{job_id}` (`progress` от 0 до 1), отмена — `POST /api/v1/jobs/{job_id}/cancel`. `GET /api/v1/jobs` — список своих заданий в `queued`/`running` и закончившихся за последние 30 с (админу — задания всей команды); у строки есть `label`, `cancelable`, `target_id`, владелец `owner_email`/`owner_name`, у сборки `quality`.
 - `GET /api/v1/projects/{id}/renders` — готовые ролики со ссылкой `download`; `GET|DELETE /api/v1/renders/{id}` — карточка и удаление.
 - Черновик: короткая сторона 720, пресет `ultrafast`, CRF 26, звук 128 кбит. Финал: 1080, `veryfast`, CRF 20, 160 кбит. Разрешение выводится из пропорции проекта.
 - Готовый файл живёт сутки и скачивается по `/files/{user}/projects/{project}/renders/{id}.mp4` с `Content-Disposition: attachment`.

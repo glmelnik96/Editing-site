@@ -328,6 +328,9 @@ export type JobListItem = {
   cancelable: boolean
   quality: RenderQuality | null
   target_id: string
+  /** Чьё задание: обычному человеку сервер отдаёт только его, админу — всей команды. */
+  owner_email: string
+  owner_name: string
 }
 
 export function listJobs(): Promise<{ jobs: JobListItem[] }> {

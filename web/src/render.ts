@@ -5,11 +5,13 @@ import { escapeHtml } from './html'
 import {
   cancelJob,
   deleteRender,
+  listJobs,
   listRenders,
   loadJob,
   overlaysOf,
   soundsOf,
   startRender,
+  type JobListItem,
   type JobView,
   type ProjectDoc,
   type RenderCard,
@@ -257,6 +259,18 @@ function saveOptions(options: RenderOptions): void {
   }
 }
 
+/**
+ * Идущая сборка этого проекта среди заданий с GET /jobs, если она есть.
+ *
+ * Из нескольких берём самую раннюю: она и выполняется, остальные ждут за ней в очереди.
+ */
+export function runningRenderFromJobs(items: JobListItem[], projectId: string): JobListItem | null {
+  const live = items
+    .filter(job => job.type === 'render' && job.target_id === projectId && RUNNING.has(job.status))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+  return live[0] ?? null
+}
+
 export function mountRender(
   el: HTMLElement,
   projectId: string,
@@ -324,6 +338,7 @@ export function mountRender(
   let jobId: string | null = null
   let timer: number | undefined
   let stopped = false // ушли с экрана — опрос дальше не идёт
+  let adopted = false // сборку поставила не эта панель: другой человек или другая вкладка
 
   const showError = (e: unknown) => {
     errorBox.hidden = false
@@ -389,7 +404,8 @@ export function mountRender(
 
   function showJob(status: JobView['status']): void {
     jobBox.hidden = false
-    statusBox.textContent = RUNNING.has(status) ? 'Собираю — ход вверху' : (JOB_TEXT[status] ?? status)
+    const running = adopted ? 'Сборка уже идёт — ход вверху' : 'Собираю — ход вверху'
+    statusBox.textContent = RUNNING.has(status) ? running : (JOB_TEXT[status] ?? status)
     cancelButton.hidden = !RUNNING.has(status)
     startButton.disabled = RUNNING.has(status) || empty
   }
@@ -469,6 +485,25 @@ export function mountRender(
     }
   }
 
+  /**
+   * Подхватить сборку, которую запустила не эта панель.
+   *
+   * Сборку мог поставить другой человек — админ открывает чужие проекты — или тот же, но в другой
+   * вкладке или до перезагрузки страницы. Панель знала только своё задание и такому проекту
+   * показывала свободную кнопку «Собрать»: вторая сборка встала бы в очередь за первой.
+   */
+  async function adopt(): Promise<void> {
+    if (stopped || jobId) return
+    const { jobs } = await listJobs()
+    if (stopped || jobId) return
+    const found = runningRenderFromJobs(jobs, projectId)
+    if (!found) return
+    jobId = found.id
+    adopted = true
+    showJob(found.status)
+    scheduleNext()
+  }
+
   async function start(): Promise<void> {
     clearError()
     startButton.disabled = true
@@ -486,6 +521,7 @@ export function mountRender(
       const { job_id } = await startRender(projectId, options)
       if (stopped) return
       jobId = job_id
+      adopted = false
       showJob('queued')
       scheduleNext()
     } catch (e) {
@@ -510,6 +546,7 @@ export function mountRender(
 
   sync()
   void refresh().catch(showError)
+  void adopt().catch(showError)
 
   return {
     /** Имя проекта нужно ссылке скачивания: без него файл сохраняется под внутренним номером. */
@@ -526,6 +563,10 @@ export function mountRender(
     setAssets(list: Asset[]): void {
       assets = list
       sync()
+    },
+    /** Вкладку открыли снова: сборку могли поставить, пока панель жила в тени. */
+    wake(): void {
+      void adopt().catch(showError)
     },
     /** Остановить опрос: редактор зовёт при уходе с экрана. */
     stop(): void {

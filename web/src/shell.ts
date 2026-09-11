@@ -68,7 +68,7 @@ export function mountShell(root: HTMLElement): Shell {
       location.hash = '#/'
       location.reload()
     })
-    work.start()
+    work.start(me.email)
   }
 
   function clearUser(): void {

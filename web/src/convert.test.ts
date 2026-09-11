@@ -81,6 +81,8 @@ describe('convert screen helpers', () => {
         cancelable: true,
         quality: null,
         target_id: 'ast_1',
+        owner_email: 'a@b.c',
+        owner_name: 'A',
       },
       {
         id: 'job_2',
@@ -94,6 +96,8 @@ describe('convert screen helpers', () => {
         cancelable: true,
         quality: 'draft',
         target_id: 'prj_1',
+        owner_email: 'a@b.c',
+        owner_name: 'A',
       },
       {
         id: 'job_3',
@@ -107,6 +111,8 @@ describe('convert screen helpers', () => {
         cancelable: false,
         quality: null,
         target_id: 'ast_1',
+        owner_email: 'a@b.c',
+        owner_name: 'A',
       },
     ])
     expect(rows).toEqual([

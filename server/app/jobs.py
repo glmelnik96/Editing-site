@@ -28,19 +28,30 @@ def job_label(type_: str, asset_name: str | None, project_name: str | None) -> s
     return asset_name or project_name or ""
 
 
-def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime) -> list[dict]:
+def list_jobs_for_user(
+    conn: sqlite3.Connection, user_id: str, *, now: datetime, everyone: bool = False
+) -> list[dict]:
+    """Живые и только что законченные задания человека; с everyone — всей команды.
+
+    everyone — для админа. Сборку в чужом проекте он мог поставить сам, а числится она за
+    владельцем; и идущую чужую сборку ему надо видеть и уметь снять, не залезая в базу. Каждая
+    строка называет владельца (owner_email, owner_name): в общем списке иначе не понять, чья
+    это «Сборка «Ролик»».
+    """
     cutoff = iso(now - timedelta(seconds=RECENT_SEC))
     rows = conn.execute(
         """
         SELECT jobs.id, jobs.type, jobs.status, jobs.progress, jobs.error, jobs.created_at,
                jobs.finished_at, jobs.params, jobs.target_id,
-               assets.original_name AS asset_name, projects.name AS project_name
+               assets.original_name AS asset_name, projects.name AS project_name,
+               users.email AS owner_email, users.name AS owner_name
         FROM jobs
+        LEFT JOIN users ON users.id = jobs.user_id
         LEFT JOIN assets
           ON assets.id = jobs.target_id AND jobs.type IN ('analyze', 'proxy', 'transcribe', 'convert')
         LEFT JOIN projects
           ON projects.id = jobs.target_id AND jobs.type = 'render'
-        WHERE jobs.user_id = ?
+        WHERE (jobs.user_id = ? OR ?)
           AND (
             jobs.status IN ('queued', 'running')
             OR (
@@ -52,7 +63,7 @@ def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime)
         ORDER BY jobs.created_at DESC
         LIMIT ?
         """,
-        (user_id, cutoff, LIST_LIMIT),
+        (user_id, everyone, cutoff, LIST_LIMIT),
     ).fetchall()
     out: list[dict] = []
     for row in rows:
@@ -71,6 +82,8 @@ def list_jobs_for_user(conn: sqlite3.Connection, user_id: str, *, now: datetime)
                 "cancelable": job_cancelable(row["type"], row["status"]),
                 "quality": quality if quality in RENDER_QUALITIES else None,
                 "target_id": row["target_id"],
+                "owner_email": row["owner_email"] or "",
+                "owner_name": row["owner_name"] or "",
             }
         )
     return out

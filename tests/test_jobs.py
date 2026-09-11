@@ -165,9 +165,28 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
     assert len(rows) <= LIST_LIMIT
     analyze = next(r for r in rows if r["id"] == open_id)
     assert analyze["label"] == "Нарезка.mp4" and analyze["cancelable"] is False
+    assert analyze["owner_email"] == "a@b.c" and analyze["owner_name"] == "A"
     render = next(r for r in rows if r["id"] == fresh)
     assert render["label"] == "Ролик" and render["quality"] == "draft" and render["cancelable"] is False
     converting = enqueue_job(conn, user_id=uid, type_="convert", target_id="ast_list1")
     conv = next(r for r in list_jobs_for_user(conn, uid, now=now) if r["id"] == converting)
     assert conv["label"] == "Нарезка.mp4" and conv["cancelable"] is True
     assert conv["target_id"] == "ast_list1"
+
+
+def test_list_for_everyone_names_owners(conn):
+    """Админ видит задания всей команды и понимает, чьё какое: сборку в чужом проекте он мог
+    поставить сам, а чужую идущую — захотеть снять."""
+    now = datetime(2026, 9, 11, 12, 0, 0, tzinfo=UTC)
+    uid = "usr_000000000001"
+    conn.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES ('usr_otheruser01', 'o@b.c', '', ?)",
+        (now_iso(),),
+    )
+    mine = enqueue_job(conn, user_id=uid, type_="render", target_id="prj_x")
+    other = enqueue_job(conn, user_id="usr_otheruser01", type_="render", target_id="prj_y")
+    rows = {r["id"]: r for r in list_jobs_for_user(conn, uid, now=now, everyone=True)}
+    assert set(rows) == {mine, other}
+    assert rows[mine]["owner_email"] == "a@b.c" and rows[mine]["owner_name"] == "A"
+    assert rows[other]["owner_email"] == "o@b.c" and rows[other]["owner_name"] == ""
+    assert [r["id"] for r in list_jobs_for_user(conn, uid, now=now)] == [mine]
