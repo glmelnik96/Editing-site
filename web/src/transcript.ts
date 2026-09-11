@@ -126,7 +126,7 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
     <main class="card">
       ${foldHtml(
         'tr',
-        'Взять реплику',
+        'Выбрать реплику',
         `<p class="muted" id="tr-hint">Выберите файл, чтобы монтировать по тексту.</p>
         <div id="tr-start" hidden>
           <div class="row">

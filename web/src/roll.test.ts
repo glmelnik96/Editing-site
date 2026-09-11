@@ -3,8 +3,8 @@ import { FPS_ITEMS, nextRollFold, rollSummary } from './roll'
 
 describe('блок «Ролик»', () => {
   it('сводка называет пропорцию и вписывание', () => {
-    expect(rollSummary({ aspect: '16:9', fit: 'pad' })).toBe('Ролик · 16:9 · поля')
-    expect(rollSummary({ aspect: '9:16', fit: 'crop' })).toBe('Ролик · 9:16 · обрезка')
+    expect(rollSummary({ aspect: '16:9', fit: 'pad' })).toBe('Таймлайн · 16:9 · поля')
+    expect(rollSummary({ aspect: '9:16', fit: 'crop' })).toBe('Таймлайн · 9:16 · обрезка')
   })
 
   it('без выбора раскрыт, с выбором свёрнут', () => {

@@ -52,7 +52,7 @@ export function sourceBlocks(s: SourceState): { add: string | null; over: string
     : !s.longEnough
       ? 'Кусок короче 0.1 с — раздвиньте границы'
       : null
-  return { add, over: add ?? (s.overlayable ? null : 'Поверх кладутся только картинки и видео') }
+  return { add, over: add ?? (s.overlayable ? null : 'На V2 кладутся только картинки и видео') }
 }
 
 export function tabBlock(enabled: boolean): string | null {

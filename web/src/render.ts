@@ -195,7 +195,7 @@ function duckLine(doc: ProjectDoc): string | null {
 function soundsLine(doc: ProjectDoc): string | null {
   const n = soundsOf(doc).length
   if (!n) return null
-  return `Дорожка «Звуки»: ${n} ${plural(n, 'звук', 'звука', 'звуков')}.`
+  return `Дорожка A2: ${n} ${plural(n, 'звук', 'звука', 'звуков')}.`
 }
 
 function overlaysLine(doc: ProjectDoc): string | null {
@@ -299,19 +299,16 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
   let empty = true
   el.innerHTML = `
     <main class="card">
-      <h3>Сборка</h3>
+      <h3>Рендер</h3>
       <!-- Сначала — каким будет ролик, потом — каким файлом его отдать: список разрешений зависит
-           от пропорции. Пропорция и вписывание — те же, что внизу «Свойств». -->
-      <section class="rnd-block" aria-label="Ролик">
-        <p class="rnd-title">Ролик</p>
+           от пропорции. Пропорция и растяжка кадра — те же, что в блоке «Таймлайн» у «Свойств». -->
+      <section class="rnd-block" aria-label="Параметры ролика">
+        <p class="rnd-title">Параметры ролика</p>
         ${segmentedHtml('rnd-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
-        ${segmentedHtml('rnd-fit', 'Вписывание', FIT_ITEMS, 'pad', FIT_HINT)}
+        ${segmentedHtml('rnd-fit', 'Растянуть кадр', FIT_ITEMS, 'pad', FIT_HINT)}
         ${segmentedHtml('rnd-fps', 'Кадров в секунду', FPS_ITEMS, '30')}
         <label class="burn"><input id="rnd-burn" type="checkbox" /> Вшить субтитры</label>
         <p class="meta" id="rnd-burn-note" hidden></p>
-      </section>
-      <section class="rnd-block" aria-label="Файл">
-        <p class="rnd-title">Файл</p>
         <div class="render-opts">
           <label>Формат
             <select id="rnd-format">
@@ -343,7 +340,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
            он в пять строк закрывал в низкой панели все настройки. -->
       <div class="rnd-go">
         <div class="row">
-          <button id="rnd-start" type="button">Собрать</button>
+          <button id="rnd-start" type="button" class="btn btn-key">Отрендерить</button>
         </div>
         <div id="rnd-job" hidden>
           <span class="muted" id="rnd-status"></span>

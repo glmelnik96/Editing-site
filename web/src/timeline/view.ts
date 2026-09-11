@@ -80,14 +80,14 @@ function waveCanvas(bars: number[], width: number, height: number): HTMLCanvasEl
 export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   el.innerHTML = `
     <div class="tl-frame" id="tl-frame">
-      <!-- Заголовки дорожек — словами и в своём столбце, который не прокручивается: плашки
-           V2/V1/A1/A2 на самой ленте закрывали подпись первого клипа и ничего не объясняли. -->
+      <!-- Заголовки дорожек — в своём столбце, который не прокручивается: плашки на самой ленте
+           закрывали подпись первого клипа. Коды — как в монтажных программах, расшифровка в подсказке. -->
       <div class="tl-heads">
         <div class="tl-head-top"></div>
-        <div class="tl-head tl-head-overlay" title="Картинки и видео поверх клипов">Наложения</div>
-        <div class="tl-head tl-head-track" title="Клипы ролика по порядку">Клипы</div>
-        <div class="tl-head tl-head-audio" title="Звук клипов — двигается вместе с ними">Звук клипов</div>
-        <div class="tl-head tl-head-sound" title="Озвучка, шумы и музыка со своим местом">Звуки</div>
+        <div class="tl-head tl-head-overlay" title="V2 — наложения: картинки и видео поверх клипов">V2</div>
+        <div class="tl-head tl-head-track" title="V1 — клипы ролика по порядку">V1</div>
+        <div class="tl-head tl-head-audio" title="A1 — звук клипов, двигается вместе с ними">A1 (клипов)</div>
+        <div class="tl-head tl-head-sound" title="A2 — озвучка, шумы и музыка со своим местом">A2</div>
       </div>
       <div class="timeline" id="tl-view">
         <div class="ruler" id="tl-ruler"></div>
@@ -98,7 +98,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           <!-- Наложения — колея над клипами: картинка или видео поверх основы лежат по своему
                времени и клипы не сдвигают. Пустая видна всегда, как и звуки. -->
           <div class="overlay-track empty" id="tl-overlays"
-            data-empty="Картинка или видео поверх клипов. В «Исходниках» — кнопка «Поверх видео»"></div>
+            data-empty="Картинка или видео поверх клипов. В «Исходниках» — кнопка «на V2»"></div>
           <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
           <!-- Звук клипов — своя колея под картинкой, привязанная к ней: блок звука повторяет блок
                клипа, выбирается и двигается вместе с ним, а волну речи читают на своей высоте. -->
@@ -107,7 +107,7 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
                Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу под руками,
                а подпись в ней объясняет, откуда туда класть. -->
           <div class="sound-track empty" id="tl-sounds"
-            data-empty="Озвучка, шумы и музыка поверх речи. Положите звук из «Исходников»"></div>
+            data-empty="Озвучка, шумы и музыка поверх речи. В «Исходниках» — кнопка «на A2»"></div>
           <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
         </div>
       </div>

@@ -45,7 +45,7 @@ describe('серые кнопки исходника и вкладки', () => {
 
   it('поверх — только картинки и видео, и сперва причина «добавить»', () => {
     expect(sourceBlocks({ hasFile: true, longEnough: true, overlayable: false }).over).toBe(
-      'Поверх кладутся только картинки и видео',
+      'На V2 кладутся только картинки и видео',
     )
     expect(sourceBlocks({ hasFile: false, longEnough: false, overlayable: true }).over).toBe('Сначала выберите файл выше')
     expect(sourceBlocks({ hasFile: true, longEnough: true, overlayable: true })).toEqual({ add: null, over: null })

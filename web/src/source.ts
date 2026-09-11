@@ -50,7 +50,12 @@ export function canOverlay(kind: string | undefined): boolean {
 
 /** Надпись кнопки: куда ляжет кусок. Звук не встаёт в очередь клипов, и кнопка обязана это сказать. */
 export function addLabel(kind: string | undefined): string {
-  return kind === 'audio' ? 'Положить на дорожку «Звуки»' : 'Добавить в шкалу'
+  return kind === 'audio' ? 'на A2' : 'на V1'
+}
+
+/** Подсказка той же кнопки: куда именно ляжет кусок. */
+export function addTitle(kind: string | undefined): string {
+  return kind === 'audio' ? 'Звук ляжет на дорожку A2 — под курсор шкалы' : 'Кусок встанет в конец основы — на дорожку V1'
 }
 
 export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
@@ -60,21 +65,21 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   el.innerHTML = `
     <main class="card">
       <select id="src-pick"><option value="">— выберите файл —</option></select>
-      <!-- Главное действие — сразу под выбором файла: в низкой панели монтажки (258 px на 1280×800)
-           плеер и фрагмент уводили «Добавить в шкалу» под прокрутку. Подпись слева говорит, что
-           ляжет на шкалу: весь файл или отмеченный кусок. Заголовка «Исходники» нет — его называет
+      <div id="src-player"></div>
+      <!-- Положить на таймлайн — сразу под роликом: сначала смотрят, что взяли, потом кладут.
+           «на V1» — в основу ролика, «на V2» — поверх основы. Без выбранного отрезка ляжет весь
+           файл: об этом говорит подпись под складками. Заголовка «Исходники» нет — его называет
            вкладка. -->
+      <p class="src-put">Положить на таймлайн</p>
       <div class="row src-add-row">
-        <span id="src-range" class="muted">весь файл</span>
-        <button id="src-add" type="button">Добавить в шкалу</button>
+        <button id="src-add" type="button" title="Кусок встанет в конец основы — на дорожку V1">на V1</button>
         <button id="src-over" type="button"
-          title="Картинка или видео поверх основы — под курсор шкалы">Поверх видео</button>
+          title="Картинка или видео поверх основы — на дорожку V2, под курсор шкалы">на V2</button>
       </div>
       <p class="muted" id="src-note"></p>
-      <div id="src-player"></div>
       ${foldHtml(
         'src-cut',
-        'Взять фрагмент',
+        'Выбрать фрагмент',
         `<div id="src-piece">
           <div class="src-strip" id="src-strip" title="Клик — перемотка, ручки — границы куска">
             <div class="src-sel" id="src-sel"></div>
@@ -114,7 +119,6 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   const secsInput = el.querySelector('#src-secs') as HTMLInputElement
   const inputIn = el.querySelector('#src-in') as HTMLInputElement
   const inputOut = el.querySelector('#src-out') as HTMLInputElement
-  const rangeLabel = el.querySelector('#src-range') as HTMLElement
   const addButton = el.querySelector('#src-add') as HTMLButtonElement
   const overButton = el.querySelector('#src-over') as HTMLButtonElement
   const note = el.querySelector('#src-note') as HTMLElement
@@ -138,7 +142,6 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     stillBox.hidden = !still
     if (still) {
       if (document.activeElement !== secsInput) secsInput.value = String(to)
-      rangeLabel.textContent = `картинка на ${formatTimecode(to)}`
       const stillBlocks = sourceBlocks({ hasFile: true, longEnough: to >= MIN_PIECE, overlayable: true })
       setBlocked(addButton, stillBlocks.add)
       setBlocked(overButton, stillBlocks.over)
@@ -155,11 +158,6 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     if (document.activeElement !== inputOut) inputOut.value = formatTimecode(to)
     inputIn.classList.remove('bad')
     inputOut.classList.remove('bad')
-    // Звук ляжет туда, где стоит курсор шкалы, а не в конец: так озвучку кладут под нужное место.
-    rangeLabel.textContent = current
-      ? `кусок ${formatTimecode(to - from)} из ${formatTimecode(total)}` +
-        (current.kind === 'audio' ? ' — ляжет под курсор' : '')
-      : 'весь файл'
     const blocks = sourceBlocks({
       hasFile: current !== null,
       longEnough: to - from >= MIN_PIECE,
@@ -252,6 +250,9 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     }
     if (asset?.kind === 'image') secsInput.value = String(STILL_DEFAULT)
     addButton.textContent = addLabel(asset?.kind)
+    // Подсказку серой кнопки хранит setBlocked: меняем и её, иначе у звука осталась бы подсказка про V1.
+    addButton.dataset.plainTitle = addTitle(asset?.kind)
+    addButton.title = addTitle(asset?.kind)
     const player = video()
     if (player) {
       // Останавливаемся на конце выделения только во время просмотра. Раньше время зажималось

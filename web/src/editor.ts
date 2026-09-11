@@ -105,9 +105,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
           </nav>
         </div>
         <div class="side-body" id="ed-side-body">
-          <div id="ed-source" data-panel="source">
+          <!-- Исходник, фрагмент и реплика — одно окно: файл у всех способов один, разный только
+               способ отрезать. Подпись под складками говорит, что будет без выбранного отрезка. -->
+          <div id="ed-source" class="card src-window" data-panel="source">
             <div id="ed-source-main"></div>
             <div id="ed-transcript"></div>
+            <p class="meta src-cut-hint">Выбрать конкретный отрезок видео, без этого ролик будет помещён целиком</p>
           </div>
           <div id="ed-subtitles" data-panel="subtitles" hidden></div>
           <section id="ed-renders" data-panel="renders" hidden></section>
@@ -120,9 +123,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
            панель читается сверху вниз и показывает только то, что у куска есть. Заголовка над ней
            нет: она сама называет, что выбрано. -->
       <section class="props" id="ed-props">
+        <!-- «Таймлайн» всегда сверху: пропорцию и растяжку кадра видно и при выбранном куске. -->
+        <section class="roll" id="ed-roll" aria-label="Настройки таймлайна"></section>
         <div class="props-body" id="ed-props-body"></div>
-        <!-- «Ролик» прибит к низу панели: пропорцию и вписывание видно и при выбранном куске. -->
-        <section class="roll" id="ed-roll" aria-label="Настройки ролика"></section>
       </section>
       <!-- Одна строка во всю ширину, группы через черту: отмена, просмотр, правка шкалы, масштаб;
            «?» — у правого края. Настройки готового файла живут в «Свойствах» и во вкладке «Рендер»:

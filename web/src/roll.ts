@@ -1,5 +1,5 @@
 /**
- * Блок «Ролик» внизу «Свойств»: пропорция и вписывание всего ролика.
+ * Блок «Таймлайн» наверху «Свойств»: пропорция и растяжка кадра всего ролика.
  *
  * Эти настройки меняют то, что видно на сцене, поэтому живут рядом с ней, а не только во вкладке
  * «Рендер». Когда на шкале выбран кусок, блок свёрнут в строку сводки: сводку видно всегда,
@@ -22,7 +22,7 @@ export const FIT_HINT = 'Поля — кадр целиком, с полосам
 
 /** Сводка в голове блока: видна и у свёрнутого. */
 export function rollSummary(output: Pick<Output, 'aspect' | 'fit'>): string {
-  return `Ролик · ${output.aspect} · ${output.fit === 'crop' ? 'обрезка' : 'поля'}`
+  return `Таймлайн · ${output.aspect} · ${output.fit === 'crop' ? 'обрезка' : 'поля'}`
 }
 
 export type RollFold = { picked: boolean; open: boolean }
@@ -41,11 +41,11 @@ export type RollHandlers = { onChange: (patch: Partial<Output>) => void }
 export function mountRoll(el: HTMLElement, handlers: RollHandlers) {
   el.innerHTML = `
     <button type="button" class="roll-head" id="roll-head" aria-expanded="true" aria-controls="roll-body">
-      <span class="fold-mark" aria-hidden="true">▾</span><span id="roll-summary">Ролик</span>
+      <span class="fold-mark" aria-hidden="true">▾</span><span id="roll-summary">Таймлайн</span>
     </button>
     <div class="roll-body" id="roll-body">
       ${segmentedHtml('roll-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
-      ${segmentedHtml('roll-fit', 'Вписывание', FIT_ITEMS, 'pad', FIT_HINT)}
+      ${segmentedHtml('roll-fit', 'Растянуть кадр', FIT_ITEMS, 'pad', FIT_HINT)}
     </div>`
   const head = el.querySelector('#roll-head') as HTMLButtonElement
   const mark = head.querySelector('.fold-mark') as HTMLElement

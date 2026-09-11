@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { Asset } from './assets'
-import { addLabel, canOverlay, isPlaceable, sourcePoolNote } from './source'
+import { addLabel, addTitle, canOverlay, isPlaceable, sourcePoolNote } from './source'
 
 test('без готовых записей — ссылка загрузить', () => {
   expect(sourcePoolNote(0)).toContain('#/files')
@@ -34,9 +34,11 @@ test('на шкалу идут готовые видео, картинки и з
 })
 
 test('кнопка говорит, куда ляжет кусок', () => {
-  expect(addLabel('audio')).toBe('Положить на дорожку «Звуки»')
-  expect(addLabel('video')).toBe('Добавить в шкалу')
-  expect(addLabel(undefined)).toBe('Добавить в шкалу')
+  expect(addLabel('audio')).toBe('на A2')
+  expect(addLabel('video')).toBe('на V1')
+  expect(addLabel(undefined)).toBe('на V1')
+  expect(addTitle('audio')).toContain('A2')
+  expect(addTitle('video')).toContain('V1')
 })
 
 test('необработанную запись в список не пускаем', () => {
