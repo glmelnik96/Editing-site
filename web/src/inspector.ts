@@ -16,9 +16,9 @@ import { PLACES, SIZED_PLACES } from './timeline/overlays'
 
 export type Selected =
   | { kind: 'none' }
-  | { kind: 'clip'; clip: Clip; index: number; hasAudio: boolean; maxFade: number }
-  | { kind: 'sound'; sound: Sound }
-  | { kind: 'overlay'; overlay: Overlay; isImage: boolean }
+  | { kind: 'clip'; clip: Clip; index: number; hasAudio: boolean; maxFade: number; name?: string | null }
+  | { kind: 'sound'; sound: Sound; name?: string | null }
+  | { kind: 'overlay'; overlay: Overlay; isImage: boolean; name?: string | null }
 
 export type InspectorHandlers = {
   onClip: (patch: Partial<Clip>, live: boolean) => void
@@ -29,14 +29,18 @@ export type InspectorHandlers = {
 }
 
 /** Заголовок панели: что выбрано и сколько оно длится. */
+function titled(kind: string, id: string, name: string | null | undefined, seconds: number): string {
+  return `${kind} ${name ? `«${name}»` : id} · ${seconds.toFixed(1)} с`
+}
+
 export function selectionTitle(sel: Selected): string {
   switch (sel.kind) {
     case 'clip':
-      return `Клип ${sel.clip.id} · ${(sel.clip.out - sel.clip.in).toFixed(1)} с`
+      return titled('Клип', sel.clip.id, sel.name, sel.clip.out - sel.clip.in)
     case 'sound':
-      return `Звук ${sel.sound.id} · ${(sel.sound.out - sel.sound.in).toFixed(1)} с`
+      return titled('Звук', sel.sound.id, sel.name, sel.sound.out - sel.sound.in)
     case 'overlay':
-      return `Наложение ${sel.overlay.id} · ${(sel.overlay.out - sel.overlay.in).toFixed(1)} с`
+      return titled('Наложение', sel.overlay.id, sel.name, sel.overlay.out - sel.overlay.in)
     default:
       return 'Ничего не выбрано'
   }

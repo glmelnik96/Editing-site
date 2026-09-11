@@ -219,7 +219,7 @@ export function renderSummary(doc: ProjectDoc, options: RenderOptions, durationS
   if (subs) parts.push(subs)
   const minutes = estimateRenderMinutes(durationSec, options.quality, options.format, overlaysOf(doc).length)
   const bytes = estimateRenderBytes(durationSec, options)
-  parts.push(`Около ${minutes} мин, если воркер свободен${bytes ? `; файл около ${fmtSize(bytes)}` : ''}.`)
+  parts.push(`Около ${minutes} мин, если очередь свободна${bytes ? `; файл около ${fmtSize(bytes)}` : ''}.`)
   return parts.join(' ')
 }
 

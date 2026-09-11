@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from './api'
-import { createSaver, type Project } from './project'
+import { createSaver, saveStateText, type Project } from './project'
 
 function project(version = 1, clips: unknown[] = []): Project {
   return {
@@ -237,7 +237,9 @@ describe('состояние после сбоя', () => {
       onStateChange: s => states.push(s),
     })
     await flushFailing(saver, project(1))
-    expect(states.at(-1)).toBe('failed')
+    // Сбой сервера — не «сохранено»: правка ждёт повтора, и строка говорит об этом.
+    expect(states).not.toContain('idle')
+    expect(states.at(-1)).toBe('retrying')
   })
 
   it('после удачного сохранения снова показывает «сохранено»', async () => {
@@ -258,5 +260,101 @@ describe('состояние после сбоя', () => {
     await flushFailing(saver, project(1))
     await saver.flush(project(1))
     expect(states.at(-1)).toBe('idle')
+  })
+})
+
+describe('сорвавшееся сохранение повторяется само', () => {
+  it('сеть: повтор через 5, 15, 30 с, дальше каждые 30', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    let calls = 0
+    const request = vi.fn(async (_p: Project) => {
+      calls += 1
+      if (calls <= 4) throw new TypeError('Failed to fetch')
+      return project(2)
+    })
+    const saver = createSaver({
+      request,
+      delay: 0,
+      onError: () => {},
+      onStateChange: (state, sec) => states.push(sec ? `${state}:${sec}` : state),
+    })
+    saver.schedule(project(1))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(states.at(-1)).toBe('retrying:5')
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(states.at(-1)).toBe('retrying:15')
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(states.at(-1)).toBe('retrying:30')
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(request).toHaveBeenCalledTimes(4)
+    expect(states.at(-1)).toBe('retrying:30')
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(request).toHaveBeenCalledTimes(5)
+    expect(states.at(-1)).toBe('idle')
+    vi.useRealTimers()
+  })
+
+  it('новая правка отменяет повтор и уходит сама', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const request = vi.fn(async (_p: Project) => {
+      calls += 1
+      if (calls === 1) throw new TypeError('Failed to fetch')
+      return project(2)
+    })
+    const saver = createSaver({ request, delay: 500, onError: () => {} })
+    saver.schedule(project(1, [{ id: 'a' }]))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(request).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    saver.schedule(project(1, [{ id: 'b' }]))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request.mock.calls[1][0].doc.clips).toEqual([{ id: 'b' }])
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(request).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('пока летит запрос, второго не шлёт', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const request = vi.fn((_p: Project) => {
+      calls += 1
+      if (calls === 1) return Promise.reject(new TypeError('Failed to fetch'))
+      return new Promise<Project>(() => {}) // висит, как запрос в плохой сети
+    })
+    const saver = createSaver({ request, delay: 0, onError: () => {} })
+    saver.schedule(project(1))
+    await vi.advanceTimersByTimeAsync(0)
+    saver.schedule(project(1, [{ id: 'b' }]))
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(request).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('401 — сессия закончилась, без повтора', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    const request = vi.fn(async (_p: Project): Promise<Project> => {
+      throw new ApiError(401, 'unauthorized', 'Требуется вход')
+    })
+    const saver = createSaver({ request, delay: 0, onError: () => {}, onStateChange: state => states.push(state) })
+    saver.schedule(project(1))
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(states.at(-1)).toBe('unauthorized')
+    vi.useRealTimers()
+  })
+
+  it('подписи состояния — для строки у имени проекта', () => {
+    expect(saveStateText('idle')).toBe('сохранено')
+    expect(saveStateText('retrying', 15)).toBe('не сохранено — повторю через 15 с')
+    expect(saveStateText('unauthorized')).toBe('сессия закончилась — войдите снова')
+    expect(saveStateText('failed')).toBe('не сохранено')
   })
 })

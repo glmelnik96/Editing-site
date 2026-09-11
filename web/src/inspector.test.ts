@@ -21,6 +21,16 @@ describe('заголовок панели', () => {
     expect(selectionTitle({ kind: 'overlay', overlay, isImage: true })).toBe('Наложение o1 · 2.0 с')
     expect(selectionTitle({ kind: 'none' })).toBe('Ничего не выбрано')
   })
+
+  it('с именем записи — имя в кавычках, как в шапке хода', () => {
+    expect(selectionTitle({ kind: 'clip', clip, index: 0, hasAudio: true, maxFade: 0, name: 'интервью.mp4' })).toBe(
+      'Клип «интервью.mp4» · 4.0 с',
+    )
+    expect(selectionTitle({ kind: 'sound', sound, name: 'музыка.mp3' })).toBe('Звук «музыка.mp3» · 3.0 с')
+    expect(selectionTitle({ kind: 'overlay', overlay, isImage: true, name: 'logo.png' })).toBe(
+      'Наложение «logo.png» · 2.0 с',
+    )
+  })
 })
 
 describe('ключ разметки', () => {

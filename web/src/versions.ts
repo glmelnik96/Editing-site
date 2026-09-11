@@ -15,10 +15,11 @@ export function mountVersions(
   flush: () => Promise<void>,
 ) {
   el.innerHTML = `
-    <main>
+    <main class="stack" style="--stack-gap:12px">
+      <p class="meta" style="margin:0">Правки сохраняются сами. Версия — точка, к которой можно вернуться.</p>
       <form id="ver-form" class="row">
         <input name="label" placeholder="Например: до перестановки" maxlength="200" />
-        <button type="submit">Сохранить</button>
+        <button type="submit">Сохранить версию</button>
       </form>
       <ul id="ver-list" class="versions"><li class="muted">Пока нет</li></ul>
       <pre id="ver-error" hidden></pre>
@@ -42,7 +43,7 @@ export function mountVersions(
     list.innerHTML = versions.map(row).join('') || '<li class="muted">Пока нет</li>'
     list.querySelectorAll<HTMLButtonElement>('button[data-restore]').forEach(b =>
       b.addEventListener('click', async () => {
-        if (!window.confirm(`Вернуться к точке «${b.dataset.title}»? Текущее состояние заменится.`)) return
+        if (!window.confirm(`Вернуться к версии «${b.dataset.title}»? Текущее состояние заменится.`)) return
         try {
           await flush()
           onRestored(await restoreVersion(projectId, b.dataset.restore ?? ''))

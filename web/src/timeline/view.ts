@@ -6,6 +6,7 @@
  */
 import { fmtDuration } from '../assets'
 import { escapeHtml } from '../html'
+import { pieceLabel } from '../names'
 import type { Overlay, Sound } from '../project'
 import { barsFor, sliceThumbs, type AssetData, type ThumbsMeta } from '../strip'
 import { clipDuration, dropTarget, fadeInto, layout, MIN_BLOCK_PX, moveClip, ms, rulerTicks, sameOrder, totalDuration, trimClip, zoomFloor, ZOOM_MAX, type Clip } from './model'
@@ -14,6 +15,8 @@ import { tileRange, tileWidth, visibleTiles, type Tile } from './tiles'
 
 export type AssetInfo = {
   kind?: string
+  /** Имя записи для подписи блока. */
+  name?: string
   /** Есть ли у записи звук: без него у клипа нет блока на дорожке звука. */
   hasAudio?: boolean | null
   duration: number | null
@@ -166,7 +169,8 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
       clip.snap_to_pauses && (!clip.in_verified || !clip.out_verified)
         ? '<span class="unverified" title="Граница не подтверждена паузой">!</span>'
         : ''
-    return `<span class="label">${escapeHtml(clip.id)} · ${(clip.out - clip.in).toFixed(1)} с${marks}</span>
+    const label = pieceLabel(current.assets.get(clip.asset_id)?.name, clip.id, `${(clip.out - clip.in).toFixed(1)} с`)
+    return `<span class="label" title="${escapeHtml(clip.id)}">${escapeHtml(label)}${marks}</span>
       <b class="handle handle-in"></b><b class="handle handle-out"></b>`
   }
 
@@ -617,7 +621,8 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           node.style.width = `${block.width}px`
           node.dataset.id = item.id
           const length = item.loop ? 'по кругу' : `${laneSpan(item, total).toFixed(1)} с`
-          node.innerHTML = `<span class="label">${escapeHtml(item.id)} · ${length}</span>`
+          const label = pieceLabel(current.assets.get(item.asset_id)?.name, item.id, length)
+          node.innerHTML = `<span class="label" title="${escapeHtml(item.id)}">${escapeHtml(label)}</span>`
           strips.push(
             strip(node, item.asset_id, item.in, item.out, block.left, block.width, lane.frames, lane.wave, LANE_FRAME_H),
           )

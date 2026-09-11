@@ -25,6 +25,7 @@ import {
   createSaver,
   listRenders,
   loadProject,
+  saveStateText,
   type Cue,
   type FieldError,
   type Project,
@@ -42,13 +43,16 @@ import { mountInspector, type Selected } from './inspector'
 import { mountRender } from './render'
 import { resolveTab, tabEnabled, type EditorTab } from './editor-tabs'
 import { HOTKEYS, needsClip, shortcutFor, type Shortcut } from './hotkeys'
-import { mountSource } from './source'
+import { isPlaceable, mountSource } from './source'
 import { burnEnabled, cuesReady, mountSubtitles, patchCues } from './subtitles'
 import { mountTranscript } from './transcript'
 import { newOverlayId, OVERLAY_SIZE_DEFAULT, overlayBox, overlayPlan, removeOverlay, updateOverlay } from './timeline/overlays'
 import { newSoundId, removeSound, updateSound } from './timeline/sounds'
 import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
+import { blockedReason, editorBlocks, setBlocked, tabBlock, type PickedKind } from './blocked'
+import { LOADING_DELAY_MS, stageNote, stageNoteHtml, type VideoState } from './stage-note'
+import { pageTitle } from './titles'
 
 /** Шаг опроса записей, когда ничего не обрабатывается и не расшифровывается. */
 const IDLE_POLL_MS = 20000
@@ -75,13 +79,6 @@ function savePref(key: string, value: string): void {
   }
 }
 
-const STATE_TEXT = {
-  idle: 'сохранено',
-  pending: 'правки не сохранены',
-  saving: 'сохраняю…',
-  failed: 'не сохранено, попробуйте ещё правку',
-}
-
 export function mountEditor(el: HTMLElement, projectId: string) {
   el.innerHTML = `
     <div class="project-bar row">
@@ -91,7 +88,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       <span id="ed-notice" class="meta"></span>
       <div class="saves" id="ed-saves">
         <button type="button" class="btn btn-ghost" id="ed-saves-toggle" aria-expanded="false">
-          Сохранения проекта
+          Версии
         </button>
         <div class="saves-panel" id="ed-saves-panel" hidden></div>
       </div>
@@ -126,28 +123,31 @@ export function mountEditor(el: HTMLElement, projectId: string) {
              что настройка кадра и разрез клипа — разговоры о разном. -->
         <div class="row bar-edit">
           <span class="bar-group" id="ed-undo-group">
-            <button id="ed-undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
+            <button id="ed-undo" type="button" title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
+            <button id="ed-redo" type="button" title="Вернуть отменённое (Ctrl+Shift+Z)">Вернуть</button>
           </span>
           <span class="bar-group" id="ed-play-group">
             <button id="ed-play" type="button" title="Играть (пробел)">▶</button>
             <input id="ed-goto" class="tc" inputmode="decimal" title="Перейти к таймкоду" />
             <span class="muted" id="ed-total"></span>
           </span>
+          <span class="bar-group" id="ed-help-group">
+            <button id="ed-help" type="button" class="btn-square" title="Горячие клавиши (?)"
+              aria-label="Горячие клавиши" aria-expanded="false">?</button>
+          </span>
           <span class="bar-group" id="ed-edit-group">
             <button id="ed-split" type="button" title="Разрезать по курсору (S)">Разрезать</button>
             <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
-            <button id="ed-delete" type="button" title="Удалить выбранный клип (Del)">Удалить клип</button>
+            <button id="ed-delete" type="button" title="Удалить выбранный кусок (Del)">Удалить</button>
+          </span>
+          <span class="bar-group" id="ed-zoom-group">
             <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
                  — к громкости, к переходу, — а не к масштабу шкалы. -->
             <label class="zoom-label" for="ed-zoom">Масштаб</label>
-            <button id="ed-zoom-out" type="button" title="Мельче (−); на минимуме — весь ролик">−</button>
+            <button id="ed-zoom-out" type="button" class="btn-square" title="Мельче (−); на минимуме — весь ролик">−</button>
             <input id="ed-zoom" class="zoom" type="range" min="0" max="100" step="1"
               title="Масштаб шкалы" />
-            <button id="ed-zoom-in" type="button" title="Крупнее (+)">+</button>
-          </span>
-          <span class="bar-group" id="ed-help-group">
-            <button id="ed-help" type="button" title="Показать список (?)"
-              aria-expanded="false">Горячие клавиши</button>
+            <button id="ed-zoom-in" type="button" class="btn-square" title="Крупнее (+)">+</button>
           </span>
           <span class="bar-group" id="ed-out-group">
             <select id="ed-aspect" title="Пропорция кадра">
@@ -201,8 +201,9 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const fpsPick = el.querySelector('#ed-fps') as HTMLSelectElement
   const propsBody = el.querySelector('#ed-props-body') as HTMLElement
   const propsToggle = el.querySelector('#ed-props-toggle') as HTMLButtonElement
-  const history = createHistory<ProjectDoc>(5)
+  const history = createHistory<ProjectDoc>()
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
+  const redoButton = el.querySelector('#ed-redo') as HTMLButtonElement
   const playButton = el.querySelector('#ed-play') as HTMLButtonElement
   const splitButton = el.querySelector('#ed-split') as HTMLButtonElement
   const copyButton = el.querySelector('#ed-copy') as HTMLButtonElement
@@ -214,6 +215,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const keysCard = el.querySelector('#ed-keys') as HTMLElement
   const gotoInput = el.querySelector('#ed-goto') as HTMLInputElement
   const burnBox = el.querySelector('#ed-burn') as HTMLInputElement
+  const burnLabel = el.querySelector('label.burn') as HTMLLabelElement
   const saves = el.querySelector('#ed-saves') as HTMLElement
   const savesToggle = el.querySelector('#ed-saves-toggle') as HTMLButtonElement
   const grid = el.querySelector('#ed-grid') as HTMLElement
@@ -282,7 +284,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     assets = new Map(
       list.map(a => [
         a.id,
-        { kind: a.kind, hasAudio: a.has_audio ?? null, duration: a.duration, files: { thumbs: a.files.thumbs } },
+        {
+          kind: a.kind,
+          name: a.original_name,
+          hasAudio: a.has_audio ?? null,
+          duration: a.duration,
+          files: { thumbs: a.files.thumbs },
+        },
       ]),
     )
     source.setAssets(list)
@@ -330,7 +338,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   /** Запомнить состояние ДО правки: именно к нему вернёт кнопка «Отменить». */
   function remember(): void {
     if (project) history.push(project.doc)
-    undoButton.disabled = !history.canUndo()
+    syncBar()
   }
 
   const showError = (e: unknown) => {
@@ -342,6 +350,13 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   // предыдущего — человек видел подсказку меньше секунды и решал, что её не было.
   /** Сказанное про шкалу говорим под шкалой, а не в шапке: там на это смотрят. */
   const underTrack = (text: string) => timeline.say(text)
+
+  /** Нажали серую кнопку — сказать почему, а не молчать. true — действие не выполнять. */
+  function explainBlocked(button: HTMLElement): boolean {
+    const reason = blockedReason(button)
+    if (reason) underTrack(reason)
+    return reason !== null
+  }
 
   let noticeTimer = 0
   const notice = (text: string) => {
@@ -371,7 +386,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onConflict: fresh => {
       project = fresh
       history.clear()
-      undoButton.disabled = true
+      syncBar()
       render()
       notice('Проект изменился в другом месте, показана свежая версия')
     },
@@ -381,7 +396,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       errorBox.textContent = `Не сохранено: ${errors.map(e => `${e.field} — ${e.message}`).join('; ')}`
     },
     onError: showError,
-    onStateChange: state => (stateBox.textContent = STATE_TEXT[state]),
+    onStateChange: (state, sec) => (stateBox.textContent = saveStateText(state, sec)),
   })
 
   // Плеер склейки: активный элемент играет, скрытый держит следующий клип на его точке входа.
@@ -399,6 +414,54 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const overlayLayer = document.createElement('div')
   overlayLayer.className = 'ov-layer'
   stage.appendChild(overlayLayer)
+
+  // Надпись поверх сцены: пустой проект, загрузка, ошибка. Слушаем оба элемента — активный
+  // меняется на стыках, а состояние считаем по активному в момент отрисовки.
+  const stageNoteBox = document.createElement('div')
+  stageNoteBox.className = 'stage-note'
+  stageNoteBox.hidden = true
+  stage.appendChild(stageNoteBox)
+  let waitingSince = 0
+  let noteTimer = 0
+  let lastNote = ''
+
+  function videoState(): VideoState {
+    if (active.error) return 'error'
+    if (active.getAttribute('src') && active.readyState < 2) return 'waiting'
+    return 'ready'
+  }
+
+  function paintStageNote(): void {
+    const video = videoState()
+    if (video !== 'waiting') waitingSince = 0
+    else if (!waitingSince) waitingSince = performance.now()
+    const src = active.currentSrc || active.getAttribute('src') || ''
+    const asset = assetList.find(a => a.files.proxy && src.endsWith(a.files.proxy))
+    const note = stageNote({
+      clipCount: clipCount(),
+      readyRecords: assetList.filter(isPlaceable).length,
+      video,
+      waitedMs: waitingSince ? performance.now() - waitingSince : 0,
+      name: asset?.original_name ?? null,
+    })
+    const html = stageNoteHtml(note)
+    if (html !== lastNote) {
+      stageNoteBox.innerHTML = html
+      lastNote = html
+    }
+    stageNoteBox.hidden = note.kind === 'none'
+    window.clearTimeout(noteTimer)
+    // Ждём, но порог ещё не прошёл: перерисовать, когда пройдёт, иначе «Готовлю кадр…» не
+    // появится до следующего события видео.
+    if (video === 'waiting' && note.kind === 'none') noteTimer = window.setTimeout(paintStageNote, LOADING_DELAY_MS)
+  }
+  for (const v of [videoA, videoB]) {
+    for (const type of ['loadstart', 'waiting', 'stalled', 'loadeddata', 'canplay', 'playing', 'seeked', 'error', 'emptied']) {
+      v.addEventListener(type, () => {
+        if (v === active) paintStageNote()
+      })
+    }
+  }
 
   const proxyOf = (assetId: string): string | null => assetList.find(a => a.id === assetId)?.files.proxy ?? null
 
@@ -843,7 +906,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     const clips = clipCount()
     tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button => {
       const name = (button.dataset.tab ?? 'source') as EditorTab
-      button.disabled = !tabEnabled(name, clips, hasReadyRender)
+      setBlocked(button, tabBlock(tabEnabled(name, clips, hasReadyRender)))
     })
     // showTab зовём всегда, а не только при смене вкладки: он же ставит класс .on, и без этого
     // открытый редактор показывал панель «Исходники», не подсветив ни одной кнопки.
@@ -890,7 +953,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   tabsBar.querySelectorAll<HTMLButtonElement>('.tab').forEach(button =>
     button.addEventListener('click', () => {
-      if (button.disabled) return
+      const reason = blockedReason(button)
+      if (reason) return underTrack(reason)
       showTab((button.dataset.tab ?? 'source') as EditorTab)
     }),
   )
@@ -1057,18 +1121,33 @@ export function mountEditor(el: HTMLElement, projectId: string) {
    * контрола должно быть постоянным, а доступность — меняться. Серая кнопка ещё и отвечает на
    * вопрос «почему нельзя» — исчезнувшая не отвечает ни на что.
    */
+  function pickedKind(): PickedKind {
+    if (!timeline.selected()) return 'none'
+    if (chosenSound()) return 'sound'
+    if (chosenOverlay()) return 'overlay'
+    return 'clip'
+  }
+
   function syncBar(): void {
-    const has = clipCount() > 0
-    const chosen = Boolean(timeline.selected())
-    playButton.disabled = !has
-    gotoInput.disabled = !has
-    splitButton.disabled = !has
-    zoomInButton.disabled = !has
-    zoomOutButton.disabled = !has
-    const sound = chosenSound()
-    const overlay = chosenOverlay()
-    copyButton.disabled = !chosen || sound !== null || overlay !== null
-    deleteButton.disabled = !chosen
+    const blocks = editorBlocks({
+      hasClips: clipCount() > 0,
+      picked: pickedKind(),
+      canUndo: history.canUndo(),
+      canRedo: history.canRedo(),
+      cuesReady: cuesReady(project?.doc.subtitles),
+    })
+    setBlocked(playButton, blocks.play)
+    setBlocked(splitButton, blocks.split)
+    setBlocked(zoomInButton, blocks.zoom)
+    setBlocked(zoomOutButton, blocks.zoom)
+    setBlocked(copyButton, blocks.duplicate)
+    setBlocked(deleteButton, blocks.remove)
+    setBlocked(undoButton, blocks.undo)
+    setBlocked(redoButton, blocks.redo)
+    // Поле — не кнопка: остаётся disabled, причина — в подсказке.
+    gotoInput.disabled = blocks.play !== null
+    gotoInput.title = blocks.play ?? 'Перейти к таймкоду'
+    burnLabel.title = blocks.burn ?? 'Впечатать субтитры в кадр'
   }
 
   /** Волны и кадры записей шкалы: клипов, звуков и наложений. */
@@ -1090,6 +1169,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   function render(): void {
     if (!project) return
     nameBox.textContent = project.name
+    document.title = pageTitle(project.name)
     aspectPick.value = project.doc.output.aspect
     fitPick.value = project.doc.output.fit
     fpsPick.value = String(project.doc.output.fps)
@@ -1115,9 +1195,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     renders?.setDoc(project.doc, project.name)
     void ensureData([...project.doc.clips, ...soundsOf(project.doc), ...overlaysOf(project.doc)])
     syncTabs()
+    paintStageNote()
   }
 
   playButton.addEventListener('click', () => {
+    if (explainBlocked(playButton)) return
     if (!project || !project.doc.clips.length) return
     if (playing) {
       setPlaying(false)
@@ -1199,14 +1281,18 @@ export function mountEditor(el: HTMLElement, projectId: string) {
         // Пока записи не приехали, звук считаем есть: спрятать ползунок и вернуть его хуже.
         hasAudio: asset ? asset.kind !== 'image' && asset.has_audio !== false : true,
         maxFade: index > 0 ? maxFade(clips[index - 1], clip) : 0,
+        name: asset?.original_name ?? null,
       }
     }
     const sound = soundsOf(project.doc).find(s => s.id === id)
-    if (sound) return { kind: 'sound', sound }
+    if (sound) {
+      const soundAsset = assetList.find(a => a.id === sound.asset_id)
+      return { kind: 'sound', sound, name: soundAsset?.original_name ?? null }
+    }
     const overlay = overlaysOf(project.doc).find(o => o.id === id)
     if (overlay) {
       const asset = assetList.find(a => a.id === overlay.asset_id)
-      return { kind: 'overlay', overlay, isImage: asset?.kind === 'image' }
+      return { kind: 'overlay', overlay, isImage: asset?.kind === 'image', name: asset?.original_name ?? null }
     }
     return { kind: 'none' }
   }
@@ -1423,9 +1509,19 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     helpButton.setAttribute('aria-expanded', String(open))
   }
 
-  el.querySelector('#ed-split')!.addEventListener('click', splitHere)
-  el.querySelector('#ed-copy')!.addEventListener('click', duplicateSelected)
-  el.querySelector('#ed-delete')!.addEventListener('click', removeSelected)
+  splitButton.addEventListener('click', () => {
+    if (!explainBlocked(splitButton)) splitHere()
+  })
+  copyButton.addEventListener('click', () => {
+    if (!explainBlocked(copyButton)) duplicateSelected()
+  })
+  deleteButton.addEventListener('click', () => {
+    if (!explainBlocked(deleteButton)) removeSelected()
+  })
+  // Галочка — поле: серая не нажимается, поэтому причину говорит подпись вокруг неё.
+  burnLabel.addEventListener('click', () => {
+    if (burnBox.disabled) underTrack(burnLabel.title)
+  })
   helpButton.addEventListener('click', () => showKeys(keysCard.hidden))
   /**
    * Масштаб меняют и кнопками, и ползунком: ползунок обязан показывать то, что вышло. Ноль
@@ -1440,8 +1536,12 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     syncZoomSlider()
   }
 
-  zoomInButton.addEventListener('click', () => setZoom(timeline.zoom() * 1.5))
-  zoomOutButton.addEventListener('click', () => setZoom(timeline.zoom() / 1.5))
+  zoomInButton.addEventListener('click', () => {
+    if (!explainBlocked(zoomInButton)) setZoom(timeline.zoom() * 1.5)
+  })
+  zoomOutButton.addEventListener('click', () => {
+    if (!explainBlocked(zoomOutButton)) setZoom(timeline.zoom() / 1.5)
+  })
   zoomSlider.addEventListener('input', () =>
     setZoom(percentToZoom(Number(zoomSlider.value), timeline.zoomMin())),
   )
@@ -1468,8 +1568,8 @@ export function mountEditor(el: HTMLElement, projectId: string) {
 
   function undo(): void {
     if (!project) return
-    const previous = history.undo()
-    undoButton.disabled = !history.canUndo()
+    const previous = history.undo(project.doc)
+    syncBar()
     if (!previous) return
     project = { ...project, doc: previous }
     render()
@@ -1477,7 +1577,24 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (playing) seek(Math.min(timelineTime, totalDuration(previous.clips)))
     notice('Действие отменено')
   }
-  undoButton.addEventListener('click', undo)
+
+  function redo(): void {
+    if (!project) return
+    const next = history.redo(project.doc)
+    syncBar()
+    if (!next) return
+    project = { ...project, doc: next }
+    render()
+    saver.schedule(project)
+    if (playing) seek(Math.min(timelineTime, totalDuration(next.clips)))
+    notice('Действие возвращено')
+  }
+  undoButton.addEventListener('click', () => {
+    if (!explainBlocked(undoButton)) undo()
+  })
+  redoButton.addEventListener('click', () => {
+    if (!explainBlocked(redoButton)) redo()
+  })
 
   function applyGoto(): void {
     if (!project) return
@@ -1518,6 +1635,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     if (what === 'undo') {
       event.preventDefault()
       undo()
+      return
+    }
+    if (what === 'redo') {
+      event.preventDefault()
+      redo()
       return
     }
     if (what === 'help') {
@@ -1626,7 +1748,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     project = loaded
     hasReadyRender = ready.renders.length > 0
     applyAssets(list.assets)
-    stateBox.textContent = STATE_TEXT.idle
+    stateBox.textContent = saveStateText('idle')
     booted = true
     syncTabs()
     render()

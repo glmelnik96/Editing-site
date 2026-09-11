@@ -18,6 +18,7 @@ import { mountNewProject } from './newproject'
 import { mountProjects } from './projects'
 import { mountSettings } from './settings'
 import { parseRoute, type Route } from './router'
+import { pageTitle } from './titles'
 import { mountShell, type Me } from './shell'
 
 const root = document.getElementById('app') as HTMLElement
@@ -36,7 +37,20 @@ function screenText(title: string, lead: string): void {
     </div>`
 }
 
+/** Имя экрана во вкладке браузера; у главной и двери — только сервис. */
+const SCREEN_TITLE: Record<Route['name'], string | null> = {
+  home: null,
+  files: 'Записи',
+  new: 'Новый проект',
+  convert: 'Конвертер',
+  projects: 'Проекты',
+  settings: 'Настройки',
+  admin: 'Кабинет доступа',
+  editor: 'Проект', // редактор сменит на имя проекта, как только его загрузит
+}
+
 function show(route: Route, me: Me): void {
+  document.title = pageTitle(SCREEN_TITLE[route.name])
   // Место в шапке меняется от загрузки и удаления записей — экран записей сообщает об этом сюда.
   const refreshQuota = () => {
     void api<Me>('/api/v1/me')
@@ -84,6 +98,7 @@ async function route(): Promise<void> {
     if (mine !== pass) return
     if (e instanceof ApiError && e.status === 401) {
       shell.clearUser()
+      document.title = pageTitle()
       mountDoor(shell.screen)
     } else {
       screenText('Не открылось', e instanceof Error ? e.message : String(e))

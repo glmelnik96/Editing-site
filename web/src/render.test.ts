@@ -153,7 +153,7 @@ describe('сводка вкладки Рендер', () => {
     expect(text).toContain('Звуковая дорожка: 1 звук.')
     expect(text).toContain('Фон приглушается под речь')
     expect(text).toContain('Субтитры впечатаны в кадр')
-    expect(text).toContain('Около 12 мин, если воркер свободен')
+    expect(text).toContain('Около 12 мин, если очередь свободна')
     expect(text).not.toContain('ffmpeg')
     expect(text).not.toContain('-filter_complex')
   })

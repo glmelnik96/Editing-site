@@ -1,4 +1,4 @@
-import { api, ApiError } from './api'
+import { api, ApiError, isRetryable } from './api'
 import type { Clip } from './timeline/model'
 
 export type Output = { aspect: '16:9' | '9:16' | '1:1'; fit: 'pad' | 'crop'; fps: number }
@@ -109,6 +109,29 @@ export function saveRequest(project: Project): Promise<Project> {
   })
 }
 
+/** Через сколько секунд повторить сорвавшееся сохранение: сначала часто, потом раз в полминуты. */
+export const RETRY_STEPS_SEC = [5, 15, 30]
+
+export type SaveState = 'idle' | 'pending' | 'saving' | 'failed' | 'retrying' | 'unauthorized'
+
+/** Строка у имени проекта. Раньше при сбое она просила «попробовать ещё правку» — теперь повторяем сами. */
+export function saveStateText(state: SaveState, retryInSec?: number): string {
+  switch (state) {
+    case 'idle':
+      return 'сохранено'
+    case 'pending':
+      return 'правки не сохранены'
+    case 'saving':
+      return 'сохраняю…'
+    case 'retrying':
+      return `не сохранено — повторю через ${retryInSec ?? RETRY_STEPS_SEC[0]} с`
+    case 'unauthorized':
+      return 'сессия закончилась — войдите снова'
+    default:
+      return 'не сохранено'
+  }
+}
+
 type SaverOptions = {
   request?: (project: Project) => Promise<Project>
   delay?: number
@@ -116,7 +139,7 @@ type SaverOptions = {
   onConflict?: (fresh: Project) => void
   onInvalid?: (errors: FieldError[]) => void
   onError?: (error: unknown) => void
-  onStateChange?: (state: 'idle' | 'pending' | 'saving' | 'failed') => void
+  onStateChange?: (state: SaveState, retryInSec?: number) => void
 }
 
 function conflictProject(error: ApiError): Project | null {
@@ -148,13 +171,43 @@ export function createSaver(options: SaverOptions = {}) {
   // нужно не «отправлено», а «записано» — иначе следом за ним пойдёт работа со старым документом.
   let chain: Promise<void> = Promise.resolve()
   let lastError: unknown = null
+  // Повтор сорвавшегося сохранения. Раньше правка ждала следующей правки, а человек видел
+  // «не сохранено» и не знал, что делать.
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+  let retryAttempt = 0
+  let retryIn: number | null = null
+  let retryProject: Project | null = null
+  let unauthorized = false
 
-  const notify = (state: 'idle' | 'pending' | 'saving' | 'failed') => options.onStateChange?.(state)
+  function stopRetry(): void {
+    clearTimeout(retryTimer)
+    retryTimer = undefined
+    retryIn = null
+    retryProject = null
+  }
+
+  function planRetry(project: Project): void {
+    const sec = RETRY_STEPS_SEC[Math.min(retryAttempt, RETRY_STEPS_SEC.length - 1)]
+    retryAttempt += 1
+    stopRetry()
+    retryIn = sec
+    retryProject = project
+    retryTimer = setTimeout(() => {
+      const again = retryProject
+      stopRetry()
+      // Летит запрос или лежит новая правка — повтор не нужен: их finally отправит свежее.
+      if (!again || saving || queued) return
+      chain = run(again)
+    }, sec * 1000)
+  }
+
+  const notify = (state: SaveState, sec?: number) => options.onStateChange?.(state, sec)
 
   async function run(project: Project): Promise<void> {
     saving = true
     failed = false
     lastError = null
+    unauthorized = false
     notify('saving')
     let saved: Project | null = null
     try {
@@ -174,9 +227,17 @@ export function createSaver(options: SaverOptions = {}) {
         queued = null
         failed = true
         options.onInvalid?.(invalidErrors(error))
+      } else if (error instanceof ApiError && error.status === 401) {
+        // Сессия кончилась: повтор не поможет, нужен вход.
+        failed = true
+        unauthorized = true
+        options.onError?.(error)
+      } else if (isRetryable(error)) {
+        // Сеть, 5xx, 429: правку не выбрасываем и повторяем сами через 5, 15, 30 с.
+        failed = true
+        planRetry(project)
+        options.onError?.(error)
       } else {
-        // Сеть, 401, 500: правку не выбрасываем, но и повторять сами не будем — следующая
-        // правка отправит её вместе с собой, а пока честно показываем, что не сохранено.
         failed = true
         options.onError?.(error)
       }
@@ -184,14 +245,22 @@ export function createSaver(options: SaverOptions = {}) {
       saving = false
       const next = queued
       queued = null
-      if (next) await run(saved ? { ...next, version: saved.version } : next)
-      else notify(failed ? 'failed' : 'idle')
+      if (next) {
+        stopRetry() // новая правка уходит сейчас — отложенный повтор ей не нужен
+        await run(saved ? { ...next, version: saved.version } : next)
+      } else if (!failed) {
+        retryAttempt = 0
+        notify('idle')
+      } else if (unauthorized) notify('unauthorized')
+      else if (retryIn !== null) notify('retrying', retryIn)
+      else notify('failed')
     }
   }
 
   return {
     /** Отложить сохранение: последняя правка выигрывает. */
     schedule(project: Project): void {
+      stopRetry()
       queued = project
       notify('pending')
       clearTimeout(timer)
@@ -212,6 +281,7 @@ export function createSaver(options: SaverOptions = {}) {
      */
     async flush(project: Project): Promise<void> {
       clearTimeout(timer)
+      stopRetry()
       if (saving) queued = project
       else {
         queued = null
@@ -226,6 +296,7 @@ export function createSaver(options: SaverOptions = {}) {
     },
     cancel(): void {
       clearTimeout(timer)
+      stopRetry()
       queued = null
     },
   }

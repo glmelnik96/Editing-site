@@ -77,6 +77,16 @@ describe('разбор нажатия', () => {
   })
 })
 
+describe('вернуть отменённое', () => {
+  it('Ctrl+Shift+Z и Ctrl+Y — вернуть, без Shift — отменить', () => {
+    expect(shortcutFor(press('KeyZ', { ctrlKey: true }))).toBe('undo')
+    expect(shortcutFor(press('KeyZ', { ctrlKey: true, shiftKey: true }))).toBe('redo')
+    expect(shortcutFor(press('KeyY', { ctrlKey: true }))).toBe('redo')
+    expect(shortcutFor(press('KeyZ', { metaKey: true, shiftKey: true }))).toBe('redo')
+    expect(HOTKEYS.some(row => row.what === 'вернуть отменённое')).toBe(true)
+  })
+})
+
 describe('подсказка', () => {
   it('называет клип там, где он нужен', () => {
     expect(needsClip('remove')).toBe(true)

@@ -16,6 +16,7 @@ export type Shortcut =
   | 'edgeBack'
   | 'edgeForward'
   | 'undo'
+  | 'redo'
   | 'split'
   | 'remove'
   | 'duplicate'
@@ -51,7 +52,9 @@ export function shortcutFor(event: KeyLike): Shortcut | null {
   if (cmd(event)) {
     switch (event.code) {
       case 'KeyZ':
-        return 'undo'
+        return event.shiftKey ? 'redo' : 'undo'
+      case 'KeyY':
+        return 'redo'
       case 'KeyD':
         return 'duplicate'
       case 'KeyC':
@@ -126,5 +129,6 @@ export const HOTKEYS: HotkeyRow[] = [
   { keys: '+ / −', what: 'крупнее и мельче' },
   { keys: 'Esc', what: 'снять выделение' },
   { keys: 'Ctrl + Z', what: 'отменить последнее действие' },
+  { keys: 'Ctrl + Shift + Z / Ctrl + Y', what: 'вернуть отменённое' },
   { keys: '?', what: 'эта подсказка' },
 ]

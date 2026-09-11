@@ -4,6 +4,7 @@
  * Выделение хранится числами, а не в DOM: кнопка отдаёт наверх готовый диапазон, а редактор
  * решает, что с ним делать.
  */
+import { blockedReason, setBlocked, sourceBlocks } from './blocked'
 import { escapeHtml } from './html'
 import type { Asset } from './assets'
 import { foldHtml, wireFold } from './fold'
@@ -91,8 +92,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
         </div>
         <div class="row">
           <span id="src-range" class="muted">весь файл</span>
-          <button id="src-add" type="button" disabled>Добавить в шкалу</button>
-          <button id="src-over" type="button" disabled
+          <button id="src-add" type="button">Добавить в шкалу</button>
+          <button id="src-over" type="button"
             title="Картинка или видео поверх основы — под курсор шкалы">Поверх видео</button>
         </div>`,
       )}
@@ -135,8 +136,9 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     if (still) {
       if (document.activeElement !== secsInput) secsInput.value = String(to)
       rangeLabel.textContent = `картинка на ${formatTimecode(to)}`
-      addButton.disabled = to < MIN_PIECE
-      overButton.disabled = addButton.disabled
+      const stillBlocks = sourceBlocks({ hasFile: true, longEnough: to >= MIN_PIECE, overlayable: true })
+      setBlocked(addButton, stillBlocks.add)
+      setBlocked(overButton, stillBlocks.over)
       return
     }
     const total = current?.duration ?? 0
@@ -155,8 +157,13 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
       ? `кусок ${formatTimecode(to - from)} из ${formatTimecode(total)}` +
         (current.kind === 'audio' ? ' — ляжет под курсор' : '')
       : 'весь файл'
-    addButton.disabled = !current || to - from < MIN_PIECE
-    overButton.disabled = addButton.disabled || !canOverlay(current?.kind)
+    const blocks = sourceBlocks({
+      hasFile: current !== null,
+      longEnough: to - from >= MIN_PIECE,
+      overlayable: canOverlay(current?.kind),
+    })
+    setBlocked(addButton, blocks.add)
+    setBlocked(overButton, blocks.over)
   }
 
   /** Ставит границу, не давая ей вывернуться наизнанку или выйти за длительность файла. */
@@ -292,10 +299,14 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
   })
 
   addButton.addEventListener('click', () => {
+    const reason = blockedReason(addButton)
+    if (reason) return void (note.textContent = reason)
     if (!current) return
     handlers.onAdd(current, { from, to })
   })
   overButton.addEventListener('click', () => {
+    const reason = blockedReason(overButton)
+    if (reason) return void (note.textContent = reason)
     if (!current) return
     handlers.onOverlay?.(current, { from, to })
   })
