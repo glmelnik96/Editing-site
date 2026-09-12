@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diskByOwner, othersOnly, ownerLabel, type TeamAsset } from './overview'
+import { othersOnly, ownerLabel, usageHtml, type PersonUse, type TeamAsset } from './overview'
 
 const asset = (over: Partial<TeamAsset> = {}): TeamAsset => ({
   id: 'ast_1',
@@ -14,21 +14,21 @@ const asset = (over: Partial<TeamAsset> = {}): TeamAsset => ({
   ...over,
 })
 
-describe('итог по людям', () => {
-  it('складывает файлы одного человека и ставит тяжёлых выше', () => {
-    const rows = diskByOwner([
-      asset({ id: 'a1', size: 100 }),
-      asset({ id: 'a2', owner_email: 'two@ya.ru', owner_name: 'Второй', size: 900 }),
-      asset({ id: 'a3', size: 50 }),
-    ])
-    expect(rows.map(r => [r.email, r.bytes, r.count])).toEqual([
-      ['two@ya.ru', 900, 1],
-      ['one@ya.ru', 150, 2],
-    ])
+describe('место по людям', () => {
+  it('имя или почта, место и число записей', () => {
+    const rows: PersonUse[] = [
+      { email: 'two@ya.ru', name: 'Второй', bytes: 1_073_741_824, records: 3 },
+      { email: 'one@ya.ru', name: '', bytes: 1024, records: 0 },
+    ]
+    const html = usageHtml(rows)
+    expect(html).toContain('Второй')
+    expect(html).toContain('1.0 ГБ · записей: 3')
+    expect(html).toContain('one@ya.ru')
+    expect(html).toContain('1.0 КБ · записей: 0')
   })
 
-  it('на пустом списке молчит, а не рисует нули', () => {
-    expect(diskByOwner([])).toEqual([])
+  it('пустой список так и говорит, а не рисует нули', () => {
+    expect(usageHtml([])).toContain('На диске пока ничего нет')
   })
 })
 

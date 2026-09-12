@@ -3,7 +3,9 @@
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 from pathlib import Path
 
 from server.app.config import Settings
@@ -74,6 +76,43 @@ def _check_id(value: str) -> str:
     if not ID_RE.match(value):
         raise ValueError(f"некорректный id: {value!r}")
     return value
+
+
+def user_dir(settings: Settings, user_id: str) -> Path:
+    """Папка человека: в ней его записи и проекты — всё, что он занимает на диске."""
+    return settings.data_dir / _check_id(user_id)
+
+
+def tree_bytes(path: Path) -> int:
+    """Сколько занимают файлы под каталогом. Нет каталога — 0; файл, исчезнувший посреди обхода
+    (его удалили или перенесли), просто не считается."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.stat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
+    return total
+
+
+def server_space(settings: Settings) -> tuple[int, int]:
+    """Файлы сервиса и свободное место на разделе с данными.
+
+    Файлы сервиса — всё в каталоге данных (папки людей, база, её копии) и во временном каталоге,
+    если он лежит отдельно: на проде там недокачанные загрузки. Внутри каталога данных временный
+    каталог уже посчитан обходом — второй раз его не прибавляем.
+    """
+    data = settings.data_dir
+    files = tree_bytes(data)
+    tmp = settings.tmp_path
+    if not tmp.resolve().is_relative_to(data.resolve()):
+        files += tree_bytes(tmp)
+    try:
+        free = shutil.disk_usage(data).free
+    except OSError:
+        free = 0
+    return files, free
 
 
 def asset_dir(settings: Settings, user_id: str, asset_id: str) -> Path:

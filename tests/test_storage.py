@@ -12,9 +12,12 @@ from server.app.storage import (
     render_dir,
     render_url,
     safe_ext,
+    server_space,
     subs_dir,
     transcript_path,
+    tree_bytes,
     upload_path,
+    user_dir,
 )
 
 
@@ -143,3 +146,38 @@ def test_parse_file_url_understands_conversions():
     assert parse_file_url(f"{base}/cnv_0123456789ab.part") is None
     assert parse_file_url(f"{base}/notanid.wav") is None
     assert parse_file_url("/files/usr_x/assets/ast_0123456789ab/conversions/cnv_0123456789ab.mp3") is None
+
+
+def test_tree_bytes_sums_nested_files_and_ignores_missing(tmp_path):
+    root = tmp_path / "root"
+    (root / "a" / "b").mkdir(parents=True)
+    (root / "one.bin").write_bytes(b"x" * 10)
+    (root / "a" / "two.bin").write_bytes(b"x" * 20)
+    (root / "a" / "b" / "three.bin").write_bytes(b"x" * 30)
+    assert tree_bytes(root) == 60
+    assert tree_bytes(tmp_path / "missing") == 0
+
+
+def test_user_dir_holds_assets_and_projects(tmp_path):
+    s = Settings(_env_file=None, data_dir=tmp_path)
+    user = "usr_0123456789ab"
+    assert asset_dir(s, user, "ast_0123456789ab").parent.parent == user_dir(s, user)
+    assert render_dir(s, user, "prj_0123456789ab").parent.parent.parent == user_dir(s, user)
+    with pytest.raises(ValueError):
+        user_dir(s, "../etc")
+
+
+def test_server_space_counts_data_and_separate_tmp_once(tmp_path):
+    data, tmp = tmp_path / "data", tmp_path / "tmp"
+    (data / "usr_0123456789ab").mkdir(parents=True)
+    (data / "usr_0123456789ab" / "f.bin").write_bytes(b"x" * 100)
+    (data / "video.db").write_bytes(b"x" * 7)
+    tmp.mkdir()
+    (tmp / "upload.part").write_bytes(b"x" * 50)
+    files, free = server_space(Settings(_env_file=None, data_dir=data, tmp_dir=tmp))
+    assert files == 157 and free > 0
+    # Временный каталог внутри данных уже посчитан обходом данных — второй раз его не прибавляем.
+    (data / "tmp").mkdir()
+    (data / "tmp" / "upload.part").write_bytes(b"x" * 40)
+    files, _ = server_space(Settings(_env_file=None, data_dir=data))
+    assert files == 147

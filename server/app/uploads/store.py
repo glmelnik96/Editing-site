@@ -16,7 +16,16 @@ from pathlib import Path
 from server.app.config import Settings
 from server.app.health import disk_free_pct_safe
 from server.app.jobs import enqueue_job
-from server.app.storage import KINDS, asset_dir, kind_from_ext, known_exts, safe_ext, upload_path
+from server.app.storage import (
+    KINDS,
+    asset_dir,
+    kind_from_ext,
+    known_exts,
+    safe_ext,
+    tree_bytes,
+    upload_path,
+    user_dir,
+)
 from server.app.util import iso, new_id, now_iso, utcnow
 from server.db.core import transaction
 from server.media.subtitles import SubtitleInvalid, to_vtt
@@ -47,15 +56,23 @@ def chunk_length(upload: dict | sqlite3.Row, idx: int) -> int:
     return upload["chunk_size"] if idx < last else upload["size"] - last * upload["chunk_size"]
 
 
-def used_bytes(conn: sqlite3.Connection, user_id: str) -> int:
-    """Квота считает и готовые ассеты, и незавершённые загрузки: место под них уже занято."""
-    assets = conn.execute(
-        "SELECT coalesce(sum(size), 0) FROM assets WHERE user_id = ?", (user_id,)
-    ).fetchone()[0]
+def used_bytes(conn: sqlite3.Connection, settings: Settings, user_id: str) -> int:
+    """Сколько места занимает человек: все файлы его папки — записи со всем, что из них сделано,
+    и проекты с готовыми роликами, — плюс незавершённые загрузки: их файл уже зарезервирован во
+    временном каталоге целиком."""
     uploads = conn.execute(
         "SELECT coalesce(sum(size), 0) FROM uploads WHERE user_id = ?", (user_id,)
     ).fetchone()[0]
-    return int(assets) + int(uploads)
+    return tree_bytes(user_dir(settings, user_id)) + int(uploads)
+
+
+def require_quota(conn: sqlite3.Connection, settings: Settings, user_id: str, extra: int) -> None:
+    """Поместятся ли ещё extra байт в личный лимит. Файл, который уже лежит в папке человека,
+    посчитан обходом — для него extra = 0."""
+    used = used_bytes(conn, settings, user_id)
+    if used + extra > settings.user_quota_bytes:
+        details = {"used_bytes": used, "limit_bytes": settings.user_quota_bytes}
+        raise UploadError(413, "quota_exceeded", "Квота исчерпана", details)
 
 
 def check_capacity(conn: sqlite3.Connection, settings: Settings, user_id: str, size: int) -> None:
@@ -65,10 +82,7 @@ def check_capacity(conn: sqlite3.Connection, settings: Settings, user_id: str, s
         raise UploadError(
             413, "too_large", "Файл больше допустимого", {"limit_bytes": settings.max_upload_bytes}
         )
-    used = used_bytes(conn, user_id)
-    if used + size > settings.user_quota_bytes:
-        details = {"used_bytes": used, "limit_bytes": settings.user_quota_bytes}
-        raise UploadError(413, "quota_exceeded", "Квота исчерпана", details)
+    require_quota(conn, settings, user_id, size)
     free = disk_free_pct_safe(settings.data_dir)
     if free < settings.disk_low_pct:
         raise UploadError(
@@ -267,7 +281,8 @@ def finalize_file(
     try:
         with transaction(conn):
             if check_quota:
-                check_capacity(conn, settings, user_id, size)
+                # Файл уже перенесён в папку записи и посчитан обходом — второй раз его не прибавляем.
+                require_quota(conn, settings, user_id, 0)
             conn.execute(
                 "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, "
                 "last_access_at) "

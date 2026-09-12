@@ -154,6 +154,25 @@ def test_these_lists_are_for_the_admin_only(login_as):
     assert user.get("/api/v1/admin/assets").status_code == 403
 
 
+def test_admin_sees_who_takes_how_much_disk(login_as, settings):
+    """Место по людям — по файлам на диске: исходник, прокси, ролики. Строки базы тут ни при чём:
+    у записи в базе 1234 байта, а на диске её исходник занимает один."""
+    admin = login_as("admin@ya.ru")
+    admin.post("/api/v1/admin/whitelist", json={"email": "user@ya.ru"})
+    user = login_as("user@ya.ru", "Пользователь")
+    me = user.get("/api/v1/me").json()
+    asset = _seed_asset(settings, me["id"])
+    (settings.data_dir / me["id"] / "assets" / asset / "proxy.mp4").write_bytes(b"x" * 99)
+    renders = settings.data_dir / me["id"] / "projects" / "prj_000000000001" / "renders"
+    renders.mkdir(parents=True)
+    (renders / "r.mp4").write_bytes(b"x" * 900)
+
+    admin = login_as("admin@ya.ru")
+    people = admin.get("/api/v1/admin/usage").json()["people"]
+    assert people == [{"email": "user@ya.ru", "name": "Пользователь", "bytes": 1000, "records": 1}]
+    assert login_as("user@ya.ru", "Пользователь").get("/api/v1/admin/usage").status_code == 403
+
+
 def test_admin_opens_and_edits_a_foreign_project(login_as, settings):
     """Открыть чужой проект и починить его — то, ради чего админ вообще видит чужое.
 

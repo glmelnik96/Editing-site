@@ -8,7 +8,8 @@ function me(role: Me['role']): Me {
     name: 'Кто-то',
     role,
     auth: 'cookie',
-    quota: { used_bytes: 2_300_000_000, limit_bytes: 20_000_000_000 },
+    quota: { used_bytes: 1_073_741_824, limit_bytes: 21_474_836_480 },
+    server: { files_bytes: 1_181_116_006, free_bytes: 93_415_538_688 },
   }
 }
 
@@ -30,5 +31,13 @@ describe('шапка', () => {
   it('«Кабинет доступа» — только у админа', () => {
     expect(navHtml(me('admin'))).toContain('<a href="#/admin">Кабинет доступа</a>')
     expect(navHtml(me('user'))).not.toContain('#/admin')
+  })
+
+  it('место — на всём сервере: файлы сервиса и сколько свободно', () => {
+    expect(navHtml(me('user'))).toContain('1.1 ГБ · свободно 87.0 ГБ')
+  })
+
+  it('в подсказке — почта и свой расход с лимитом', () => {
+    expect(navHtml(me('user'))).toContain('title="someone@example.com&#10;Ваши файлы: 1.0 ГБ из 20.0 ГБ"')
   })
 })

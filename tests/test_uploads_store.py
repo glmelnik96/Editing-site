@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from server.app.config import Settings
-from server.app.storage import asset_dir
+from server.app.storage import asset_dir, render_dir
 from server.app.uploads import store
 from server.app.uploads.store import (
     ChunkWriter,
@@ -75,7 +75,7 @@ def test_create_reserves_file_and_counts_quota(conn, settings):
     assert up["id"].startswith("upl_") and up["kind"] == "video" and up["chunk_size"] == 1024
     assert Path(up["path"]).stat().st_size == 2500
     assert up["expires_at"] > up["created_at"]
-    assert used_bytes(conn, USER) == 2500
+    assert used_bytes(conn, settings, USER) == 2500
     assert get_upload(conn, USER, up["id"])["filename"] == "Clip.MOV"
     assert get_upload(conn, "usr_000000000002", up["id"]) is None
 
@@ -103,19 +103,30 @@ def test_quota_counts_assets_and_pending_uploads(conn, settings):
     assert e.value.details == {"used_bytes": 6_000, "limit_bytes": 10_000}
 
 
-def test_quota_does_not_count_conversions(conn, settings):
-    """Квота 20 ГБ считает ассеты и незавершённые загрузки. Конверсии в неё не входят."""
+def test_quota_counts_every_file_in_the_persons_folder(conn, settings):
+    """Лимит считает всё, что лежит в папке человека: исходник и то, что из него сделано, —
+    прокси, конверсии, — и готовые ролики проектов. Место занимают они все."""
     src = settings.data_dir / "a.mp4"
-    src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b"x" * 100)
     row = finalize_file(conn, settings, user_id=USER, src=src, filename="a.mp4", size=100, kind="video")
+    folder = asset_dir(settings, USER, row["id"])
+    (folder / "proxy.mp4").write_bytes(b"x" * 40)
+    (folder / "conversions").mkdir()
+    (folder / "conversions" / "a.mp3").write_bytes(b"x" * 25)
+    renders = render_dir(settings, USER, "prj_000000000001")
+    renders.mkdir(parents=True)
+    (renders / "r.mp4").write_bytes(b"x" * 300)
+    assert used_bytes(conn, settings, USER) == 465
+
+
+def test_quota_ignores_database_rows_without_files(conn, settings):
+    """Место занимают файлы, а не строки: запись в базе, чей файл уже стёрт, лимит не ест."""
     conn.execute(
-        "INSERT INTO conversions (id, user_id, asset_id, job_id, format, path, size, duration, "
-        "created_at, expires_at) VALUES ('cnv_000000000001', ?, ?, 'job_1', 'mp3', '/x.mp3', "
-        "9_000, 5, ?, ?)",
-        (USER, row["id"], now_iso(), now_iso()),
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, "
+        "last_access_at) VALUES ('ast_0000000000aa', ?, 'video', 'a.mp4', 'mp4', 9000, 'ready', ?, ?)",
+        (USER, now_iso(), now_iso()),
     )
-    assert used_bytes(conn, USER) == 100
+    assert used_bytes(conn, settings, USER) == 0
 
 
 def test_disk_low_blocks_new_uploads(conn, settings, monkeypatch):
@@ -185,7 +196,7 @@ def test_complete_moves_file_creates_asset_and_job(conn, settings):
     assert conn.execute("SELECT count(*) FROM uploads").fetchone()[0] == 0
     job = conn.execute("SELECT type, status, priority, target_id FROM jobs").fetchone()
     assert tuple(job) == ("analyze", "queued", 10, asset["id"])
-    assert used_bytes(conn, USER) == 2048
+    assert used_bytes(conn, settings, USER) == 2048
 
 
 def test_subtitle_is_ready_without_job(conn, settings, tmp_path):
@@ -210,11 +221,9 @@ def test_finalize_restores_file_when_db_insert_fails(conn, settings, tmp_path):
 
 
 def test_finalize_rechecks_quota_and_restores_file(conn, settings, tmp_path):
-    conn.execute(
-        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, created_at, "
-        "last_access_at) VALUES ('ast_0000000000aa', ?, 'video', 'a.mp4', 'mp4', 9000, 'ready', ?, ?)",
-        (USER, now_iso(), now_iso()),
-    )
+    folder = asset_dir(settings, USER, "ast_0000000000aa")
+    folder.mkdir(parents=True)
+    (folder / "source.mp4").write_bytes(b"x" * 9000)
     src = tmp_path / "b.mp4"
     src.write_bytes(b"y" * 2000)
     with pytest.raises(UploadError) as e:
@@ -224,7 +233,23 @@ def test_finalize_rechecks_quota_and_restores_file(conn, settings, tmp_path):
         )
     assert e.value.code == "quota_exceeded"
     assert src.read_bytes() == b"y" * 2000
-    assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM assets").fetchone()[0] == 0
+
+
+def test_finalize_recheck_does_not_count_the_new_file_twice(conn, settings, tmp_path):
+    """Перепроверка идёт, когда файл уже в папке записи: прибавь его размер ещё раз — и загрузка,
+    которая помещается в лимит ровно, получила бы отказ."""
+    folder = asset_dir(settings, USER, "ast_0000000000aa")
+    folder.mkdir(parents=True)
+    (folder / "source.mp4").write_bytes(b"x" * 6000)
+    src = tmp_path / "b.mp4"
+    src.write_bytes(b"y" * 4000)
+    row = finalize_file(
+        conn, settings, user_id=USER, src=src, filename="b.mp4", size=4000, kind="video",
+        check_quota=True,
+    )
+    assert row["size"] == 4000
+    assert used_bytes(conn, settings, USER) == 10_000
 
 
 def test_delete_upload_removes_record_and_file(conn, settings):

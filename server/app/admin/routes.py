@@ -17,6 +17,7 @@ from server.app.admin.services import RemoteClient, build_client, remote_service
 from server.app.auth.deps import CurrentUser, require_admin, require_admin_cookie
 from server.app.errors import ApiError
 from server.app.health import disk_free_pct_safe
+from server.app.uploads.store import used_bytes
 from server.db.core import get_db
 from server.media.timeline import clips_duration
 
@@ -42,6 +43,17 @@ class Stats(BaseModel):
     sessions: int
     tokens: int
     disk_free_pct: float
+
+
+class PersonUse(BaseModel):
+    email: str
+    name: str
+    bytes: int
+    records: int
+
+
+class UsageList(BaseModel):
+    people: list[PersonUse]
 
 
 class ServiceItem(BaseModel):
@@ -217,6 +229,27 @@ def all_assets(
         )
         for r in rows
     ])
+
+
+@router.get("/usage", response_model=UsageList)
+def usage(
+    request: Request,
+    _: CurrentUser = Depends(require_admin),  # noqa: B008
+    conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
+) -> UsageList:
+    """Кто сколько занимает на диске — по файлам в папке человека, так же, как считает его лимит.
+    Тяжёлые сверху: место кончается из-за них; у кого на диске ничего нет, в списке не стоит."""
+    settings = request.app.state.settings
+    records = {r[0]: r[1] for r in conn.execute("SELECT user_id, count(*) FROM assets GROUP BY user_id")}
+    people = []
+    for row in conn.execute("SELECT id, email, name FROM users").fetchall():
+        taken = used_bytes(conn, settings, row["id"])
+        if taken:
+            people.append(PersonUse(
+                email=row["email"], name=row["name"], bytes=taken, records=records.get(row["id"], 0),
+            ))
+    people.sort(key=lambda p: (-p.bytes, p.email))
+    return UsageList(people=people)
 
 
 @router.get("/stats", response_model=Stats)

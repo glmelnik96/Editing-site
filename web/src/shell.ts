@@ -17,6 +17,8 @@ export type Me = {
   role: 'admin' | 'user'
   auth: 'cookie' | 'token'
   quota: { used_bytes: number; limit_bytes: number }
+  /** Место на сервере — одно на всех: файлы сервиса на диске и сколько ещё свободно. */
+  server: { files_bytes: number; free_bytes: number }
 }
 
 export type Shell = {
@@ -28,14 +30,16 @@ export type Shell = {
 }
 
 /**
- * Шапка вошедшего: место на диске, разделы, настройки, кабинет админа, выход. «Проекты» и «Записи»
+ * Шапка вошедшего: место на сервере, разделы, настройки, кабинет админа, выход. «Проекты» и «Записи»
  * стоят всегда: на главной «Все проекты» живёт в «Недавнем», и без своих проектов на экран
- * «Проекты» было не попасть — а у админа там ещё и проекты команды.
+ * «Проекты» было не попасть — а у админа там ещё и проекты команды. Место — на всём сервере и
+ * у всех одно; свой расход и лимит — в подсказке.
  */
 export function navHtml(me: Me): string {
   const admin = me.role === 'admin' ? '<a href="#/admin">Кабинет доступа</a>' : ''
+  const tip = `${escapeHtml(me.email)}&#10;Ваши файлы: ${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}`
   return `
-      <div class="meta" title="${escapeHtml(me.email)}">${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</div>
+      <div class="meta" title="${tip}">${fmtSize(me.server.files_bytes)} · свободно ${fmtSize(me.server.free_bytes)}</div>
       <a href="#/projects">Проекты</a>
       <a href="#/files">Записи</a>
       <a href="#/settings">Настройки</a>

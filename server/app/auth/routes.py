@@ -15,7 +15,7 @@ from server.app.auth.sessions import create_session, delete_session
 from server.app.auth.users import is_whitelisted, upsert_user
 from server.app.errors import ApiError
 from server.app.security import SESSION_COOKIE, client_ip, is_bearer
-from server.app.storage import known_exts
+from server.app.storage import known_exts, server_space
 from server.app.uploads.store import used_bytes
 from server.db.core import get_db
 
@@ -131,8 +131,16 @@ class Quota(BaseModel):
     limit_bytes: int
 
 
+class ServerSpace(BaseModel):
+    """Место на сервере — одно на всех: файлы сервиса на диске и сколько ещё свободно."""
+
+    files_bytes: int
+    free_bytes: int
+
+
 class MeView(CurrentUser):
     quota: Quota
+    server: ServerSpace
 
 
 @me_router.get("/me", response_model=MeView)
@@ -143,8 +151,13 @@ def me(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> MeView:
     response.headers["Cache-Control"] = "no-store"
-    limit = request.app.state.settings.user_quota_bytes
-    return MeView(**user.model_dump(), quota=Quota(used_bytes=used_bytes(conn, user.id), limit_bytes=limit))
+    settings = request.app.state.settings
+    files, free = server_space(settings)
+    return MeView(
+        **user.model_dump(),
+        quota=Quota(used_bytes=used_bytes(conn, settings, user.id), limit_bytes=settings.user_quota_bytes),
+        server=ServerSpace(files_bytes=files, free_bytes=free),
+    )
 
 
 class LimitsView(BaseModel):

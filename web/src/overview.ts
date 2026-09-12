@@ -35,26 +35,25 @@ export type TeamAsset = {
   created_at: string
 }
 
-export type OwnerUse = { email: string; name: string; bytes: number; count: number }
+/** Место человека на диске — по файлам в его папке, как считает его лимит (GET /admin/usage). */
+export type PersonUse = { email: string; name: string; bytes: number; records: number }
 
-/** Кто сколько занял. Тяжёлые сверху: место кончается из-за них, а не из-за числа файлов. */
-export function diskByOwner(assets: TeamAsset[]): OwnerUse[] {
-  const by = new Map<string, OwnerUse>()
-  for (const asset of assets) {
-    const seen = by.get(asset.owner_email)
-    if (seen) {
-      seen.bytes += asset.size
-      seen.count += 1
-    } else {
-      by.set(asset.owner_email, {
-        email: asset.owner_email,
-        name: asset.owner_name,
-        bytes: asset.size,
-        count: 1,
-      })
-    }
-  }
-  return [...by.values()].sort((a, b) => b.bytes - a.bytes)
+export function loadUsage(): Promise<PersonUse[]> {
+  return api<{ people: PersonUse[] }>('/api/v1/admin/usage').then(body => body.people)
+}
+
+/** Строки кабинета. Порядок — тяжёлые сверху — уже задал сервер. */
+export function usageHtml(rows: PersonUse[]): string {
+  if (!rows.length) return '<span class="muted">На диске пока ничего нет</span>'
+  return rows
+    .map(
+      row =>
+        `<div class="row" style="margin:0;justify-content:space-between">
+          <span>${escapeHtml(row.name.trim() || row.email)}</span>
+          <span class="meta">${fmtSize(row.bytes)} · записей: ${row.records}</span>
+        </div>`,
+    )
+    .join('')
 }
 
 /** Имя человека, а если его не назвали — почта. Пустая строка в списке ничего не значит. */
@@ -83,7 +82,8 @@ export function loadTeamAssets(): Promise<TeamAsset[]> {
   return api<{ assets: TeamAsset[] }>('/api/v1/admin/assets').then(body => body.assets)
 }
 
-/** Итог по людям для кабинета: кто сколько занял диска. Сами списки — на экранах проектов и записей. */
+/** Итог по людям для кабинета: кто сколько занимает на диске — по файлам, как считает лимит.
+ * Сами списки — на экранах проектов и записей. */
 export function mountOverview(el: HTMLElement) {
   el.innerHTML = `
     <section class="card stack">
@@ -98,22 +98,9 @@ export function mountOverview(el: HTMLElement) {
   const errorBox = el.querySelector('#ov-error') as HTMLPreElement
   let stopped = false
 
-  function useHtml(rows: OwnerUse[]): string {
-    if (!rows.length) return '<span class="muted">Записей ни у кого нет</span>'
-    return rows
-      .map(
-        row =>
-          `<div class="row" style="margin:0;justify-content:space-between">
-            <span>${escapeHtml(row.name.trim() || row.email)}</span>
-            <span class="meta">${fmtSize(row.bytes)} · ${row.count} файл(ов)</span>
-          </div>`,
-      )
-      .join('')
-  }
-
-  void loadTeamAssets()
-    .then(assets => {
-      if (!stopped) useBox.innerHTML = useHtml(diskByOwner(assets))
+  void loadUsage()
+    .then(rows => {
+      if (!stopped) useBox.innerHTML = usageHtml(rows)
     })
     .catch(e => {
       if (stopped) return

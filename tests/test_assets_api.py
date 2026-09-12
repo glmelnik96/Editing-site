@@ -62,7 +62,8 @@ def test_small_upload_list_get_delete(client, login_as, settings):
     listing = client.get("/api/v1/assets").json()["assets"]
     assert [a["id"] for a in listing] == [asset["id"]]
     assert client.get(f"/api/v1/assets/{asset['id']}").json()["id"] == asset["id"]
-    quota = {"used_bytes": len(SRT), "limit_bytes": 10 * 1024 * 1024}
+    used = sum(f.stat().st_size for f in source.parent.iterdir())  # source.srt и subs.vtt
+    quota = {"used_bytes": used, "limit_bytes": 10 * 1024 * 1024}
     assert client.get("/api/v1/me").json()["quota"] == quota
     assert client.delete(f"/api/v1/assets/{asset['id']}").status_code == 204
     assert not source.parent.exists()
@@ -123,6 +124,16 @@ def test_me_has_quota_and_requires_auth(client, login_as):
     me = client.get("/api/v1/me").json()
     assert me["quota"] == {"used_bytes": 0, "limit_bytes": 10 * 1024 * 1024}
     assert me["role"] == "admin" and me["auth"] == "cookie" and now_iso().endswith("Z")
+
+
+def test_me_reports_server_space(client, login_as, settings):
+    """Место в шапке — на всём сервере: файлы сервиса на диске и сколько ещё свободно."""
+    login_as()
+    folder = settings.data_dir / "usr_0123456789ab"
+    folder.mkdir(parents=True)
+    (folder / "x.bin").write_bytes(b"x" * 1000)
+    server = client.get("/api/v1/me").json()["server"]
+    assert server["files_bytes"] >= 1000 and server["free_bytes"] > 0
 
 
 def test_subtitle_upload_produces_a_vtt_link(client, login_as, settings):
