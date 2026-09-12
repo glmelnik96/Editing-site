@@ -37,17 +37,17 @@ describe('боковые колонки', () => {
 })
 
 describe('дорожки шкалы', () => {
-  it('обычные — втрое ниже прежних: клип 24 px вместо 72, колеи вместе 98 px вместо 242', () => {
+  it('обычные — вдвое ниже прежних: клип 36 px вместо 72, колеи вместе 134 px вместо 242', () => {
     const s = laneSizes(false)
-    expect([s.overlay, s.track, s.audio, s.sound]).toEqual([20, 28, 20, 20])
-    expect([s.clipBlock, s.clipFrame, s.audioBlock, s.laneBlock]).toEqual([24, 30, 16, 16])
-    expect(lanesHeight(s)).toBe(98)
+    expect([s.overlay, s.track, s.audio, s.sound]).toEqual([28, 40, 28, 28])
+    expect([s.clipBlock, s.clipFrame, s.audioBlock, s.laneBlock]).toEqual([36, 45, 24, 24])
+    expect(lanesHeight(s)).toBe(134)
   })
 
-  it('низкие отдают сцене ещё 10 px', () => {
+  it('низкие отдают сцене ещё 20 px', () => {
     const s = laneSizes(true)
-    expect([s.overlay, s.track, s.audio, s.sound]).toEqual([18, 24, 18, 18])
-    expect(lanesHeight(laneSizes(false)) - lanesHeight(s)).toBe(10)
+    expect([s.overlay, s.track, s.audio, s.sound]).toEqual([24, 32, 24, 24])
+    expect(lanesHeight(laneSizes(false)) - lanesHeight(s)).toBe(20)
   })
 
   it('колея выше блока на 4 px — по 2 сверху и снизу; кадр клипа — в прежней пропорции 90 к 72', () => {

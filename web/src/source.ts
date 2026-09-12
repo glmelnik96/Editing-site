@@ -88,10 +88,14 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
             <i class="src-cursor" id="src-cursor"></i>
           </div>
           <div class="row">
-            <button id="src-mark-in" type="button" title="Взять начало с плеера">Начало</button>
-            <input id="src-in" class="tc" inputmode="decimal" placeholder="0:00.0" />
-            <button id="src-mark-out" type="button" title="Взять конец с плеера">Конец</button>
-            <input id="src-out" class="tc" inputmode="decimal" placeholder="0:00.0" />
+            <span class="src-mark">
+              <button id="src-mark-in" type="button" title="Взять начало с плеера">Начало</button>
+              <input id="src-in" class="tc" inputmode="decimal" placeholder="0:00.0" />
+            </span>
+            <span class="src-mark">
+              <button id="src-mark-out" type="button" title="Взять конец с плеера">Конец</button>
+              <input id="src-out" class="tc" inputmode="decimal" placeholder="0:00.0" />
+            </span>
           </div>
         </div>
         <!-- У картинки резать нечего: вместо границ куска — сколько секунд держать её в кадре.

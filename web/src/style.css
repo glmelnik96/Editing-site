@@ -1285,6 +1285,14 @@ body.editor-fit #shell-screen {
 .src-add-row {
   margin: 0;
 }
+/* «Начало» и «Конец» переносятся парой: в колонке около 300 px строка ломалась между
+   подписью «Конец» и её полем. Кнопки одной ширины — поля двух пар стоят столбиком. */
+.src-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.src-mark > button { min-width: 5.5em; }
 .src-cut-hint {
   margin: 0;
   font-size: var(--text-xs);
@@ -1447,12 +1455,12 @@ body.editor-fit #shell-screen {
    их ставит шкала из laneSizes (layout.ts): те же числа рисуют кадры и волну. Значения здесь —
    обычный режим, до первой отрисовки. */
 .tl-frame {
-  --lane-overlay: 20px;
-  --lane-track: 28px;
-  --lane-audio: 20px;
-  --lane-sound: 20px;
-  --clip-block: 24px;
-  --lane-block: 16px;
+  --lane-overlay: 28px;
+  --lane-track: 40px;
+  --lane-audio: 28px;
+  --lane-sound: 28px;
+  --clip-block: 36px;
+  --lane-block: 24px;
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   overflow: hidden;
