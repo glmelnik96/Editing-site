@@ -347,7 +347,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
           <button id="rnd-cancel" type="button">Отменить сборку</button>
         </div>
       </div>
-      <ul id="rnd-list" class="versions"><li class="muted">Пока нет</li></ul>
+      <ul id="rnd-list" class="versions"><li class="muted">Нет готовых роликов</li></ul>
       <pre id="rnd-error" hidden></pre>
     </main>`
   const formatPick = el.querySelector('#rnd-format') as HTMLSelectElement
@@ -488,7 +488,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
     const { renders } = await listRenders(projectId)
     if (stopped) return
     handlers.onCount?.(renders.length)
-    list.innerHTML = renders.map(row).join('') || '<li class="muted">Пока нет</li>'
+    list.innerHTML = renders.map(row).join('') || '<li class="muted">Нет готовых роликов</li>'
     list.querySelectorAll<HTMLButtonElement>('button[data-drop]').forEach(b =>
       b.addEventListener('click', async () => {
         if (!window.confirm('Удалить готовый ролик? Файл пропадёт без возможности восстановления.')) return
