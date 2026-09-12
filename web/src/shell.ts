@@ -27,6 +27,23 @@ export type Shell = {
   work: WorkControls
 }
 
+/**
+ * Шапка вошедшего: место на диске, разделы, настройки, кабинет админа, выход. «Проекты» и «Записи»
+ * стоят всегда: на главной «Все проекты» живёт в «Недавнем», и без своих проектов на экран
+ * «Проекты» было не попасть — а у админа там ещё и проекты команды.
+ */
+export function navHtml(me: Me): string {
+  const admin = me.role === 'admin' ? '<a href="#/admin">Кабинет доступа</a>' : ''
+  return `
+      <div class="meta" title="${escapeHtml(me.email)}">${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</div>
+      <a href="#/projects">Проекты</a>
+      <a href="#/files">Записи</a>
+      <a href="#/settings">Настройки</a>
+      ${admin}
+      <button type="button" class="btn btn-ghost" id="shell-logout">Выйти</button>
+      <div class="meta error" id="shell-logout-error" hidden></div>`
+}
+
 export function mountShell(root: HTMLElement): Shell {
   root.innerHTML = `
     <header class="bar">
@@ -42,13 +59,7 @@ export function mountShell(root: HTMLElement): Shell {
   const work = mountWork(root.querySelector('#shell-work') as HTMLElement)
 
   function setUser(me: Me): void {
-    const admin = me.role === 'admin' ? '<a href="#/admin">Кабинет доступа</a>' : ''
-    nav.innerHTML = `
-      <div class="meta" title="${escapeHtml(me.email)}">${fmtSize(me.quota.used_bytes)} из ${fmtSize(me.quota.limit_bytes)}</div>
-      <a href="#/settings">Настройки</a>
-      ${admin}
-      <button type="button" class="btn btn-ghost" id="shell-logout">Выйти</button>
-      <div class="meta error" id="shell-logout-error" hidden></div>`
+    nav.innerHTML = navHtml(me)
 
     const logout = nav.querySelector('#shell-logout') as HTMLButtonElement
     const errorBox = nav.querySelector('#shell-logout-error') as HTMLElement
