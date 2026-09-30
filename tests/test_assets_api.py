@@ -19,6 +19,7 @@ def _row(**over):
         "fps": None, "has_audio": None, "video_codec": None, "audio_codec": None,
         "bit_rate": None, "error": None,
         "created_at": "2026-09-04T00:00:00.000Z", "last_access_at": "2026-09-04T00:00:00.000Z",
+        "owner_email": "a@b.c", "owner_name": "A",
     }
     return {**base, **over}
 
@@ -101,14 +102,19 @@ def test_delete_cancels_open_jobs(client, login_as, settings):
     conn.close()
 
 
-def test_foreign_asset_is_404(client, login_as):
+def test_a_colleague_sees_and_deletes_a_free_record(client, login_as, settings):
+    """Записи общие: коллега видит чужую запись с автором и может удалить свободную."""
     login_as()
     asset_id = _upload_small(client).json()["id"]
+    me = client.get("/api/v1/me").json()
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert client.get(f"/api/v1/assets/{asset_id}").status_code == 404
-    assert client.delete(f"/api/v1/assets/{asset_id}").status_code == 404
-    assert client.get("/api/v1/assets").json()["assets"] == []
+    card = client.get(f"/api/v1/assets/{asset_id}").json()
+    assert card["owner_email"] == me["email"] and card["owner_name"] == me["name"]
+    assert [a["id"] for a in client.get("/api/v1/assets").json()["assets"]] == [asset_id]
+    assert client.get("/api/v1/assets?mine=1").json()["assets"] == []
+    assert client.delete(f"/api/v1/assets/{asset_id}").status_code == 204
+    assert not (settings.data_dir / me["id"] / "assets" / asset_id).exists()
 
 
 def test_bearer_can_list_and_delete(bearer_client):

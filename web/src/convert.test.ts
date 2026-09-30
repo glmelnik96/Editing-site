@@ -67,7 +67,7 @@ describe('convert screen helpers', () => {
     expect(convertJobText('running', 0.4)).toContain('%')
   })
 
-  it('подхватывает идущую конвертацию после перезагрузки экрана', () => {
+  it('подхватывает свою идущую конвертацию после перезагрузки экрана, чужую — нет', () => {
     const rows = runningConvertsFromJobs([
       {
         id: 'job_1',
@@ -114,7 +114,23 @@ describe('convert screen helpers', () => {
         owner_email: 'a@b.c',
         owner_name: 'A',
       },
-    ])
+      // Чужая конвертация: очередь общая, но конвертер личный — её не подхватываем.
+      {
+        id: 'job_4',
+        type: 'convert',
+        status: 'running',
+        progress: 0.2,
+        error: null,
+        created_at: '',
+        finished_at: null,
+        label: 'b.mp4',
+        cancelable: true,
+        quality: null,
+        target_id: 'ast_9',
+        owner_email: 'x@y.z',
+        owner_name: 'X',
+      },
+    ], 'A@B.c')
     expect(rows).toEqual([
       {
         assetId: 'ast_1',

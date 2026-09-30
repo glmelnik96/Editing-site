@@ -1,6 +1,9 @@
 /**
  * Экран конвертера: один готовый файл, формат, список скачиваний этого человека.
  *
+ * Конвертер личный, хотя записи общие: в выборе файла только свои записи, а в «Готовых файлах» —
+ * только свои конвертации.
+ *
  * Загрузка остаётся в записях. Ход и отмена живут в списке под шапкой — как у панели сборки:
  * своя полоса с собственной кнопкой «Отменить» рядом с той же строкой в шапке показывала одно
  * задание дважды и спрашивала, какую из двух отмен нажимать.
@@ -18,7 +21,9 @@ import {
   type Asset,
 } from './assets'
 import { escapeHtml } from './html'
+import { ownedBy } from './overview'
 import { listJobs, loadJob, type JobListItem, type JobView } from './project'
+import type { Me } from './shell'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
 const CONVERT_JOB_TEXT: Record<string, string> = {
@@ -61,10 +66,14 @@ export function convertJobText(status: string, progress: number): string {
   return CONVERT_JOB_TEXT[status] ?? status
 }
 
-/** Идущие convert-задания с GET /jobs: после перезагрузки экрана pending пуст. */
-export function runningConvertsFromJobs(items: JobListItem[]): Array<{ assetId: string; job: JobView }> {
+/** Свои идущие convert-задания с GET /jobs: после перезагрузки экрана pending пуст. Очередь общая,
+ * а конвертер личный — чужие конвертации не подхватываем. */
+export function runningConvertsFromJobs(
+  items: JobListItem[],
+  myEmail: string,
+): Array<{ assetId: string; job: JobView }> {
   return items
-    .filter(job => job.type === 'convert' && CONVERT_RUNNING.has(job.status))
+    .filter(job => job.type === 'convert' && CONVERT_RUNNING.has(job.status) && ownedBy(job, myEmail))
     .map(job => ({
       assetId: job.target_id,
       job: {
@@ -136,7 +145,7 @@ export function deleteConversion(id: string): Promise<void> {
   return api<void>(`/api/v1/conversions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export function mountConvert(el: HTMLElement) {
+export function mountConvert(el: HTMLElement, me: Me) {
   el.innerHTML = `
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Конвертер</h1>
@@ -300,12 +309,13 @@ export function mountConvert(el: HTMLElement) {
   async function refresh(): Promise<void> {
     if (stopped) return
     try {
-      const listed = await listAssets()
+      // Только свои: чужую запись сервер конвертировать не даст (403 not_yours).
+      const listed = await listAssets(true)
       if (stopped) return
       assets = listed.assets
       const { jobs: listedJobs } = await listJobs()
       if (stopped) return
-      for (const row of runningConvertsFromJobs(listedJobs)) {
+      for (const row of runningConvertsFromJobs(listedJobs, me.email)) {
         pending.set(row.assetId, row.job.id)
         jobs.set(row.assetId, row.job)
       }

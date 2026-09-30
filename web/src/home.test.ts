@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { homeStepsHtml } from './home'
+import { homeStepsHtml, recentRowHtml } from './home'
+import type { ProjectCard } from './project'
 
 describe('шаги кабинета', () => {
   it('ведёт двумя шагами: сначала исходники, потом редактор', () => {
@@ -25,5 +26,28 @@ describe('шаги кабинета', () => {
     const slice = html.slice(at - 200, at + 200)
     expect(slice).toContain('href="#/convert"')
     expect(slice).not.toContain('href="#/files"')
+  })
+})
+
+describe('недавнее', () => {
+  const p = (over: Partial<ProjectCard> = {}): ProjectCard => ({
+    id: 'prj_1',
+    name: 'Планёрка',
+    version: 1,
+    created_at: 'x',
+    updated_at: 'x',
+    clips_count: 3,
+    duration: 42,
+    owner_email: 'liza@ya.ru',
+    owner_name: 'Лиза',
+    ...over,
+  })
+
+  it('у проекта коллеги называет автора', () => {
+    expect(recentRowHtml(p(), 0, 'gleb@ya.ru')).toContain('Лиза · 3 кл.')
+  })
+
+  it('у своего проекта автора не пишет', () => {
+    expect(recentRowHtml(p({ owner_email: 'gleb@ya.ru' }), 0, 'gleb@ya.ru')).toContain('>3 кл.')
   })
 })

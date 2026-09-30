@@ -150,7 +150,8 @@ def test_job_can_be_canceled(client, login_as, settings):
     assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "canceled"
 
 
-def test_foreign_things_are_404(client, login_as, settings):
+def test_a_colleague_works_with_renders_and_jobs(client, login_as, settings):
+    """Ролики и задания общие: коллега смотрит, собирает, отменяет и удаляет."""
     login_as()
     me = client.get("/api/v1/me").json()
     project = make_project(client, settings, me["id"])
@@ -158,12 +159,16 @@ def test_foreign_things_are_404(client, login_as, settings):
     job_id = client.post(f"/api/v1/projects/{project['id']}/render", json={}).json()["job_id"]
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert client.get(f"/api/v1/renders/{render_id}").status_code == 404
-    assert client.delete(f"/api/v1/renders/{render_id}").status_code == 404
-    assert client.get(f"/api/v1/jobs/{job_id}").status_code == 404
-    assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 404
-    assert client.post(f"/api/v1/projects/{project['id']}/render", json={}).status_code == 404
-    assert client.get(f"/api/v1/projects/{project['id']}/renders").status_code == 404
+    assert client.get(f"/api/v1/renders/{render_id}").status_code == 200
+    assert client.get(f"/api/v1/jobs/{job_id}").status_code == 200
+    assert client.get(f"/api/v1/projects/{project['id']}/renders").status_code == 200
+    assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 204
+    again = client.post(f"/api/v1/projects/{project['id']}/render", json={})
+    assert again.status_code == 202, again.text
+    # Сборка числится за автором проекта: ролик ляжет в его каталог.
+    jobs = {j["id"]: j for j in client.get("/api/v1/jobs").json()["jobs"]}
+    assert jobs[again.json()["job_id"]]["owner_email"] == me["email"]
+    assert client.delete(f"/api/v1/renders/{render_id}").status_code == 204
 
 
 def test_agent_can_render_with_a_token(bearer_client, settings):

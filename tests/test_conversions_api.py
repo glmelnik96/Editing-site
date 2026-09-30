@@ -216,7 +216,9 @@ def test_queueing_the_eleventh_does_not_destroy_the_oldest(client, login_as, set
     assert (folder / "cnv_000000000000.mp3").exists()
 
 
-def test_foreign_conversion_is_404(client, login_as, settings):
+def test_a_colleagues_conversions_stay_personal(client, login_as, settings):
+    """Конвертер личный: чужие конверсии не видны, чужую запись не сконвертировать (403).
+    Задание конвертации при этом видно всем — очередь общая."""
     login_as()
     me = client.get("/api/v1/me").json()
     seed_asset(settings, me["id"])
@@ -226,9 +228,10 @@ def test_foreign_conversion_is_404(client, login_as, settings):
     login_as("other@ya.ru", "Other")
     assert client.get(f"/api/v1/conversions/{cid}").status_code == 404
     assert client.delete(f"/api/v1/conversions/{cid}").status_code == 404
-    assert client.get(f"/api/v1/assets/{ASSET}/conversions").status_code == 404
-    assert client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "mp3"}).status_code == 404
-    assert client.get(f"/api/v1/jobs/{job_id}").status_code == 404
+    assert client.get(f"/api/v1/assets/{ASSET}/conversions").status_code == 403
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "mp3"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_yours"
+    assert client.get(f"/api/v1/jobs/{job_id}").status_code == 200
 
 
 def test_agent_can_convert_with_a_token(bearer_client, settings):

@@ -7,7 +7,8 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from server.app.assets.views import AssetView, asset_view
+from server.app.assets.views import AssetView, list_asset_views
+from server.app.audit import audit
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.errors import ApiError
 from server.app.jobs import enqueue_job
@@ -67,6 +68,9 @@ class ProjectCard(BaseModel):
     updated_at: str
     clips_count: int
     duration: float
+    # Автор: проекты видит вся команда. Имена полей — как у заданий в /jobs.
+    owner_email: str
+    owner_name: str
 
 
 class AssetList(BaseModel):
@@ -87,29 +91,28 @@ def conflict(exc: ProjectConflict) -> ApiError:
     )
 
 
-def _owned(conn: sqlite3.Connection, user: CurrentUser, project_id: str) -> tuple[dict, str]:
-    """Проект и его владелец. Админ работает и с чужими: он отвечает за общий диск и за то, чтобы
-    работа команды не встала, пока автор в отпуске.
+def _project(conn: sqlite3.Connection, project_id: str) -> tuple[dict, str]:
+    """Проект и его автор. Проект общий: открывает, правит, собирает и удаляет любой вошедший.
 
-    Владельца возвращаем отдельно, потому что дальше маршрут действует от его имени, а не от имени
-    вызывающего: файлы проекта лежат в каталоге владельца, а сохранение ищет строку по его id.
-    Чужому не-админу отвечаем 404, а не 403 — сообщать, что чужой проект существует, незачем.
+    Автора возвращаем отдельно, потому что дальше маршрут действует от его имени, а не от имени
+    вызывающего: файлы проекта лежат в каталоге автора, а сохранение ищет строку по его id.
     """
     owner = project_owner(conn, project_id)
-    if owner is None or (owner != user.id and user.role != "admin"):
-        raise ApiError(404, "not_found", "Проект не найден")
-    project = get_project(conn, owner, project_id)
-    if project is None:
+    project = get_project(conn, owner, project_id) if owner else None
+    if owner is None or project is None:
         raise ApiError(404, "not_found", "Проект не найден")
     return project, owner
 
 
 @router.get("", response_model=ProjectList)
 def list_(
+    mine: bool = False,
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> ProjectList:
-    return ProjectList(projects=[ProjectCard(**p) for p in list_projects(conn, user.id)])
+    """Все проекты команды, свежие правки сверху; ?mine=1 — только свои (для скриптов агента)."""
+    owner = user.id if mine else None
+    return ProjectList(projects=[ProjectCard(**p) for p in list_projects(conn, owner=owner)])
 
 
 @router.post("", status_code=201, response_model=ProjectView)
@@ -136,7 +139,7 @@ def get_(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> ProjectView:
-    project, _ = _owned(conn, user, project_id)
+    project, _ = _project(conn, project_id)
     return ProjectView(**project)
 
 
@@ -148,7 +151,7 @@ def save(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> ProjectView:
-    _, owner = _owned(conn, user, project_id)
+    _, owner = _project(conn, project_id)
     try:
         project = save_project(
             conn, request.app.state.settings, owner, project_id,
@@ -159,7 +162,7 @@ def save(
     except ProjectConflict as exc:
         raise conflict(exc) from exc
     except KeyError as exc:
-        # Проект удалили между проверкой владения и записью: для клиента это «не найден».
+        # Проект удалили между проверкой и записью: для клиента это «не найден».
         raise ApiError(404, "not_found", "Проект не найден") from exc
     return ProjectView(**project)
 
@@ -171,9 +174,10 @@ def delete(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
-    _, owner = _owned(conn, user, project_id)
+    project, owner = _project(conn, project_id)
     if not delete_project(conn, request.app.state.settings, owner, project_id):
         raise ApiError(404, "not_found", "Проект не найден")
+    audit(conn, user, "удалил проект", f"{project_id} «{project['name']}»", owner)
     return Response(status_code=204)
 
 
@@ -207,7 +211,7 @@ def checkpoint(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> VersionView:
-    _, owner = _owned(conn, user, project_id)
+    _, owner = _project(conn, project_id)
     try:
         made = create_checkpoint(
             conn, request.app.state.settings, owner, project_id, label=body.label
@@ -225,7 +229,7 @@ def versions(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> VersionList:
-    _, owner = _owned(conn, user, project_id)
+    _, owner = _project(conn, project_id)
     return VersionList(versions=[VersionView(**v) for v in list_versions(conn, owner, project_id)])
 
 
@@ -237,7 +241,7 @@ def restore(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> ProjectView:
-    _, owner = _owned(conn, user, project_id)
+    _, owner = _project(conn, project_id)
     try:
         project = restore_version(
             conn, request.app.state.settings, owner, project_id, body.version_id
@@ -294,7 +298,7 @@ def render(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> RenderQueued:
     """Ставит сборку в очередь. Ход виден в задании, готовый ролик появится в списке рендеров."""
-    project, owner = _owned(conn, user, project_id)
+    project, owner = _project(conn, project_id)
     if not project["doc"].get("clips"):
         raise ApiError(422, "empty_project", "В проекте нет клипов")
     settings = request.app.state.settings
@@ -314,8 +318,8 @@ def render(
     if body.bitrate_kbps is not None:
         params["bitrate_kbps"] = body.bitrate_kbps
     job_id = enqueue_job(
-        # Задание и готовый ролик принадлежат владельцу: файл ложится в его каталог, и путь
-        # /files/{владелец}/projects/… иначе не сошёлся бы.
+        # Задание и готовый ролик числятся за автором проекта, кто бы ни нажал «Собрать»: файл
+        # ложится в его каталог, и путь /files/{автор}/projects/… иначе не сошёлся бы.
         conn, user_id=owner, type_="render", target_id=project_id, params=params
     )
     return RenderQueued(job_id=job_id, quality=body.quality, format=body.format)
@@ -327,21 +331,10 @@ def project_assets(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> AssetList:
-    """Записи, из которых можно собрать этот проект, — то есть записи его владельца.
-
-    Редактор берёт список отсюда, а не из общего /assets: документ обязан ссылаться на записи
-    владельца (проверка проекта их и сверяет), а у админа, открывшего чужой проект, свой список
-    совсем другой — все клипы выглядели бы необработанными.
-    """
-    _, owner = _owned(conn, user, project_id)
-    rows = conn.execute(
-        "SELECT * FROM assets WHERE user_id = ? ORDER BY created_at DESC, id", (owner,)
-    ).fetchall()
-    transcribed = {
-        r["asset_id"]
-        for r in conn.execute("SELECT asset_id FROM transcripts WHERE user_id = ?", (owner,))
-    }
-    return AssetList(assets=[asset_view(r, has_transcript=r["id"] in transcribed) for r in rows])
+    """Записи, из которых можно собрать проект, — все записи команды: документ может ссылаться на
+    запись любого автора. Тот же список, что GET /api/v1/assets; ручка осталась ради редактора."""
+    _project(conn, project_id)
+    return AssetList(assets=list_asset_views(conn))
 
 
 @router.get("/{project_id}/renders", response_model=RenderList)
@@ -350,7 +343,7 @@ def renders(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> RenderList:
-    _, owner = _owned(conn, user, project_id)
+    _, owner = _project(conn, project_id)
     return RenderList(renders=[RenderView(**r) for r in list_renders(conn, owner, project_id)])
 
 
@@ -378,7 +371,7 @@ def generate_subtitles(
     Дальше ролик собирается из этих реплик, а не из расшифровки заново: человек их вычитывает и
     правит карточками, и его правка обязана дожить до вжигания.
     """
-    project, owner = _owned(conn, user, project_id)
+    project, owner = _project(conn, project_id)
     if not project["doc"].get("clips"):
         raise ApiError(422, "empty_project", "В проекте нет клипов")
     try:
@@ -398,7 +391,7 @@ def generate_subtitles(
     except ProjectConflict as exc:
         raise conflict(exc) from exc
     except KeyError as exc:
-        # Проект удалили между проверкой владения и записью: для клиента это «не найден».
+        # Проект удалили между проверкой и записью: для клиента это «не найден».
         raise ApiError(404, "not_found", "Проект не найден") from exc
     return ProjectView(**saved)
 
@@ -417,7 +410,7 @@ def subtitles(
     `enabled` и может пропустить этот файл; эта ручка на признак не смотрит. Сборка ленивая,
     дальше работает кэш версии.
     """
-    project, _ = _owned(conn, user, project_id)
+    project, _ = _project(conn, project_id)
     try:
         srt = build_project_subtitles(conn, request.app.state.settings, project)
     except SubtitlesUnavailable as exc:

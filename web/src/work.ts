@@ -21,7 +21,7 @@ export type WorkJob = {
   label: string
   cancelable: boolean
   quality: RenderQuality | null
-  /** Чьё, если не моё: админ видит ход всей команды, и без имени не понять, чья это сборка. */
+  /** Чьё, если не моё: ход всей команды видят все, и без имени не понять, чья это сборка. */
   owner: string | null
 }
 

@@ -68,7 +68,7 @@ function show(route: Route, me: Me): void {
       current = mountNewProject(shell.screen)
       return
     case 'convert':
-      current = mountConvert(shell.screen)
+      current = mountConvert(shell.screen, me)
       return
     case 'projects':
       current = mountProjects(shell.screen, me)
@@ -81,7 +81,7 @@ function show(route: Route, me: Me): void {
       current = mountAdmin(shell.screen)
       return
     case 'editor':
-      current = mountEditor(shell.screen, route.projectId)
+      current = mountEditor(shell.screen, route.projectId, me)
   }
 }
 

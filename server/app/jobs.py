@@ -28,65 +28,63 @@ def job_label(type_: str, asset_name: str | None, project_name: str | None) -> s
     return asset_name or project_name or ""
 
 
-def list_jobs_for_user(
-    conn: sqlite3.Connection, user_id: str, *, now: datetime, everyone: bool = False
-) -> list[dict]:
-    """Живые и только что законченные задания человека; с everyone — всей команды.
+_JOB_SELECT = """
+    SELECT jobs.id, jobs.type, jobs.status, jobs.progress, jobs.error, jobs.created_at,
+           jobs.finished_at, jobs.params, jobs.target_id,
+           assets.original_name AS asset_name, projects.name AS project_name,
+           users.email AS owner_email, users.name AS owner_name
+    FROM jobs
+    LEFT JOIN users ON users.id = jobs.user_id
+    LEFT JOIN assets
+      ON assets.id = jobs.target_id AND jobs.type IN ('analyze', 'proxy', 'transcribe', 'convert')
+    LEFT JOIN projects
+      ON projects.id = jobs.target_id AND jobs.type = 'render'
+"""
 
-    everyone — для админа. Сборку в чужом проекте он мог поставить сам, а числится она за
-    владельцем; и идущую чужую сборку ему надо видеть и уметь снять, не залезая в базу. Каждая
-    строка называет владельца (owner_email, owner_name): в общем списке иначе не понять, чья
-    это «Сборка «Ролик»».
+
+def list_jobs(conn: sqlite3.Connection, *, now: datetime, owner: str | None = None) -> list[dict]:
+    """Задания команды: идущие и только что законченные; с owner — только этого человека.
+
+    Очередь общая, как проекты и записи: сборку в чужом проекте мог поставить любой, и её ход видят
+    все. Каждая строка называет автора (owner_email, owner_name): в общем списке иначе не понять,
+    чья это «Сборка «Ролик»».
+
+    Идущие отдаются все, предел LIST_LIMIT — только законченным. Иначе пачка чужих загрузок
+    (анализ и прокси на каждый файл) вытеснила бы из списка идущую сборку, и панель «Рендер»,
+    не найдя её, дала бы поставить вторую.
     """
     cutoff = iso(now - timedelta(seconds=RECENT_SEC))
-    rows = conn.execute(
-        """
-        SELECT jobs.id, jobs.type, jobs.status, jobs.progress, jobs.error, jobs.created_at,
-               jobs.finished_at, jobs.params, jobs.target_id,
-               assets.original_name AS asset_name, projects.name AS project_name,
-               users.email AS owner_email, users.name AS owner_name
-        FROM jobs
-        LEFT JOIN users ON users.id = jobs.user_id
-        LEFT JOIN assets
-          ON assets.id = jobs.target_id AND jobs.type IN ('analyze', 'proxy', 'transcribe', 'convert')
-        LEFT JOIN projects
-          ON projects.id = jobs.target_id AND jobs.type = 'render'
-        WHERE (jobs.user_id = ? OR ?)
-          AND (
-            jobs.status IN ('queued', 'running')
-            OR (
-              jobs.status IN ('done', 'canceled', 'failed')
-              AND jobs.finished_at IS NOT NULL
-              AND jobs.finished_at >= ?
-            )
-          )
-        ORDER BY jobs.created_at DESC
-        LIMIT ?
-        """,
-        (user_id, everyone, cutoff, LIST_LIMIT),
+    mine = " AND jobs.user_id = ?" if owner else ""
+    extra: tuple = (owner,) if owner else ()
+    live = conn.execute(f"{_JOB_SELECT} WHERE jobs.status IN ('queued', 'running'){mine}", extra).fetchall()
+    finished = conn.execute(
+        f"{_JOB_SELECT} WHERE jobs.status IN ('done', 'canceled', 'failed') "
+        f"AND jobs.finished_at IS NOT NULL AND jobs.finished_at >= ?{mine} "
+        "ORDER BY jobs.created_at DESC LIMIT ?",
+        (cutoff, *extra, LIST_LIMIT),
     ).fetchall()
-    out: list[dict] = []
-    for row in rows:
-        params = json.loads(row["params"] or "{}")
-        quality = params.get("quality") if row["type"] == "render" else None
-        out.append(
-            {
-                "id": row["id"],
-                "type": row["type"],
-                "status": row["status"],
-                "progress": row["progress"],
-                "error": row["error"],
-                "created_at": row["created_at"],
-                "finished_at": row["finished_at"],
-                "label": job_label(row["type"], row["asset_name"], row["project_name"]),
-                "cancelable": job_cancelable(row["type"], row["status"]),
-                "quality": quality if quality in RENDER_QUALITIES else None,
-                "target_id": row["target_id"],
-                "owner_email": row["owner_email"] or "",
-                "owner_name": row["owner_name"] or "",
-            }
-        )
-    return out
+    rows = sorted([*live, *finished], key=lambda row: row["created_at"], reverse=True)
+    return [_job_item(row) for row in rows]
+
+
+def _job_item(row: sqlite3.Row) -> dict:
+    params = json.loads(row["params"] or "{}")
+    quality = params.get("quality") if row["type"] == "render" else None
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "error": row["error"],
+        "created_at": row["created_at"],
+        "finished_at": row["finished_at"],
+        "label": job_label(row["type"], row["asset_name"], row["project_name"]),
+        "cancelable": job_cancelable(row["type"], row["status"]),
+        "quality": quality if quality in RENDER_QUALITIES else None,
+        "target_id": row["target_id"],
+        "owner_email": row["owner_email"] or "",
+        "owner_name": row["owner_name"] or "",
+    }
 
 
 def enqueue_job(

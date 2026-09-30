@@ -31,7 +31,7 @@ def test_list_returns_own_open_jobs(client, login_as, settings):
     assert "progress" in row
 
 
-def test_list_hides_other_users_jobs_from_a_plain_user(client, login_as, settings):
+def test_a_plain_user_sees_the_whole_team_and_mine_filters(client, login_as, settings):
     login_as()
     assert client.post("/api/v1/admin/whitelist", json={"email": "u@ya.ru"}).status_code == 201
     login_as("u@ya.ru", "U")
@@ -47,12 +47,14 @@ def test_list_hides_other_users_jobs_from_a_plain_user(client, login_as, setting
     conn.commit()
     conn.close()
     rows = {j["id"]: j for j in client.get("/api/v1/jobs").json()["jobs"]}
-    assert mine in rows and stranger not in rows
+    assert mine in rows and stranger in rows
+    assert rows[stranger]["owner_email"] == "x@y.z" and rows[stranger]["owner_name"] == "X"
     assert rows[mine]["owner_email"] == "u@ya.ru" and rows[mine]["owner_name"] == "U"
+    assert [j["id"] for j in client.get("/api/v1/jobs?mine=1").json()["jobs"]] == [mine]
 
 
 def test_admin_sees_the_whole_team_and_who_owns_what(client, login_as, settings):
-    """Иначе идущую чужую сборку админ не находил вовсе: шапка спрашивает именно этот список."""
+    """Очередь общая: каждая строка называет автора, иначе не понять, чья это «Сборка»."""
     login_as()
     me = client.get("/api/v1/me").json()
     conn = sqlite3.connect(str(settings.db_path))

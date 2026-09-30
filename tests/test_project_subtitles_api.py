@@ -219,12 +219,13 @@ def test_stale_version_is_a_conflict(client, login_as, settings):
     assert r.json()["error"]["details"]["project"]["version"] == project["version"] + 1
 
 
-def test_generate_on_a_foreign_project_is_404(client, login_as, settings):
+def test_a_colleague_generates_cues_in_a_project(client, login_as, settings):
+    """Проект общий: реплики собирает любой, расшифровка берётся у автора записи."""
     login_as()
     project = with_transcript(client, settings)
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert generate(client, project).status_code == 404
+    assert cues_of(generate(client, project))
 
 
 def test_generate_without_asset_id_uses_the_timeline(client, login_as, settings):
@@ -369,13 +370,14 @@ def test_without_transcript_is_422(client, login_as, settings):
 # ── Доступ ─────────────────────────────────────────────────────────────────────────────────────
 
 
-def test_foreign_project_is_404(client, login_as, settings):
-    """Чужой проект неотличим от несуществующего: чужие идентификаторы наружу не подтверждаем."""
+def test_a_colleague_downloads_the_subtitles(client, login_as, settings):
     login_as()
     project = ready_project(client, settings)
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert subtitles(client, project).status_code == 404
+    r = subtitles(client, project)
+    assert r.status_code == 200, r.text
+    assert "-->" in r.text
 
 
 def test_agent_gets_subtitles_with_a_token(bearer_client, settings):

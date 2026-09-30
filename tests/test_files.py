@@ -21,7 +21,7 @@ def _url(user_id, asset_id, name):
     return f"/files/{user_id}/assets/{asset_id}/{name}"
 
 
-def test_serves_public_file_and_touches_last_access(client, login_as, settings):
+def test_serves_a_public_file_without_touching_the_record(client, login_as, settings):
     login_as()
     me = client.get("/api/v1/me").json()
     asset_id = _ready_video_asset(client, settings, me["id"])
@@ -31,7 +31,7 @@ def test_serves_public_file_and_touches_last_access(client, login_as, settings):
     assert r.status_code == 200, r.text
     assert r.headers["cache-control"] == "private, max-age=3600"
     assert r.json() == {"rate": 50, "peaks": []}
-    assert client.get(f"/api/v1/assets/{asset_id}").json()["last_access_at"] > OLD
+    assert client.get(f"/api/v1/assets/{asset_id}").json()["last_access_at"] == OLD  # превью не продлевает
 
 
 def test_range_requests(client, login_as, settings):
@@ -52,7 +52,7 @@ def test_source_and_unknown_names_are_forbidden(client, login_as, settings):
         assert r.json()["error"]["code"] == "forbidden"
 
 
-def test_missing_foreign_and_unknown_are_404(client, login_as, settings):
+def test_missing_and_unknown_are_404_and_a_colleague_gets_the_file(client, login_as, settings):
     login_as()
     me = client.get("/api/v1/me").json()
     asset_id = _ready_video_asset(client, settings, me["id"])
@@ -60,7 +60,7 @@ def test_missing_foreign_and_unknown_are_404(client, login_as, settings):
     assert client.get(_url(me["id"], "ast_000000000000", "peaks.json")).status_code == 404
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert client.get(_url(me["id"], asset_id, "peaks.json")).status_code == 404
+    assert client.get(_url(me["id"], asset_id, "peaks.json")).status_code == 200
 
 
 def test_own_prefix_with_foreign_asset_is_404(client, login_as, settings):
@@ -96,7 +96,7 @@ def test_authz_for_caddy(client, login_as, settings, bearer_client):
     assert client.get("/internal/authz").status_code == 404
     other = _url("usr_000000000000", asset_id, "peaks.json")
     assert client.get("/internal/authz", headers={"X-Forwarded-Uri": other}).status_code == 404
-    assert client.get(f"/api/v1/assets/{asset_id}").json()["last_access_at"] > OLD
+    assert client.get(f"/api/v1/assets/{asset_id}").json()["last_access_at"] == OLD  # превью не продлевает
 
 
 def test_authz_requires_auth(app):
@@ -158,7 +158,7 @@ def test_render_missing_on_disk_is_404(client, login_as, settings):
     assert client.get(f"/files/{me['id']}/projects/{project_id}/renders/{render_id}.mp4").status_code == 404
 
 
-def test_foreign_render_is_404(client, login_as, settings):
+def test_a_colleague_downloads_a_render_but_not_under_a_wrong_prefix(client, login_as, settings):
     login_as()
     owner = client.get("/api/v1/me").json()
     project_id, render_id = _render_on_disk(client, settings, owner["id"])
@@ -166,9 +166,11 @@ def test_foreign_render_is_404(client, login_as, settings):
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
     thief = client.get("/api/v1/me").json()
-    for url in (good, f"/files/{thief['id']}/projects/{project_id}/renders/{render_id}.mp4"):
-        assert client.get(url).status_code == 404, url
-        assert client.get("/internal/authz", headers={"X-Forwarded-Uri": url}).status_code == 404, url
+    assert client.get(good).status_code == 200
+    assert client.get("/internal/authz", headers={"X-Forwarded-Uri": good}).status_code == 204
+    wrong = f"/files/{thief['id']}/projects/{project_id}/renders/{render_id}.mp4"
+    assert client.get(wrong).status_code == 404
+    assert client.get("/internal/authz", headers={"X-Forwarded-Uri": wrong}).status_code == 404
 
 
 def _conversion_on_disk(client, settings, user_id, name="встреча \"2026\".mov", fmt="mp3"):
@@ -253,3 +255,24 @@ def test_render_url_carries_its_format_and_parses_back():
         )
     bad = "/files/usr_000000000001/projects/prj_000000000001/renders/rnd_000000000001.exe"
     assert parse_file_url(bad) is None
+
+
+def test_previews_do_not_touch_the_record_but_use_does(client, login_as, settings):
+    """Кадры и волну рисуют общие списки: продлевай они запись, открытый кем-то экран «Записи»
+    продлевал бы все видео команды, и срок хранения не наступил бы никогда."""
+    login_as()
+    uid = client.get("/api/v1/me").json()["id"]
+    asset_id = _ready_video_asset(client, settings, uid)
+
+    def last_access() -> str:
+        return client.get(f"/api/v1/assets/{asset_id}").json()["last_access_at"]
+
+    def authz(name: str) -> int:
+        headers = {"X-Forwarded-Uri": _url(uid, asset_id, name)}
+        return client.get("/internal/authz", headers=headers).status_code
+
+    assert client.get(_url(uid, asset_id, "peaks.json")).status_code == 200
+    assert authz("thumbs.jpg") == 204
+    assert last_access() == OLD
+    assert authz("proxy.mp4") == 204
+    assert last_access() > OLD

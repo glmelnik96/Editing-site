@@ -41,6 +41,9 @@ class AssetView(BaseModel):
     error: str | None
     created_at: str
     last_access_at: str
+    # Автор: записи видит вся команда. Имена полей — как у заданий в /jobs и у карточек проектов.
+    owner_email: str
+    owner_name: str
     files: AssetFiles
 
 
@@ -84,5 +87,26 @@ def asset_view(row: dict | sqlite3.Row, *, has_transcript: bool = False) -> Asse
         error=row["error"],
         created_at=row["created_at"],
         last_access_at=row["last_access_at"],
+        owner_email=row["owner_email"],
+        owner_name=row["owner_name"],
         files=asset_files(row, has_transcript=has_transcript),
     )
+
+
+# Строка записи вместе с автором: всё, что отдаёт карточку записи, выбирает через это.
+ASSET_SELECT = (
+    "SELECT a.*, u.email AS owner_email, u.name AS owner_name "
+    "FROM assets AS a JOIN users AS u ON u.id = a.user_id"
+)
+
+
+def list_asset_views(conn: sqlite3.Connection, *, owner: str | None = None) -> list[AssetView]:
+    """Записи команды, свежие загрузки сверху; с owner — только его.
+
+    Отметки расшифровки — одним запросом на весь список, а не по запросу на карточку."""
+    where = " WHERE a.user_id = ?" if owner else ""
+    rows = conn.execute(
+        f"{ASSET_SELECT}{where} ORDER BY a.created_at DESC, a.id", (owner,) if owner else ()
+    ).fetchall()
+    transcribed = {r["asset_id"] for r in conn.execute("SELECT asset_id FROM transcripts")}
+    return [asset_view(r, has_transcript=r["id"] in transcribed) for r in rows]

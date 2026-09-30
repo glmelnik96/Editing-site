@@ -8,6 +8,7 @@ import { blockedReason, setBlocked, sourceBlocks } from './blocked'
 import { escapeHtml } from './html'
 import type { Asset } from './assets'
 import { foldHtml, wireFold } from './fold'
+import { ownedBy, ownerLabel } from './overview'
 import { formatTimecode, parseTimecode } from './timecode'
 
 export type SourceHandlers = {
@@ -58,7 +59,12 @@ export function addTitle(kind: string | undefined): string {
   return kind === 'audio' ? 'Звук ляжет на дорожку A2 — под курсор шкалы' : 'Кусок встанет в конец основы — на дорожку V1'
 }
 
-export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
+/** Строка списка «Исходников»: у чужой записи рядом с именем автор — записи общие. */
+export function sourceOptionLabel(a: Asset, myEmail: string): string {
+  return ownedBy(a, myEmail) ? a.original_name : `${a.original_name} — ${ownerLabel(a)}`
+}
+
+export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail = '') {
   // Выбор файла и плеер стоят над складкой, а не внутри: файл у обоих способов монтажа один и
   // тот же, разный только способ отрезать. Спрятанный вместе с полосой выбор пришлось бы
   // разворачивать, чтобы просто сменить запись.
@@ -324,14 +330,14 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers) {
     setFold(open: boolean): void {
       showCut(open)
     },
-    /** Список файлов: на шкалу годятся готовые видео, картинки и звук. */
+    /** Список файлов команды: на шкалу годятся готовые видео, картинки и звук любого автора. */
     setAssets(list: Asset[]): void {
       assets = list.filter(isPlaceable)
       const keep = current?.id ?? ''
       pick.innerHTML =
         '<option value="">— выберите файл —</option>' +
         assets
-          .map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.original_name)}</option>`)
+          .map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(sourceOptionLabel(a, myEmail))}</option>`)
           .join('')
       if (assets.some(a => a.id === keep)) pick.value = keep
       else choose(null)

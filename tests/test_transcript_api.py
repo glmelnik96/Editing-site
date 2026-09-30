@@ -292,19 +292,18 @@ def test_delete_removes_the_row_and_the_file(client, login_as, settings):
     assert client.get(f"/api/v1/assets/{ASSET}").json()["files"]["transcript"] is None
 
 
-def test_foreign_asset_is_404_everywhere(client, login_as, settings):
+def test_a_colleague_works_with_the_transcript(client, login_as, settings):
+    """Записи общие — и их расшифровка тоже; файл и строка остаются за автором записи."""
     login_as()
     ready_asset(client, settings)
     put(client)
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-
-    assert client.post(f"/api/v1/assets/{ASSET}/transcribe", json={}).status_code == 404
-    assert client.get(f"/api/v1/assets/{ASSET}/transcript").status_code == 404
-    assert put(client).status_code == 404
-    assert client.delete(f"/api/v1/assets/{ASSET}/transcript").status_code == 404
-    # Чужой транскрипт цел: отказ отказом, а трогать чужое нельзя даже случайно.
+    assert client.get(f"/api/v1/assets/{ASSET}/transcript").status_code == 200
+    assert put(client).status_code == 200
     assert transcript_rows(settings) == 1
+    assert client.delete(f"/api/v1/assets/{ASSET}/transcript").status_code == 204
+    assert transcript_rows(settings) == 0
 
 
 def test_agent_works_with_a_token(bearer_client, settings):

@@ -23,6 +23,9 @@ export type Asset = {
   bit_rate?: number | null
   progress?: number | null
   error: string | null
+  /** Автор: записи видит вся команда. От него зависят папка на диске и лимит. */
+  owner_email: string
+  owner_name: string
   files: {
     proxy: string | null
     thumbs: string | null
@@ -117,8 +120,9 @@ export function isReady(a: Asset): boolean {
   return a.duration !== null && a.duration > 0
 }
 
-export function listAssets(): Promise<{ assets: Asset[] }> {
-  return api<{ assets: Asset[] }>('/api/v1/assets')
+/** Все записи команды, свежие сверху; mine — только свои (конвертер). */
+export function listAssets(mine = false): Promise<{ assets: Asset[] }> {
+  return api<{ assets: Asset[] }>(mine ? '/api/v1/assets?mine=1' : '/api/v1/assets')
 }
 
 /** Что и какого размера принимает сервер. Держать копию списка в браузере нельзя: разойдясь
@@ -134,11 +138,8 @@ export function loadLimits(): Promise<Limits> {
 }
 
 /**
- * Записи, из которых собран и может собираться этот проект, — то есть записи его владельца.
- *
- * Редактор спрашивает их через проект, а не общим списком: документ обязан ссылаться на записи
- * владельца, и у админа, открывшего чужой проект, свой список совсем другой — каждый клип
- * выглядел бы необработанным, а сцена осталась бы пустой.
+ * Записи, из которых можно собрать проект, — все записи команды: документ может ссылаться на
+ * запись любого автора. Сервер отдаёт тот же общий список, что и /assets.
  */
 export function listProjectAssets(projectId: string): Promise<{ assets: Asset[] }> {
   return api<{ assets: Asset[] }>(`/api/v1/projects/${encodeURIComponent(projectId)}/assets`)

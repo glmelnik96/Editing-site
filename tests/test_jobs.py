@@ -11,7 +11,7 @@ from server.app.jobs import (
     enqueue_job,
     job_cancelable,
     job_label,
-    list_jobs_for_user,
+    list_jobs,
 )
 from server.app.projects.store import active_renders
 from server.app.util import iso, now_iso
@@ -158,7 +158,7 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
     _stamp(conn, fresh, status="done", finished_at=iso(now - timedelta(seconds=5)), progress=1)
     _stamp(conn, stale, status="done", finished_at=iso(now - timedelta(seconds=RECENT_SEC + 1)), progress=1)
     other = enqueue_job(conn, user_id="usr_otheruser01", type_="analyze", target_id="ast_x")
-    rows = list_jobs_for_user(conn, uid, now=now)
+    rows = list_jobs(conn, now=now, owner=uid)
     ids = [r["id"] for r in rows]
     assert open_id in ids and fresh in ids
     assert stale not in ids and other not in ids
@@ -169,14 +169,13 @@ def test_list_includes_open_jobs_and_recent_finished_only(conn):
     render = next(r for r in rows if r["id"] == fresh)
     assert render["label"] == "Ролик" and render["quality"] == "draft" and render["cancelable"] is False
     converting = enqueue_job(conn, user_id=uid, type_="convert", target_id="ast_list1")
-    conv = next(r for r in list_jobs_for_user(conn, uid, now=now) if r["id"] == converting)
+    conv = next(r for r in list_jobs(conn, now=now, owner=uid) if r["id"] == converting)
     assert conv["label"] == "Нарезка.mp4" and conv["cancelable"] is True
     assert conv["target_id"] == "ast_list1"
 
 
 def test_list_for_everyone_names_owners(conn):
-    """Админ видит задания всей команды и понимает, чьё какое: сборку в чужом проекте он мог
-    поставить сам, а чужую идущую — захотеть снять."""
+    """Очередь общая: задания всей команды, у каждого — автор."""
     now = datetime(2026, 9, 11, 12, 0, 0, tzinfo=UTC)
     uid = "usr_000000000001"
     conn.execute(
@@ -185,8 +184,21 @@ def test_list_for_everyone_names_owners(conn):
     )
     mine = enqueue_job(conn, user_id=uid, type_="render", target_id="prj_x")
     other = enqueue_job(conn, user_id="usr_otheruser01", type_="render", target_id="prj_y")
-    rows = {r["id"]: r for r in list_jobs_for_user(conn, uid, now=now, everyone=True)}
+    rows = {r["id"]: r for r in list_jobs(conn, now=now)}
     assert set(rows) == {mine, other}
     assert rows[mine]["owner_email"] == "a@b.c" and rows[mine]["owner_name"] == "A"
     assert rows[other]["owner_email"] == "o@b.c" and rows[other]["owner_name"] == ""
-    assert [r["id"] for r in list_jobs_for_user(conn, uid, now=now)] == [mine]
+    assert [r["id"] for r in list_jobs(conn, now=now, owner=uid)] == [mine]
+
+
+def test_live_jobs_are_never_pushed_out_by_the_limit(conn):
+    """Чужая пачка загрузок не вытесняет из списка идущую сборку: предел — только законченным."""
+    now = datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
+    uid = "usr_000000000001"
+    live = enqueue_job(conn, user_id=uid, type_="render", target_id="prj_x")
+    for n in range(LIST_LIMIT + 5):
+        done = enqueue_job(conn, user_id=uid, type_="proxy", target_id=f"ast_{n}")
+        _stamp(conn, done, status="done", finished_at=iso(now - timedelta(seconds=1)), progress=1)
+    ids = [r["id"] for r in list_jobs(conn, now=now)]
+    assert live in ids
+    assert len(ids) == LIST_LIMIT + 1

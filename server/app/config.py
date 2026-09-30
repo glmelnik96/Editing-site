@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     disk_low_pct: float = Field(default=10.0, ge=0.0, le=90.0)
     uploads_per_hour: int = Field(default=20, ge=1)
     upload_ttl_hours: int = Field(default=24, ge=1)
-    asset_ttl_hours: int = Field(default=24, ge=1)
+    # Запись вне проектов живёт неделю с последнего обращения: это общая библиотека команды,
+    # и коллега должен успеть взять вчерашнюю загрузку.
+    asset_ttl_hours: int = Field(default=168, ge=1)
 
     # Обработка медиа. Пути к бинарям берутся из PATH, если не заданы явно.
     ffmpeg_path: str = "ffmpeg"

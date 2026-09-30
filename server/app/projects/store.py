@@ -10,7 +10,7 @@ import logging
 import os
 import shutil
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from server.app.config import Settings
@@ -22,7 +22,7 @@ from server.app.projects.doc import (
     legacy_music_to_sound,
     validate_doc,
 )
-from server.app.projects.snap import snap_clips
+from server.app.projects.snap import load_silences, snap_clips
 from server.app.storage import project_dir, render_dir, render_url, subs_dir, transcript_path
 from server.app.util import new_id, now_iso
 from server.db.core import transaction
@@ -86,9 +86,33 @@ def _clean_name(name: str) -> str:
     return cleaned
 
 
-def _assets_index(conn: sqlite3.Connection, user_id: str) -> dict[str, AssetInfo]:
-    rows = conn.execute("SELECT id, kind, status, duration FROM assets WHERE user_id = ?", (user_id,))
+def _assets_index(conn: sqlite3.Connection) -> dict[str, AssetInfo]:
+    """Все записи команды: в проект кладут запись любого автора."""
+    rows = conn.execute("SELECT id, kind, status, duration FROM assets")
     return {r["id"]: AssetInfo(kind=r["kind"], status=r["status"], duration=r["duration"]) for r in rows}
+
+
+def asset_owners(conn: sqlite3.Connection, asset_ids: Iterable[str]) -> dict[str, str]:
+    """Автор каждой записи: её файлы — паузы, расшифровка, исходник — лежат в его папке, а не у
+    автора проекта. Записи, которой нет в базе, нет и в ответе: отказывает вызывающий."""
+    ids = sorted(set(asset_ids))
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(f"SELECT id, user_id FROM assets WHERE id IN ({marks})", ids)
+    return {r["id"]: r["user_id"] for r in rows}
+
+
+def _silences_by_asset(
+    conn: sqlite3.Connection, settings: Settings, clips: list[dict]
+) -> dict[str, list[dict]]:
+    """Карты пауз записей, к которым просят подтянуть резы, — из папки автора каждой записи."""
+    wanted = {clip["asset_id"] for clip in clips if clip.get("snap_to_pauses")}
+    owners = asset_owners(conn, wanted)
+    return {
+        asset_id: load_silences(settings, owners[asset_id], asset_id) if asset_id in owners else []
+        for asset_id in wanted
+    }
 
 
 def assets_of(doc: dict) -> set[str]:
@@ -103,14 +127,15 @@ def assets_of(doc: dict) -> set[str]:
     return used
 
 
-def _prepare(conn: sqlite3.Connection, settings: Settings, user_id: str, raw_doc: object) -> dict:
+def _prepare(conn: sqlite3.Connection, settings: Settings, raw_doc: object) -> dict:
     """Проверка документа плюс подтяжка резов к паузам."""
     if raw_doc is None:
         return json.loads(json.dumps(EMPTY_DOC))
-    assets = _assets_index(conn, user_id)
+    assets = _assets_index(conn)
     doc = validate_doc(raw_doc, assets=assets, settings=settings)
     asked = json.loads(json.dumps(doc["clips"]))
-    snap_clips(doc["clips"], settings=settings, user_id=user_id)
+    silences = _silences_by_asset(conn, settings, doc["clips"])
+    snap_clips(doc["clips"], settings=settings, silences_by_asset=silences)
     # Подтяжка укорачивает клипы уже после проверки, и переход мог перестать в них помещаться.
     clamp_fades(doc["clips"])
     # Обе правки — услуга, а не то, о чём просили. Если после них документ перестаёт проходить
@@ -125,9 +150,15 @@ def _prepare(conn: sqlite3.Connection, settings: Settings, user_id: str, raw_doc
     return doc
 
 
-def _touch_assets(conn: sqlite3.Connection, doc: dict) -> None:
-    """Проект держит ассеты живыми: janitor чистит по последнему обращению (раздел 3 спеки)."""
-    used = assets_of(doc)
+def _touch_assets(conn: sqlite3.Connection, *docs: dict) -> None:
+    """Документы держат записи живыми: janitor чистит по последнему обращению (раздел 3 спеки).
+
+    Кроме нового документа сюда передают прежний: запись, которую убрали со шкалы или чей проект
+    удалили, освобождается сегодня и живёт полный срок хранения, а не пропадает при ближайшем
+    проходе уборщика оттого, что проект давно не открывали."""
+    used: set[str] = set()
+    for doc in docs:
+        used |= assets_of(doc)
     if used:
         marks = ",".join("?" * len(used))
         conn.execute(
@@ -140,7 +171,7 @@ def create_project(
     conn: sqlite3.Connection, settings: Settings, user_id: str, *, name: str, raw_doc: object
 ) -> dict:
     name = _clean_name(name)
-    doc = _prepare(conn, settings, user_id, raw_doc)
+    doc = _prepare(conn, settings, raw_doc)
     now = now_iso()
     project_id = new_id("prj")
     with transaction(conn):
@@ -159,8 +190,8 @@ def create_project(
 
 
 def project_owner(conn: sqlite3.Connection, project_id: str) -> str | None:
-    """Кому принадлежит проект. Нужен маршрутам: админ работает с чужими проектами, но работает
-    от имени владельца — файлы лежат в его каталоге, и строки ищутся по его id."""
+    """Автор проекта. Проект открывает и правит любой из команды, но работает от имени автора:
+    файлы лежат в его каталоге, и строки ищутся по его id."""
     row = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
     return row["user_id"] if row else None
 
@@ -172,12 +203,18 @@ def get_project(conn: sqlite3.Connection, user_id: str, project_id: str) -> dict
     return _row_to_project(row, conn) if row else None
 
 
-def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:
-    """Карточки без документа: список проектов не должен тащить сотни клипов."""
+def list_projects(conn: sqlite3.Connection, *, owner: str | None = None) -> list[dict]:
+    """Карточки без документа, свежие правки сверху; с owner — только его проекты.
+
+    Проекты видит вся команда, поэтому в карточке автор: два «Ролика для сайта» иначе не различить.
+    """
+    where = "WHERE p.user_id = ? " if owner else ""
     rows = conn.execute(
-        "SELECT id, name, version, created_at, updated_at, doc FROM projects "
-        "WHERE user_id = ? ORDER BY updated_at DESC, id",
-        (user_id,),
+        "SELECT p.id, p.name, p.version, p.created_at, p.updated_at, p.doc, "
+        "u.email AS owner_email, u.name AS owner_name "
+        f"FROM projects AS p JOIN users AS u ON u.id = p.user_id {where}"
+        "ORDER BY p.updated_at DESC, p.id",
+        (owner,) if owner else (),
     )
     out = []
     for row in rows:
@@ -188,6 +225,7 @@ def list_projects(conn: sqlite3.Connection, user_id: str) -> list[dict]:
             "created_at": row["created_at"], "updated_at": row["updated_at"],
             "clips_count": len(clips),
             "duration": clips_duration(clips),
+            "owner_email": row["owner_email"], "owner_name": row["owner_name"],
         })
     return out
 
@@ -202,7 +240,7 @@ def save_project(
     if current["version"] != version:
         raise ProjectConflict(current)
     name = _clean_name(name)
-    doc = _prepare(conn, settings, user_id, raw_doc)
+    doc = _prepare(conn, settings, raw_doc)
     now = now_iso()
     with transaction(conn):
         cur = conn.execute(
@@ -213,7 +251,7 @@ def save_project(
         if cur.rowcount == 0:
             # Проект сохранили между нашей проверкой и записью: версия в базе уже другая.
             raise ProjectConflict(get_project(conn, user_id, project_id) or current)
-        _touch_assets(conn, doc)
+        _touch_assets(conn, doc, current["doc"])
     return {
         "id": project_id, "name": name, "version": version + 1,
         "created_at": current["created_at"], "updated_at": now, "doc": doc,
@@ -232,15 +270,19 @@ def delete_project(
     Задания проекта отменяются в той же транзакции: внешнего ключа на проект у jobs нет, и без
     отмены идущая сборка кодирует ещё час впустую, а её INSERT в renders падает по ключу уже
     после того, как файл записан на диск.
+
+    Записи проекта в той же транзакции продлеваются: освободившись, они живут полный срок
+    хранения. Записи в проекте бывают и других авторов — их это касается так же.
     """
     with transaction(conn):
-        cur = conn.execute(
-            "DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
-        )
-        if cur.rowcount:
-            cancel_jobs_for_target(conn, project_id)
-    if cur.rowcount == 0:
-        return False
+        row = conn.execute(
+            "SELECT doc FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
+        ).fetchone()
+        if row is None:
+            return False
+        _touch_assets(conn, json.loads(row["doc"]))
+        conn.execute("DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id))
+        cancel_jobs_for_target(conn, project_id)
     shutil.rmtree(project_dir(settings, user_id, project_id), ignore_errors=True)
     return True
 
@@ -261,11 +303,16 @@ def assets_in_projects(conn: sqlite3.Connection) -> set[str]:
     return used
 
 
-def projects_using_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) -> list[dict]:
-    """Проекты владельца, где встречается ассет. Документов мало, ищем перебором."""
-    rows = conn.execute("SELECT id, name, doc FROM projects WHERE user_id = ?", (user_id,))
+def projects_using_asset(conn: sqlite3.Connection, asset_id: str) -> list[dict]:
+    """Проекты любого автора, где стоит запись. Документов мало, ищем перебором.
+
+    Автор каждого проекта — в ответе: отказ «запись стоит в проекте» говорит, к кому идти."""
+    rows = conn.execute(
+        "SELECT p.id, p.name, p.doc, u.email AS owner_email, u.name AS owner_name "
+        "FROM projects AS p JOIN users AS u ON u.id = p.user_id ORDER BY p.updated_at DESC, p.id"
+    )
     return [
-        {"id": r["id"], "name": r["name"]}
+        {"id": r["id"], "name": r["name"], "owner_email": r["owner_email"], "owner_name": r["owner_name"]}
         for r in rows
         if asset_id in assets_of(json.loads(r["doc"]))
     ]
@@ -401,28 +448,31 @@ def _newer(source: Path, cached: Path) -> bool:
         return True  # исходника не видно — пусть сборка разберётся и скажет внятно
 
 
-def _read_transcript(settings: Settings, owner: str, asset_id: str) -> dict:
-    """Расшифровка ассета или отказ.
+def _read_transcript(settings: Settings, author: str | None, asset_id: str) -> dict:
+    """Расшифровка записи из папки её автора — или отказ.
 
     Пустой путь до ffmpeg доводить нельзя: он упал бы на открытии файла, и в карточке задания
     оказалась бы ругань кодека вместо понятного «закажите расшифровку». Неизвестный ассет — тот же
-    отказ: путь к нему не строится, и расшифровки по нему всё равно нет.
+    отказ: путь к нему не строится, и расшифровки по нему всё равно нет. Записи нет в базе (author
+    None) — её удалили, и заказывать расшифровку уже не у чего: отказ говорит об этом.
     """
+    if author is None:
+        raise SubtitlesUnavailable("файл удалён: уберите его со шкалы и соберите проект заново")
     try:
-        return json.loads(transcript_path(settings, owner, asset_id).read_text(encoding="utf-8"))
+        return json.loads(transcript_path(settings, author, asset_id).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SubtitlesUnavailable(
             "у файла нет расшифровки: закажите её и соберите проект заново"
         ) from exc
 
 
-def cues_from_transcript(settings: Settings, doc: dict, *, owner: str, asset_id: str) -> list[dict]:
+def cues_from_transcript(settings: Settings, doc: dict, *, author: str | None, asset_id: str) -> list[dict]:
     """Реплики расшифровки одного ассета в шкале ролика.
 
     Транскрипт живёт во времени исходника, а в ролике от исходника остались только выбранные куски
     и стоят они в другом порядке. Возьми слова как есть — и субтитры разъедутся с картинкой.
     """
-    transcript = _read_transcript(settings, owner, asset_id)
+    transcript = _read_transcript(settings, author, asset_id)
     aspect = (doc.get("output") or {}).get("aspect")
     return build_cues(
         words_through_clips(transcript, doc.get("clips") or [], asset_id=asset_id),
@@ -432,17 +482,18 @@ def cues_from_transcript(settings: Settings, doc: dict, *, owner: str, asset_id:
     )
 
 
-def cues_from_timeline(settings: Settings, doc: dict, *, owner: str) -> list[dict]:
+def cues_from_timeline(settings: Settings, doc: dict, *, authors: Mapping[str, str]) -> list[dict]:
     """Реплики всех записей, которые лежат на шкале, в порядке ролика.
 
     Пул исходников сюда не входит: на шкале может быть два файла, а в пуле — десять, и субтитры
-    чужой записи в кадр не попадут.
+    записи не со шкалы в кадр не попадут. authors — автор каждой записи шкалы: расшифровка лежит
+    в его папке.
     """
     clips = doc.get("clips") or []
     aspect = (doc.get("output") or {}).get("aspect")
     words: list[dict] = []
     for asset_id in clip_asset_ids(clips):
-        transcript = _read_transcript(settings, owner, asset_id)
+        transcript = _read_transcript(settings, authors.get(asset_id), asset_id)
         words.extend(words_through_clips(transcript, clips, asset_id=asset_id))
     words.sort(key=lambda item: (float(item["s"]), float(item["e"])))
     return build_cues(
@@ -484,7 +535,8 @@ def generate_project_cues(
     «собрать заново» и означает отказ от прежних правок.
     """
     doc = project["doc"]
-    cues = _cues_for_document(cues_from_timeline(settings, doc, owner=user_id))
+    authors = asset_owners(conn, clip_asset_ids(doc.get("clips") or []))
+    cues = _cues_for_document(cues_from_timeline(settings, doc, authors=authors))
     if not cues:
         raise NoCues("В выбранные куски не попало ни одного слова расшифровки")
     return save_project(
@@ -529,14 +581,16 @@ def build_project_subtitles(
             return srt
         cues = subtitles.get("cues") or []
     else:
-        # Ассет субтитров принадлежит владельцу проекта: документ проверялся по его же ассетам.
+        # Запись субтитров бывает любого автора: расшифровка лежит в его папке, кэш — в папке
+        # проекта у автора проекта.
         asset_id = subtitles["asset_id"]
-        if cached and not _newer(transcript_path(settings, owner, asset_id), srt):
+        author = asset_owners(conn, [asset_id]).get(asset_id)
+        if cached and author and not _newer(transcript_path(settings, author, asset_id), srt):
             # Версия растёт с каждым сохранением, поэтому файл этой версии собран из этого же
             # документа. Но версия следит за документом, а не за расшифровкой: её могли заказать
             # заново при той же версии, и тогда кэш пришлось бы отдавать устаревшим.
             return srt
-        cues = cues_from_transcript(settings, doc, owner=owner, asset_id=asset_id)
+        cues = cues_from_transcript(settings, doc, author=author, asset_id=asset_id)
 
     folder.mkdir(parents=True, exist_ok=True)
     _write_atomic(srt, cues_to_srt(cues))
@@ -570,21 +624,14 @@ def list_renders(conn: sqlite3.Connection, user_id: str, project_id: str) -> lis
 
 
 def render_owner(conn: sqlite3.Connection, render_id: str) -> str | None:
-    """Кому принадлежит готовый ролик. Нужен маршрутам: админ работает с чужими от имени владельца."""
+    """Автор готового ролика — он же автор проекта: файл лежит в его каталоге."""
     row = conn.execute("SELECT user_id FROM renders WHERE id = ?", (render_id,)).fetchone()
     return row["user_id"] if row else None
 
 
 def get_render_any(conn: sqlite3.Connection, render_id: str) -> dict | None:
-    """Ролик без проверки владельца: зовут только там, где владельца уже проверили выше."""
+    """Ролик по id: ролики общие, доступ проверять нечего."""
     row = conn.execute("SELECT * FROM renders WHERE id = ?", (render_id,)).fetchone()
-    return _render_row(row) if row else None
-
-
-def get_render(conn: sqlite3.Connection, user_id: str, render_id: str) -> dict | None:
-    row = conn.execute(
-        "SELECT * FROM renders WHERE id = ? AND user_id = ?", (render_id, user_id)
-    ).fetchone()
     return _render_row(row) if row else None
 
 

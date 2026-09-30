@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { acceptAttr, formatRows } from './files'
+import type { Asset } from './assets'
+import { acceptAttr, assetMetaText, dropAssetQuestion, formatRows, inUseText } from './files'
 
 // Ровно та форма, в какой список приходит с сервера: виды сгруппированы, внутри отсортировано.
 const FORMATS = {
@@ -35,5 +36,40 @@ describe('фильтр окна выбора файла', () => {
   it('на пустом списке не ставит фильтр вовсе', () => {
     // Пустой accept браузер понимает как «ничего нельзя выбрать»; пустая строка снимает фильтр.
     expect(acceptAttr({})).toBe('')
+  })
+})
+
+const rec = (over: Partial<Asset> = {}): Asset =>
+  ({
+    id: 'ast_1',
+    kind: 'video',
+    original_name: 'встреча.mp4',
+    size: 1_048_576,
+    status: 'proxy_ready',
+    duration: 65,
+    error: null,
+    owner_email: 'liza@ya.ru',
+    owner_name: 'Лиза',
+    files: { proxy: null, thumbs: null, thumbs_meta: null, peaks: null, analysis: null, vtt: null, transcript: null },
+    ...over,
+  }) as Asset
+
+describe('запись в общем списке', () => {
+  it('называет автора, а у своей пишет «вы»', () => {
+    expect(assetMetaText(rec(), 'gleb@ya.ru')).toMatch(/^Лиза · /)
+    expect(assetMetaText(rec({ owner_email: 'gleb@ya.ru' }), 'gleb@ya.ru')).toMatch(/^вы · /)
+    expect(assetMetaText(rec({ kind: 'image', duration: null }), 'gleb@ya.ru')).toContain('картинка')
+  })
+
+  it('перед удалением чужой называет автора и что уйдёт вместе с ней', () => {
+    const ask = dropAssetQuestion(rec(), 'gleb@ya.ru')
+    expect(ask).toContain('(автор — Лиза)')
+    expect(ask).toContain('расшифровка')
+    expect(dropAssetQuestion(rec({ owner_email: 'gleb@ya.ru' }), 'gleb@ya.ru')).not.toContain('автор')
+  })
+
+  it('отказ «стоит в проекте» называет проекты и их авторов', () => {
+    const projects = [{ id: 'prj_1', name: 'Планёрка', owner_email: 'liza@ya.ru', owner_name: 'Лиза' }]
+    expect(inUseText(projects, 'gleb@ya.ru')).toContain('«Планёрка» (Лиза)')
   })
 })

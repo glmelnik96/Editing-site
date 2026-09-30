@@ -92,17 +92,22 @@ def test_project_count_limit(conn, settings):
         create_project(conn, small, USER, name="3", raw_doc=None)
 
 
-def test_get_and_list_are_scoped_to_the_owner(conn, settings):
+def test_get_is_keyed_by_author_and_list_shows_everyone(conn, settings):
+    """Строка проекта ищется по автору (от него пути к файлам), а список — вся команда с автором."""
     p = create_project(conn, settings, USER, name="Мой", raw_doc=doc())
+    q = create_project(conn, settings, OTHER, name="Чужой", raw_doc=None)
     assert get_project(conn, USER, p["id"])["name"] == "Мой"
     assert get_project(conn, OTHER, p["id"]) is None
-    assert [x["id"] for x in list_projects(conn, USER)] == [p["id"]]
-    assert list_projects(conn, OTHER) == []
+    assert {x["id"]: x["owner_email"] for x in list_projects(conn)} == {
+        p["id"]: f"{USER}@ya.ru",
+        q["id"]: f"{OTHER}@ya.ru",
+    }
+    assert [x["id"] for x in list_projects(conn, owner=OTHER)] == [q["id"]]
 
 
 def test_list_does_not_carry_the_whole_document(conn, settings):
     create_project(conn, settings, USER, name="Мой", raw_doc=doc())
-    row = list_projects(conn, USER)[0]
+    row = list_projects(conn)[0]
     assert "doc" not in row and row["clips_count"] == 1
     assert row["duration"] == 4.0
 
@@ -138,16 +143,36 @@ def test_save_applies_snapping(conn, settings):
     assert clip["in"] == 1.0 and clip["in_verified"] is False
 
 
-def test_save_rejects_a_foreign_asset(conn, settings):
+def test_save_accepts_a_record_of_another_author(conn, settings):
+    """Записи общие: в проект кладут запись любого автора."""
     conn.execute(
         "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, duration, created_at, "
         "last_access_at) VALUES ('ast_00000000000f', ?, 'video', 'a', 'mp4', 1, 'ready', 9, ?, ?)",
         (OTHER, now_iso(), now_iso()),
     )
     p = create_project(conn, settings, USER, name="Мой", raw_doc=None)
-    with pytest.raises(ProjectInvalid) as e:
-        save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=doc("ast_00000000000f"), version=1)
-    assert e.value.errors[0]["field"] == "clips[0].asset_id"
+    raw = doc("ast_00000000000f")
+    saved = save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=raw, version=1)
+    assert saved["doc"]["clips"][0]["asset_id"] == "ast_00000000000f"
+
+
+def test_snapping_reads_pauses_from_the_record_authors_folder(conn, settings):
+    """Паузы лежат в папке автора записи, а не автора проекта: иначе подтяжка молча не сработает."""
+    conn.execute(
+        "INSERT INTO assets (id, user_id, kind, original_name, ext, size, status, duration, created_at, "
+        "last_access_at) VALUES ('ast_00000000000f', ?, 'video', 'a', 'mp4', 1, 'ready', 9, ?, ?)",
+        (OTHER, now_iso(), now_iso()),
+    )
+    folder = asset_dir(settings, OTHER, "ast_00000000000f")
+    folder.mkdir(parents=True)
+    (folder / "analysis.json").write_text(
+        json.dumps({"silences_dense": [{"start": 4.0, "end": 5.0}]}), encoding="utf-8"
+    )
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=None)
+    raw = {"clips": [{"asset_id": "ast_00000000000f", "in": 1.0, "out": 4.1, "snap_to_pauses": True}]}
+    saved = save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=raw, version=1)
+    clip = saved["doc"]["clips"][0]
+    assert clip["out"] == 4.3 and clip["out_verified"] is True
 
 
 def test_save_touches_the_assets_it_uses(conn, settings):
@@ -283,13 +308,17 @@ def test_every_project_holds_its_assets_until_it_is_deleted(conn, settings):
     a = create_project(conn, settings, USER, name="Первый", raw_doc=doc("ast_000000000001"))
     b = create_project(conn, settings, USER, name="Второй", raw_doc=doc("ast_000000000002"))
     assert assets_in_projects(conn) == {"ast_000000000001", "ast_000000000002"}
-    using = projects_using_asset(conn, USER, "ast_000000000001")
+    using = projects_using_asset(conn, "ast_000000000001")
     assert [x["id"] for x in using] == [a["id"]]
 
     delete_project(conn, settings, USER, a["id"])
     assert assets_in_projects(conn) == {"ast_000000000002"}
-    assert projects_using_asset(conn, USER, "ast_000000000001") == []
+    assert projects_using_asset(conn, "ast_000000000001") == []
     assert get_project(conn, USER, b["id"]) is not None
+    c = create_project(conn, settings, OTHER, name="Чужой", raw_doc=doc("ast_000000000002"))
+    using = projects_using_asset(conn, "ast_000000000002")
+    assert {x["id"] for x in using} == {b["id"], c["id"]}
+    assert {x["owner_email"] for x in using} == {f"{USER}@ya.ru", f"{OTHER}@ya.ru"}
 
 
 
@@ -323,3 +352,20 @@ def test_legacy_music_is_read_as_a_looping_sound(conn, settings):
         "id": "music", "asset_id": "ast_00000000000m", "at": 0.0, "in": 0.0, "out": 180.0,
         "volume": 0.2, "loop": True, "duck": True, "fade_in": 0, "fade_out": 3,
     }]
+
+
+def test_deleting_a_project_frees_its_records_for_a_full_term(conn, settings):
+    """Иначе записи давно не открытого проекта пропали бы при ближайшем проходе уборщика."""
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc("ast_000000000001"))
+    conn.execute("UPDATE assets SET last_access_at = '2026-01-01T00:00:00.000Z'")
+    delete_project(conn, settings, USER, p["id"])
+    touched = conn.execute("SELECT last_access_at FROM assets WHERE id = 'ast_000000000001'").fetchone()[0]
+    assert touched > "2026-01-01T00:00:00.000Z"
+
+
+def test_a_record_removed_from_the_timeline_is_freed_for_a_full_term(conn, settings):
+    p = create_project(conn, settings, USER, name="Мой", raw_doc=doc("ast_000000000001"))
+    conn.execute("UPDATE assets SET last_access_at = '2026-01-01T00:00:00.000Z'")
+    save_project(conn, settings, USER, p["id"], name="Мой", raw_doc=doc("ast_000000000002"), version=1)
+    touched = conn.execute("SELECT last_access_at FROM assets WHERE id = 'ast_000000000001'").fetchone()[0]
+    assert touched > "2026-01-01T00:00:00.000Z"

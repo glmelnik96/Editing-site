@@ -85,7 +85,13 @@ export type Project = {
   doc: ProjectDoc
 }
 
-export type ProjectCard = Omit<Project, 'doc'> & { clips_count: number; duration: number }
+export type ProjectCard = Omit<Project, 'doc'> & {
+  clips_count: number
+  duration: number
+  /** Автор проекта: проекты видит вся команда. */
+  owner_email: string
+  owner_name: string
+}
 export type FieldError = { field: string; message: string }
 
 export const SAVE_DELAY_MS = 500
@@ -294,6 +300,14 @@ export function createSaver(options: SaverOptions = {}) {
     pending(): boolean {
       return queued !== null || saving
     },
+    /**
+     * Есть ли правка, которой нет на сервере: в очереди, в полёте, ждёт повтора после сбоя или
+     * отвергнута. По ней опрос решает, можно ли подставить свежий документ коллеги, не стерев
+     * правку человека: ждущую повтора правку pending() уже не видит.
+     */
+    unsaved(): boolean {
+      return queued !== null || saving || retryProject !== null || failed
+    },
     cancel(): void {
       clearTimeout(timer)
       stopRetry()
@@ -399,7 +413,7 @@ export type JobListItem = {
   cancelable: boolean
   quality: RenderQuality | null
   target_id: string
-  /** Чьё задание: обычному человеку сервер отдаёт только его, админу — всей команды. */
+  /** Чьё задание: у сборки — автор проекта, у записи — её автор. Видят все. */
   owner_email: string
   owner_name: string
 }

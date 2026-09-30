@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { Asset } from './assets'
-import { addLabel, addTitle, canOverlay, isPlaceable, sourcePoolNote } from './source'
+import { addLabel, addTitle, canOverlay, isPlaceable, sourceOptionLabel, sourcePoolNote } from './source'
 
 test('без готовых записей — ссылка загрузить', () => {
   expect(sourcePoolNote(0)).toContain('#/files')
@@ -54,4 +54,10 @@ test('поверх основы кладут картинку и видео, н�
   expect(canOverlay('video')).toBe(true)
   expect(canOverlay('audio')).toBe(false)
   expect(canOverlay(undefined)).toBe(false)
+})
+
+test('у чужой записи в списке рядом с именем автор', () => {
+  const a = asset({ owner_email: 'liza@ya.ru', owner_name: 'Лиза' })
+  expect(sourceOptionLabel(a, 'gleb@ya.ru')).toBe('a.mp4 — Лиза')
+  expect(sourceOptionLabel(a, 'liza@ya.ru')).toBe('a.mp4')
 })

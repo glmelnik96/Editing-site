@@ -66,7 +66,7 @@ def test_storage_defaults_and_tmp_path(tmp_path):
     assert s.small_upload_max_bytes == 64 * 1024 * 1024
     assert s.disk_low_pct == 10.0
     assert s.uploads_per_hour == 20
-    assert s.upload_ttl_hours == 24 and s.asset_ttl_hours == 24
+    assert s.upload_ttl_hours == 24 and s.asset_ttl_hours == 168
     assert s.tmp_path == tmp_path / "d" / "tmp"
     assert s.uploads_tmp_path == tmp_path / "d" / "tmp" / "uploads"
 

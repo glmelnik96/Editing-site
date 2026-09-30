@@ -54,10 +54,15 @@ class ConversionList(BaseModel):
 
 
 def _owned_asset(conn: sqlite3.Connection, user: CurrentUser, asset_id: str) -> sqlite3.Row:
+    """Своя запись. Конвертер — личный инструмент: записи общие, а конвертировать и смотреть
+    историю можно только своего. Скрыть чужую запись за 404 уже нельзя — её карточка открывается
+    всем, — поэтому честный отказ 403."""
     row = get_asset(conn, user.id, asset_id)
-    if row is None:
+    if row is not None:
+        return row
+    if conn.execute("SELECT 1 FROM assets WHERE id = ?", (asset_id,)).fetchone() is None:
         raise ApiError(404, "not_found", "Ассет не найден")
-    return row
+    raise ApiError(403, "not_yours", "Конвертировать можно только свою запись")
 
 
 @router.post("/assets/{asset_id}/convert", status_code=202, response_model=ConvertQueued)

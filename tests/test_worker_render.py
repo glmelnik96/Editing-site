@@ -255,3 +255,33 @@ class TestОтказы:
         handlers.handle_render(conn, settings, job)
         assert seen["стоит"] is True
         assert seen["таймаут"] == settings.render_timeout_sec
+
+
+AUTHOR = "usr_00000000000b"
+
+
+def test_проект_собирается_из_записи_другого_автора(conn, settings, monkeypatch):
+    """Записи общие: проект одного человека собирается из записи другого. Исходник — из папки
+    автора записи, ролик ложится автору проекта."""
+    conn.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES (?, 'b@b.c', 'B', ?)",
+        (AUTHOR, now_iso()),
+    )
+    project = create_project(
+        conn, settings, AUTHOR, name="Чужой",
+        raw_doc={"clips": [{"asset_id": ASSET, "in": 1.0, "out": 6.0}]},
+    )
+    seen: dict = {}
+
+    def run(args, *, timeout, on_line, should_stop=None, stop_check_sec=2.0):
+        seen["args"] = [str(a) for a in args]
+        on_line("out_time_us=2500000")
+        with open(args[-1], "wb") as f:
+            f.write(b"video")
+
+    monkeypatch.setattr(handlers, "run_streaming", run)
+    enqueue_job(conn, user_id=AUTHOR, type_="render", target_id=project["id"], params={"quality": "draft"})
+    handlers.handle_render(conn, settings, claim_job(conn, lane="cpu", pid=1))
+    assert str(asset_dir(settings, USER, ASSET) / "source.mp4") in seen["args"]
+    row = conn.execute("SELECT user_id FROM renders WHERE project_id = ?", (project["id"],)).fetchone()
+    assert row["user_id"] == AUTHOR

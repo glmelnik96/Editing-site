@@ -305,7 +305,7 @@ def legacy_music_to_sound(
     asset_id = music.get("asset_id")
     duration = duration_of(asset_id) if isinstance(asset_id, str) else None
     if duration is None or duration <= 0:
-        return out, [("music.asset_id", "музыкой может быть звуковой или видеоассет владельца")]
+        return out, [("music.asset_id", "музыкой может быть звуковой или видеоассет")]
     speech = _number(music.get("speech_volume", 1))
     if speech is None or not 0.0 <= speech <= 1.0:
         return out, [("music.speech_volume", "speech_volume от 0 до 1")]
@@ -384,7 +384,7 @@ def _validate_sounds(
         asset_id = item.get("asset_id")
         asset = assets.get(asset_id) if isinstance(asset_id, str) else None
         if asset is None or asset.kind not in SOUND_KINDS:
-            errors.add(f"{where}.asset_id", "звуком может быть звуковой или видеоассет владельца")
+            errors.add(f"{where}.asset_id", "звуком может быть звуковой или видеоассет")
             continue
         if asset.status not in CLIP_READY_STATUSES or asset.duration is None:
             errors.add(f"{where}.asset_id", "ассет ещё не готов")
@@ -478,7 +478,7 @@ def _validate_overlays(
         asset_id = item.get("asset_id")
         asset = assets.get(asset_id) if isinstance(asset_id, str) else None
         if asset is None or asset.kind not in CLIP_KINDS:
-            errors.add(f"{where}.asset_id", "наложением может быть видеоассет или картинка владельца")
+            errors.add(f"{where}.asset_id", "наложением может быть видеоассет или картинка")
             continue
         if asset.status not in CLIP_READY_STATUSES or (asset.duration is None and asset.kind != "image"):
             errors.add(f"{where}.asset_id", "ассет ещё не готов")

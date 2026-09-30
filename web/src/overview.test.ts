@@ -1,18 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { othersOnly, ownerLabel, usageHtml, type PersonUse, type TeamAsset } from './overview'
-
-const asset = (over: Partial<TeamAsset> = {}): TeamAsset => ({
-  id: 'ast_1',
-  original_name: 'встреча.mp4',
-  owner_email: 'one@ya.ru',
-  owner_name: 'Первый',
-  kind: 'video',
-  status: 'ready',
-  size: 100,
-  duration: 60,
-  created_at: '2026-01-01T00:00:00.000Z',
-  ...over,
-})
+import { authorLabel, ownerLabel, usageHtml, type PersonUse } from './overview'
 
 describe('место по людям', () => {
   it('имя или почта, место и число записей', () => {
@@ -40,18 +27,10 @@ describe('подпись владельца', () => {
   })
 })
 
-describe('только чужое', () => {
-  it('убирает своё: оно и так стоит в своём списке прямо над этим', () => {
-    const list = [
-      asset({ id: 'a1', owner_email: 'me@ya.ru' }),
-      asset({ id: 'a2', owner_email: 'two@ya.ru' }),
-      asset({ id: 'a3', owner_email: 'three@ya.ru' }),
-    ]
-    expect(othersOnly(list, 'me@ya.ru').map(a => a.id)).toEqual(['a2', 'a3'])
-  })
-
-  it('почту сравнивает без регистра и пробелов, как её хранит сервер', () => {
-    const list = [asset({ id: 'a1', owner_email: 'Me@Ya.ru' }), asset({ id: 'a2', owner_email: 'two@ya.ru' })]
-    expect(othersOnly(list, ' me@ya.ru ').map(a => a.id)).toEqual(['a2'])
+describe('подпись автора', () => {
+  it('у своего — «вы», у чужого — имя или почта', () => {
+    expect(authorLabel({ owner_email: 'Me@Ya.ru', owner_name: 'Я' }, ' me@ya.ru ')).toBe('вы')
+    expect(authorLabel({ owner_email: 'two@ya.ru', owner_name: 'Второй' }, 'me@ya.ru')).toBe('Второй')
+    expect(authorLabel({ owner_email: 'two@ya.ru', owner_name: '' }, 'me@ya.ru')).toBe('two@ya.ru')
   })
 })

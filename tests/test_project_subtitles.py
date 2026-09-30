@@ -347,3 +347,33 @@ class TestСборкаСоШкалы:
             generate_project_cues(
                 conn, settings, USER, made, mode="burn", version=made["version"],
             )
+
+
+AUTHOR = "usr_00000000000b"
+
+
+def test_cues_come_from_the_record_authors_folder(conn, settings):
+    """Проект одного человека, запись другого: расшифровка лежит в папке автора записи."""
+    conn.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES (?, 'b@b.c', 'B', ?)",
+        (AUTHOR, now_iso()),
+    )
+    conn.execute("UPDATE assets SET user_id = ? WHERE id = ?", (AUTHOR, ASSET))
+    asset_dir(settings, AUTHOR, ASSET).mkdir(parents=True, exist_ok=True)
+    transcript_path(settings, AUTHOR, ASSET).write_text(
+        json.dumps({"asset_id": ASSET, "duration": 120.0, "segments": [
+            {"id": 1, "start": 0.0, "end": 3.3, "text": PHRASE, "words": words()},
+        ]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    p = project(conn, settings)
+    assert cue_lines(build_project_subtitles(conn, settings, p))
+    saved = generate_project_cues(conn, settings, USER, p, mode="burn", version=p["version"])
+    assert saved["doc"]["subtitles"]["cues"]
+
+
+def test_a_deleted_record_is_a_clear_refusal_not_a_crash(conn, settings):
+    p = project(conn, settings)
+    conn.execute("DELETE FROM assets WHERE id = ?", (ASSET,))
+    with pytest.raises(SubtitlesUnavailable, match="удалён"):
+        build_project_subtitles(conn, settings, p)

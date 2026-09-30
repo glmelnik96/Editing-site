@@ -36,6 +36,10 @@ router = APIRouter(tags=["files"])
 
 TOUCH_MIN_INTERVAL = timedelta(minutes=1)
 FILE_CACHE = "private, max-age=3600"
+# Превью — кадры и волна — срок жизни записи не продлевают: их рисуют общие списки, и открытый
+# кем-то экран «Записи» продлевал бы все видео команды. Продлевает использование — прокси,
+# анализ, расшифровка, конверсии, сохранение проекта.
+PREVIEW_FILES = frozenset({"thumbs.jpg", "thumbs.json", "peaks.json"})
 
 
 def authorize_file(
@@ -47,15 +51,12 @@ def authorize_file(
     name: str,
     kind: str = "asset",
 ) -> Path:
-    """Путь к файлу или ApiError: 403 для непубличных имён (source.*), 404 для чужого и несуществующего.
+    """Путь к файлу или ApiError: 403 для непубличных имён (source.*), 404 для несуществующего.
 
+    Файлы записей и ролики общие: их получает любой вошедший — записи и проекты видит вся команда.
+    Конверсии личные, как и сам конвертер: их видят только автор и админ.
     owner_id — это ассет для kind="asset"/"conversion" и проект для kind="render".
     """
-    # Админ читает чужие файлы: без этого он не откроет чужой проект — редактору нужны прокси,
-    # полоски кадров и карты пауз владельца. Права даёт конфигурация сервиса (VIDEO_ADMIN_EMAIL),
-    # а не кто-то через интерфейс.
-    if user_id != user.id and user.role != "admin":
-        raise ApiError(404, "not_found", "Файл не найден")
     if kind == "render":
         render_id = name.rsplit(".", 1)[0]
         row = conn.execute(
@@ -66,6 +67,9 @@ def authorize_file(
             raise ApiError(404, "not_found", "Файл не найден")
         return render_dir(settings, user_id, owner_id) / name
     if kind == "conversion":
+        # Конверсии личные: чужому — 404, как несуществующему.
+        if user_id != user.id and user.role != "admin":
+            raise ApiError(404, "not_found", "Файл не найден")
         conversion_id = name.rsplit(".", 1)[0]
         row = conn.execute(
             "SELECT id FROM conversions WHERE id = ? AND asset_id = ? AND user_id = ?",
@@ -115,7 +119,8 @@ def serve_file(
     path = authorize_file(conn, request.app.state.settings, user, user_id, asset_id, name)
     if not path.is_file():
         raise ApiError(404, "not_found", "Файл ещё не готов")
-    touch_last_access(conn, asset_id)
+    if name not in PREVIEW_FILES:
+        touch_last_access(conn, asset_id)
     return FileResponse(path, headers={"Cache-Control": FILE_CACHE})
 
 
@@ -195,6 +200,6 @@ def authz(
         raise ApiError(404, "not_found", "Файл не найден")
     user_id, owner_id, name, kind = parsed
     authorize_file(conn, request.app.state.settings, user, user_id, owner_id, name, kind)
-    if kind in ("asset", "conversion"):
+    if kind == "conversion" or (kind == "asset" and name not in PREVIEW_FILES):
         touch_last_access(conn, owner_id)
     return Response(status_code=204)

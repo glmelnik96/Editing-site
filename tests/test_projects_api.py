@@ -37,6 +37,7 @@ def test_create_read_list_and_save(client, login_as, settings):
 
     listing = client.get("/api/v1/projects").json()["projects"]
     assert len(listing) == 1 and listing[0]["clips_count"] == 1 and "doc" not in listing[0]
+    assert listing[0]["owner_email"] == me["email"] and listing[0]["owner_name"] == me["name"]
 
     got = client.get(f"/api/v1/projects/{project['id']}").json()
     assert got["doc"] == project["doc"]
@@ -83,17 +84,22 @@ def test_stale_version_returns_409_with_the_current_project(client, login_as, se
     assert err["details"]["project"]["doc"]["clips"]
 
 
-def test_foreign_project_is_404(client, login_as, settings):
+def test_a_colleague_opens_saves_and_deletes_a_project(client, login_as, settings):
+    """Проекты общие: коллега открывает, правит и удаляет чужой проект, правка ложится автору."""
     login_as()
     me = client.get("/api/v1/me").json()
     seed_assets(client, settings, me["id"])
     p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert client.get(f"/api/v1/projects/{p['id']}").status_code == 404
-    r = client.put(f"/api/v1/projects/{p['id']}", json={"name": "x", "version": 1, "doc": doc()})
-    assert r.status_code == 404
-    assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 404
+    assert client.get(f"/api/v1/projects/{p['id']}").status_code == 200
+    body = {"name": "Поправил коллега", "version": 1, "doc": doc()}
+    r = client.put(f"/api/v1/projects/{p['id']}", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == 2
+    listing = client.get("/api/v1/projects").json()["projects"]
+    assert [(x["name"], x["owner_email"]) for x in listing] == [("Поправил коллега", me["email"])]
+    assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 204
     assert client.get("/api/v1/projects").json()["projects"] == []
 
 
@@ -125,7 +131,9 @@ def test_asset_in_use_cannot_be_deleted(client, login_as, settings):
     assert r.status_code == 409
     err = r.json()["error"]
     assert err["code"] == "asset_in_use"
-    assert err["details"]["projects"] == [{"id": p["id"], "name": "Мой"}]
+    assert err["details"]["projects"] == [
+        {"id": p["id"], "name": "Мой", "owner_email": me["email"], "owner_name": me["name"]}
+    ]
     assert client.delete(f"/api/v1/assets/{AUDIO}").status_code == 204  # музыка нигде не занята
     assert client.delete(f"/api/v1/projects/{p['id']}").status_code == 204
     assert client.delete(f"/api/v1/assets/{VIDEO}").status_code == 204  # проект удалён — ассет свободен
@@ -222,12 +230,46 @@ def test_restore_of_a_foreign_point_is_404(client, login_as, settings):
     assert r.status_code == 404
 
 
-def test_versions_of_a_foreign_project_are_404(client, login_as, settings):
+def test_a_colleague_uses_versions_of_a_project(client, login_as, settings):
     login_as()
     me = client.get("/api/v1/me").json()
     seed_assets(client, settings, me["id"])
     p = client.post("/api/v1/projects", json={"name": "Мой", "doc": doc()}).json()
     assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
     login_as("other@ya.ru", "Other")
-    assert client.get(f"/api/v1/projects/{p['id']}/versions").status_code == 404
-    assert client.post(f"/api/v1/projects/{p['id']}/checkpoint", json={}).status_code == 404
+    made = client.post(f"/api/v1/projects/{p['id']}/checkpoint", json={"label": "до правки"})
+    assert made.status_code == 201, made.text
+    labels = [v["label"] for v in client.get(f"/api/v1/projects/{p['id']}/versions").json()["versions"]]
+    assert labels == ["до правки"]
+    back = client.post(f"/api/v1/projects/{p['id']}/restore", json={"version_id": made.json()["id"]})
+    assert back.status_code == 200, back.text
+
+
+def test_list_is_the_whole_team_and_mine_keeps_only_mine(client, login_as, settings):
+    login_as()
+    first = client.post("/api/v1/projects", json={"name": "Админа"}).json()
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    second = client.post("/api/v1/projects", json={"name": "Коллеги"}).json()
+    listing = client.get("/api/v1/projects").json()["projects"]
+    assert [(x["id"], x["owner_email"], x["owner_name"]) for x in listing] == [
+        (second["id"], "other@ya.ru", "Other"),
+        (first["id"], "admin@ya.ru", "Admin"),
+    ]
+    assert [x["id"] for x in client.get("/api/v1/projects?mine=1").json()["projects"]] == [second["id"]]
+
+
+def test_a_record_in_a_colleagues_project_cannot_be_deleted(client, login_as, settings):
+    """Защита смотрит проекты всех авторов, а отказ называет проект и его автора."""
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_assets(client, settings, me["id"])
+    assert client.post("/api/v1/admin/whitelist", json={"email": "other@ya.ru"}).status_code == 201
+    login_as("other@ya.ru", "Other")
+    p = client.post("/api/v1/projects", json={"name": "Коллеги", "doc": doc()}).json()
+    login_as()
+    r = client.delete(f"/api/v1/assets/{VIDEO}")
+    assert r.status_code == 409
+    assert r.json()["error"]["details"]["projects"] == [
+        {"id": p["id"], "name": "Коллеги", "owner_email": "other@ya.ru", "owner_name": "Other"}
+    ]

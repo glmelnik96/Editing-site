@@ -47,6 +47,11 @@ def _asset(conn, settings, tmp_path, name="a.mp4", last_access=None):
     return row["id"]
 
 
+def _past_ttl(settings, hours: float):
+    """Момент на hours часов раньше границы срока хранения записи (отрицательное — позже)."""
+    return NOW - timedelta(hours=settings.asset_ttl_hours + hours)
+
+
 def _age(path: Path, hours: float) -> None:
     ts = (NOW - timedelta(hours=hours)).timestamp()
     os.utime(path, (ts, ts))
@@ -64,8 +69,8 @@ def test_expired_uploads_are_deleted_with_files(conn, settings):
 
 
 def test_expired_assets_are_deleted_and_jobs_canceled(conn, settings, tmp_path):
-    old = _asset(conn, settings, tmp_path, "old.mp4", last_access=NOW - timedelta(hours=25))
-    fresh = _asset(conn, settings, tmp_path, "new.mp4", last_access=NOW - timedelta(hours=23))
+    old = _asset(conn, settings, tmp_path, "old.mp4", last_access=_past_ttl(settings, 1))
+    fresh = _asset(conn, settings, tmp_path, "new.mp4", last_access=_past_ttl(settings, -1))
     assert rules.delete_expired_assets(conn, settings, NOW) == 1
     assert not asset_dir(settings, USER, old).exists() and asset_dir(settings, USER, fresh).exists()
     statuses = dict(conn.execute("SELECT target_id, status FROM jobs").fetchall())
@@ -80,7 +85,7 @@ def test_asset_touched_during_pass_survives(conn, settings, tmp_path):
     на execute/backup (что на экземпляре, что на классе) падает с TypeError "cannot set ...
     attribute of immutable type". Подкласс Connection через параметр factory= - штатный
     механизм, им и подменяем момент выполнения DELETE, чтобы воспроизвести гонку."""
-    old = _asset(conn, settings, tmp_path, "old.mp4", last_access=NOW - timedelta(hours=25))
+    old = _asset(conn, settings, tmp_path, "old.mp4", last_access=_past_ttl(settings, 1))
 
     class TouchingConnection(sqlite3.Connection):
         def execute(self, sql, params=()):
@@ -282,20 +287,24 @@ def test_asset_used_by_a_project_survives_its_ttl(conn, settings, tmp_path):
     """
     from server.app.projects.store import create_project
 
-    asset = _asset(conn, settings, tmp_path, "used.mp4", last_access=NOW - timedelta(hours=30))
+    asset = _asset(conn, settings, tmp_path, "used.mp4", last_access=_past_ttl(settings, 6))
     conn.execute("UPDATE assets SET status = 'ready', duration = 30 WHERE id = ?", (asset,))
     project = create_project(
         conn, settings, USER, name="Черновик",
         raw_doc={"clips": [{"asset_id": asset, "in": 0, "out": 5}]},
     )
-    conn.execute("UPDATE assets SET last_access_at = ? WHERE id = ?", (iso(NOW - timedelta(hours=30)), asset))
+    conn.execute("UPDATE assets SET last_access_at = ? WHERE id = ?", (iso(_past_ttl(settings, 6)), asset))
     assert rules.delete_expired_assets(conn, settings, NOW) == 0
     assert asset_dir(settings, USER, asset).exists()
 
     from server.app.projects.store import delete_project
 
     delete_project(conn, settings, USER, project["id"])
-    assert rules.delete_expired_assets(conn, settings, NOW) == 1
+    # Удаление проекта освобождает запись на полный срок: она не пропадает при ближайшем проходе
+    # только оттого, что проект давно не открывали.
+    assert rules.delete_expired_assets(conn, settings, NOW) == 0
+    later = NOW + timedelta(hours=settings.asset_ttl_hours + 1)
+    assert rules.delete_expired_assets(conn, settings, later) == 1
     assert not asset_dir(settings, USER, asset).exists()
 
 

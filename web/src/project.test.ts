@@ -155,6 +155,26 @@ describe('автосохранение', () => {
     expect(saver.pending()).toBe(false)
     vi.useRealTimers()
   })
+
+  it('помнит несохранённую правку, пока она ждёт повтора после сбоя', async () => {
+    vi.useFakeTimers()
+    const request = async () => {
+      throw new ApiError(500, 'internal_error', 'ой')
+    }
+    const saver = createSaver({ request, delay: 0 })
+    await flushFailing(saver, project(1))
+    // pending() уже false — запрос не летит и очереди нет, — но на сервере правки нет.
+    expect(saver.pending()).toBe(false)
+    expect(saver.unsaved()).toBe(true)
+    saver.cancel()
+    vi.useRealTimers()
+  })
+
+  it('после записи несохранённого нет', async () => {
+    const saver = createSaver({ request: async () => project(2), delay: 0 })
+    await saver.flush(project(1))
+    expect(saver.unsaved()).toBe(false)
+  })
 })
 
 describe('flush отвечает за то, что правка записана', () => {

@@ -266,17 +266,13 @@ def disk_free_bytes(path: Path) -> int:
     return shutil.disk_usage(path).free
 
 
-def _sources_for(
-    conn: sqlite3.Connection, settings: Settings, project: dict, owner_id: str
-) -> dict[str, SourceInfo]:
-    """Пути к исходникам проекта. Ассет мог исчезнуть или откатиться в обработку с момента сохранения."""
+def _sources_for(conn: sqlite3.Connection, settings: Settings, project: dict) -> dict[str, SourceInfo]:
+    """Пути к исходникам проекта. Записи в проекте бывают разных авторов: путь строится от автора
+    каждой записи (row["user_id"]), а не от автора проекта. Ассет мог исчезнуть или откатиться в
+    обработку с момента сохранения."""
     sources: dict[str, SourceInfo] = {}
     for asset_id in sorted(assets_of(project["doc"])):
-        # Фильтр по владельцу тут избыточен (документ проверялся при сохранении), но стоит одного
-        # условия и снимает вопрос: собрать чужой файл нельзя даже при испорченном документе.
-        row = conn.execute(
-            "SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, owner_id)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
         if row is None:
             raise MediaError("asset_gone", f"файл {asset_id} удалён, пересоберите проект")
         if row["status"] not in RENDER_READY_STATUSES:
@@ -318,7 +314,7 @@ def handle_render(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row
     if duration <= 0:
         raise MediaError("empty_project", "в проекте нет клипов")
 
-    sources = _sources_for(conn, settings, project, job["user_id"])
+    sources = _sources_for(conn, settings, project)
     if fmt == "m4a":
         rate = AUDIO_ONLY_RATE
     elif quality == "target" and bitrate_kbps:

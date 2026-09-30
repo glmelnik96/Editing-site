@@ -48,8 +48,8 @@ export function mountSettings(el: HTMLElement) {
         <h1 class="display-l" style="margin:0">Настройки</h1>
         <div class="stack">
           <h2 class="display-m" style="margin:0">Токены для агента</h2>
-          <p class="lead" style="margin:0">Токен даёт доступ ко всем вашим записям и проектам через
-            API. Выдавайте его программе, а не человеку</p>
+          <p class="lead" style="margin:0">Токен действует от вашего имени и открывает через API все
+            проекты и записи команды — с правкой и удалением. Выдавайте его программе, а не человеку</p>
         </div>
         ${secret ? `<div class="card stack secret"><span class="small">Скопируйте сейчас: второй раз
           секрет не покажется</span><code class="mono">${escapeHtml(secret)}</code></div>` : ''}

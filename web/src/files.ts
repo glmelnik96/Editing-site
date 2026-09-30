@@ -1,6 +1,9 @@
 /**
  * Экран записей: загрузка файлов и список того, что уже лежит.
  *
+ * Список общий: записи всей команды, свежие сверху, на карточке автор — «вы» у своей. Удалить
+ * может любой, кроме записи, которая стоит в чьём-либо проекте: тут сервер отказывает.
+ *
  * Обработка идёт на сервере минутами, поэтому список сам перечитывается, пока хоть одна запись
  * не доехала до конечного состояния. Опрос прекращается вместе с экраном: иначе он продолжил бы
  * стучаться и рисовать в разобранную разметку.
@@ -20,7 +23,7 @@ import {
   type Asset,
 } from './assets'
 import { escapeHtml } from './html'
-import { loadTeamAssets, othersOnly, ownerLabel, type TeamAsset } from './overview'
+import { authorLabel, ownedBy, ownerLabel } from './overview'
 import type { Me, Shell } from './shell'
 import { type AssetData } from './strip'
 import { UploadAborted, uploadFile } from './upload'
@@ -47,8 +50,30 @@ export function formatRows(formats: Record<string, string[]>): { name: string; e
   }))
 }
 
+/** Подпись под именем записи: автор («вы» у своей), длительность или «картинка», вес. */
+export function assetMetaText(a: Asset, myEmail: string): string {
+  return `${authorLabel(a, myEmail)} · ${a.kind === 'image' ? 'картинка' : fmtDuration(a.duration)} · ${fmtSize(a.size)}`
+}
+
+/** Вопрос перед удалением. Удаление необратимо: у чужой записи называем автора и что уйдёт с ней. */
+export function dropAssetQuestion(a: Asset, myEmail: string): string {
+  if (ownedBy(a, myEmail)) return `Удалить «${a.original_name}» без возможности восстановления?`
+  return (
+    `Удалить чужую запись «${a.original_name}» (автор — ${ownerLabel(a)}) без возможности ` +
+    'восстановления? Вместе с ней пропадут её расшифровка и конвертации.'
+  )
+}
+
+export type InUse = { id: string; name: string; owner_email: string; owner_name: string }
+
+/** Отказ 409: запись стоит в проектах — называем их и авторов, чтобы было ясно, к кому идти. */
+export function inUseText(projects: InUse[], myEmail: string): string {
+  const names = projects.map(p => `«${p.name}» (${authorLabel(p, myEmail)})`).join(', ')
+  return `Запись стоит в проекте: ${names}. Сначала уберите её оттуда.`
+}
+
 export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell['work'], me?: Me) {
-  const admin = me?.role === 'admin'
+  const myEmail = me?.email ?? ''
   el.innerHTML = `
     <div class="screen stack">
       <h1 class="display-l" style="margin:0">Записи</h1>
@@ -58,20 +83,16 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
         <span class="lead">или нажмите, чтобы выбрать. Прерванная загрузка продолжится
           с места разрыва, если выбрать тот же файл снова</span>
       </label>
+      <p class="meta" style="margin:0">Записи общие: загруженное видит вся команда</p>
       <!-- Список форматов стоит вне рамки загрузки: она целиком — метка скрытого поля файла,
            и любой щелчок внутри неё открыл бы окно выбора вместо раскрытия списка. -->
       <details class="formats">
         <summary class="meta" id="f-formats">Загружаю список форматов…</summary>
         <div class="stack" id="f-formats-body" style="--stack-gap:4px"></div>
       </details>
-      <div id="f-list" class="stack"></div>
-      ${
-        admin
-          ? `<h2 class="display-m" style="margin:24px 0 0">Записи команды</h2>
-      <div id="f-team" class="stack"><p class="muted" style="margin:0">Загружаю…</p></div>`
-          : ''
-      }
+      <!-- Ошибка — над списком: под длинным общим списком её не видно. -->
       <pre id="f-error" hidden></pre>
+      <div id="f-list" class="stack"></div>
     </div>`
 
   const drop = el.querySelector('#f-drop') as HTMLElement
@@ -80,14 +101,19 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   const formatsBody = el.querySelector('#f-formats-body') as HTMLElement
   const list = el.querySelector('#f-list') as HTMLElement
   const errorBox = el.querySelector('#f-error') as HTMLPreElement
-  const teamBox = el.querySelector('#f-team') as HTMLElement | null
   const frames = new Map<string, Promise<AssetData>>()
   let timer: number | undefined
   let stopped = false
+  let shown: Asset[] = []
 
   const alive = () => !stopped
   const showError = (e: unknown) => {
     errorBox.hidden = false
+    if (e instanceof ApiError && e.code === 'asset_in_use') {
+      const projects = (e.details as { projects?: InUse[] } | null)?.projects ?? []
+      errorBox.textContent = inUseText(projects, myEmail)
+      return
+    }
     errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
   }
 
@@ -99,13 +125,12 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
         ${frameHtml(a)}
         <div class="stack asset-name">
           <span>${escapeHtml(a.original_name)}</span>
-          <span class="meta">${a.kind === 'image' ? 'картинка' : fmtDuration(a.duration)} · ${fmtSize(a.size)}</span>
+          <span class="meta">${escapeHtml(assetMetaText(a, myEmail))}</span>
         </div>
         <span class="pill${state}">${escapeHtml(statusText(a.status))}</span>
         ${note ? `<span class="meta">${escapeHtml(note)}</span>` : ''}
         <span class="row asset-actions">
-          <button class="btn btn-ghost" data-drop-asset="${escapeHtml(a.id)}"
-            data-name="${escapeHtml(a.original_name)}">Удалить</button>
+          <button class="btn btn-ghost" data-drop-asset="${escapeHtml(a.id)}">Удалить</button>
         </span>
       </div>
     </article>`
@@ -115,6 +140,7 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
     if (stopped) return
     const { assets } = await listAssets()
     if (stopped) return
+    shown = assets
     list.innerHTML = assets.length
       ? assets.map(card).join('')
       : '<p class="lead" style="margin:0">Загрузите первую запись — дальше из неё соберётся ролик</p>'
@@ -129,15 +155,17 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   function wire(): void {
     list.querySelectorAll<HTMLButtonElement>('button[data-drop-asset]').forEach(b =>
       b.addEventListener('click', async () => {
-        if (!window.confirm(`Удалить «${b.dataset.name}» без возможности восстановления?`)) return
+        const asset = shown.find(a => a.id === b.dataset.dropAsset)
+        if (!asset || !window.confirm(dropAssetQuestion(asset, myEmail))) return
         b.disabled = true
         try {
-          await deleteAsset(b.dataset.dropAsset ?? '')
+          await deleteAsset(asset.id)
         } catch (e) {
           b.disabled = false
           showError(e)
           return
         }
+        errorBox.hidden = true
         onChanged?.()
         await refresh().catch(showError)
       }),
@@ -206,52 +234,8 @@ export function mountFiles(el: HTMLElement, onChanged?: () => void, work?: Shell
   void showFormats().catch(() => {
     formatsHead.textContent = 'Видео, звук, картинки и субтитры'
   })
-  /** Чужая запись: имя, чья, вес и состояние. Кадра нет — чужую ищут по имени и владельцу. */
-  function teamCard(a: TeamAsset): string {
-    const owner = ownerLabel(a)
-    const state = a.status === 'failed' ? ' pill-bad' : ''
-    return `<article class="card asset-card">
-      <div class="row" style="margin:0;align-items:center;gap:16px">
-        <div class="stack asset-name">
-          <span>${escapeHtml(a.original_name)}</span>
-          <span class="meta">${escapeHtml(owner)} · ${a.kind === 'image' ? 'картинка' : fmtDuration(a.duration)} · ${fmtSize(a.size)}</span>
-        </div>
-        <span class="pill${state}">${escapeHtml(statusText(a.status))}</span>
-        <span class="row asset-actions">
-          <button class="btn btn-ghost" data-drop-team="${escapeHtml(a.id)}"
-            data-name="${escapeHtml(a.original_name)}" data-owner="${escapeHtml(owner)}">Удалить</button>
-        </span>
-      </div>
-    </article>`
-  }
-
-  async function refreshTeam(): Promise<void> {
-    if (stopped || !teamBox || !me) return
-    const assets = othersOnly(await loadTeamAssets(), me.email)
-    if (stopped) return
-    teamBox.innerHTML = assets.length
-      ? assets.map(teamCard).join('')
-      : '<p class="muted" style="margin:0">У остальных записей пока нет</p>'
-    teamBox.querySelectorAll<HTMLButtonElement>('button[data-drop-team]').forEach(b =>
-      b.addEventListener('click', async () => {
-        const ask = `Удалить чужую запись «${b.dataset.name}» (${b.dataset.owner}) без возможности восстановления?`
-        if (!window.confirm(ask)) return
-        b.disabled = true
-        try {
-          await deleteAsset(b.dataset.dropTeam ?? '')
-        } catch (e) {
-          // Запись в чужом проекте сервер удалить не даст: отказ показываем как есть.
-          b.disabled = false
-          showError(e)
-          return
-        }
-        await refreshTeam().catch(showError)
-      }),
-    )
-  }
 
   void refresh().catch(showError)
-  void refreshTeam().catch(showError)
 
   return {
     stop(): void {

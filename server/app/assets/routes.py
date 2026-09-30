@@ -17,7 +17,8 @@ from fastapi import APIRouter, Depends, Form, Query, Request, Response, UploadFi
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from server.app.assets.views import AssetView, asset_view
+from server.app.assets.views import ASSET_SELECT, AssetView, asset_view, list_asset_views
+from server.app.audit import audit
 from server.app.auth.deps import CurrentUser, current_user
 from server.app.config import Settings
 from server.app.errors import ApiError
@@ -50,15 +51,14 @@ def get_asset(conn: sqlite3.Connection, user_id: str, asset_id: str) -> sqlite3.
     return conn.execute("SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id)).fetchone()
 
 
-def _owned(conn: sqlite3.Connection, user: CurrentUser, asset_id: str) -> sqlite3.Row:
-    """Запись. Админ видит и чужие: он отвечает за общий диск и за проекты команды.
+def _record(conn: sqlite3.Connection, asset_id: str) -> sqlite3.Row:
+    """Запись с автором. Записи общие: карточку, расшифровку и удаление получает любой вошедший.
 
-    Владелец берётся из самой строки (`row["user_id"]`), а не из вызывающего: файлы лежат в его
+    Автор берётся из самой строки (`row["user_id"]`), а не из вызывающего: файлы лежат в его
     каталоге, и всё, что дальше трогает диск или считает занятое место, обязано считать его.
-    Чужому не-админу — 404, а не 403: сообщать о существовании чужих записей незачем.
     """
-    row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
-    if row is None or (row["user_id"] != user.id and user.role != "admin"):
+    row = conn.execute(f"{ASSET_SELECT} WHERE a.id = ?", (asset_id,)).fetchone()
+    if row is None:
         raise ApiError(404, "not_found", "Ассет не найден")
     return row
 
@@ -70,20 +70,14 @@ def has_transcript(conn: sqlite3.Connection, user_id: str, asset_id: str) -> boo
     return row is not None
 
 
-def transcribed_assets(conn: sqlite3.Connection, user_id: str) -> set[str]:
-    """Ассеты с транскриптом — одним запросом на весь список, а не по запросу на карточку."""
-    rows = conn.execute("SELECT asset_id FROM transcripts WHERE user_id = ?", (user_id,))
-    return {row["asset_id"] for row in rows}
-
-
 @router.get("", response_model=AssetList)
 def list_(
+    mine: bool = False,
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> AssetList:
-    rows = conn.execute("SELECT * FROM assets WHERE user_id = ? ORDER BY created_at DESC, id", (user.id,))
-    transcribed = transcribed_assets(conn, user.id)
-    return AssetList(assets=[asset_view(r, has_transcript=r["id"] in transcribed) for r in rows])
+    """Все записи команды, свежие сверху; ?mine=1 — только свои (конвертер, скрипты агента)."""
+    return AssetList(assets=list_asset_views(conn, owner=user.id if mine else None))
 
 
 @router.post("/upload", status_code=201, response_model=AssetView)
@@ -133,7 +127,7 @@ async def upload_small(
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
-    return asset_view(_owned(conn, user, row["id"]))
+    return asset_view(_record(conn, row["id"]))
 
 
 @router.get("/{asset_id}", response_model=AssetView)
@@ -142,7 +136,7 @@ def get_(
     user: CurrentUser = Depends(current_user),  # noqa: B008
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> AssetView:
-    row = _owned(conn, user, asset_id)
+    row = _record(conn, asset_id)
     return asset_view(row, has_transcript=has_transcript(conn, row["user_id"], asset_id))
 
 
@@ -154,12 +148,13 @@ def delete(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     """Сначала запись, потом файлы: упавший процесс не оставит запись без файлов, папку подберёт janitor.
-    Ассет, занятый в незавершённом проекте, не удаляется."""
-    owner = _owned(conn, user, asset_id)["user_id"]
+    Удалить может любой вошедший; запись, которая стоит в чьём-либо проекте, не удаляется."""
+    asset = _record(conn, asset_id)
+    owner = asset["user_id"]
     with transaction(conn):
         # Проверка занятости внутри транзакции: BEGIN IMMEDIATE сериализует нас с сохранением проекта,
         # иначе между проверкой и удалением кто-то успел бы сослаться на этот ассет.
-        used_by = projects_using_asset(conn, owner, asset_id)
+        used_by = projects_using_asset(conn, asset_id)
         if used_by:
             raise ApiError(409, "asset_in_use", "Файл стоит в проекте", {"projects": used_by})
         cur = conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, owner))
@@ -167,6 +162,7 @@ def delete(
             raise ApiError(404, "not_found", "Ассет не найден")
         cancel_jobs_for_target(conn, asset_id)
     shutil.rmtree(asset_dir(request.app.state.settings, owner, asset_id), ignore_errors=True)
+    audit(conn, user, "удалил запись", f"{asset_id} «{asset['original_name']}»", owner)
     return Response(status_code=204)
 
 
@@ -279,7 +275,7 @@ def transcribe(
     Порядок проверок повторяет обработчик воркера: один и тот же запрос обязан отказывать
     одинаково и здесь, и там.
     """
-    asset = _owned(conn, user, asset_id)
+    asset = _record(conn, asset_id)
     settings = request.app.state.settings
     if asset["status"] not in TRANSCRIBE_READY_STATUSES:
         raise ApiError(422, "asset_not_ready", "Ассет ещё обрабатывается, карты пауз пока нет")
@@ -314,7 +310,7 @@ def transcript(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> Response:
     """Транскрипт во времени исходника: json как есть, srt и vtt собираются из него на лету."""
-    asset = _owned(conn, user, asset_id)
+    asset = _record(conn, asset_id)
     try:
         raw = _transcript_path(request.app.state.settings, asset).read_text(encoding="utf-8")
     except OSError as exc:
@@ -357,7 +353,7 @@ def put_transcript(
     Ни швов, ни верификации границ: времена пришли настоящие, двигать их нечем и незачем. Остаётся
     проверка формата и клэмп к длительности ассета — субтитр не должен пережить сам клип.
     """
-    asset = _owned(conn, user, asset_id)
+    asset = _record(conn, asset_id)
     settings = request.app.state.settings
     duration = float(asset["duration"] or 0)
     if duration <= 0:
@@ -416,7 +412,7 @@ def delete_transcript(
     Пока расшифровка идёт — нельзя: доехавший воркер молча вернёт удалённый файл. Для PUT
     эту гонку уже закрывали тем же отказом.
     """
-    asset = _owned(conn, user, asset_id)
+    asset = _record(conn, asset_id)
     # Проверка и запись под одной блокировкой, как у POST и PUT: иначе задание, поставленное
     # между ними, доедет и молча вернёт удалённый транскрипт обратно. Ровно эту гонку у PUT уже
     # закрывали, а здесь проверка осталась снаружи транзакции.

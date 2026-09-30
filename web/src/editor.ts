@@ -54,6 +54,8 @@ import { mountTimeline, type AssetInfo } from './timeline/view'
 import { mountVersions } from './versions'
 import { blockedReason, editorBlocks, setBlocked, tabBlock, type PickedKind } from './blocked'
 import { LOADING_DELAY_MS, stageNote, stageNoteHtml, type VideoState } from './stage-note'
+import type { Me } from './shell'
+import { CONFLICT_TEXT, FRESH_NOTICE, GONE_TEXT, takeFresh } from './sync'
 import { pageTitle } from './titles'
 
 /** Шаг опроса записей, когда ничего не обрабатывается и не расшифровывается. */
@@ -79,7 +81,7 @@ function savePref(key: string, value: string): void {
   }
 }
 
-export function mountEditor(el: HTMLElement, projectId: string) {
+export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
   el.innerHTML = `
     <div class="project-bar">
       <a class="btn btn-ghost" href="#/projects">← Проекты</a>
@@ -297,14 +299,31 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     // сорок раз в минуту вхолостую, а ВМ у нас общая с двумя соседями.
     const soon = needsPolling(assetList) || subtitles.busy() || transcript.busy()
     assetTimer = window.setTimeout(() => {
-      void listProjectAssets(projectId)
-        .then(r => {
+      // Вместе с записями — сам проект: его правит вся команда, и чужая правка должна дойти до
+      // открытого редактора, пока человек не начал править старое.
+      void Promise.all([listProjectAssets(projectId), loadProject(projectId)])
+        .then(([r, fresh]) => {
           if (stopped) return
           applyAssets(r.assets)
+          if (project && takeFresh(project.version, fresh.version, saver.unsaved())) {
+            project = fresh
+            history.clear()
+            syncBar()
+            render()
+            // Список сменился под играющим клипом — встаём заново по времени шкалы, как после правки.
+            if (playing) seek(Math.min(timelineTime, totalDuration(fresh.doc.clips)))
+            notice(FRESH_NOTICE)
+          }
           pollAssets()
         })
-        .catch(() => {
-          if (!stopped) pollAssets()
+        .catch(e => {
+          if (stopped) return
+          // Проект удалили: сохранять правки некуда, и опрашивать больше нечего.
+          if (e instanceof ApiError && e.status === 404) {
+            gone()
+            return
+          }
+          pollAssets()
         })
     }, soon ? POLL_MS : IDLE_POLL_MS)
   }
@@ -318,6 +337,11 @@ export function mountEditor(el: HTMLElement, projectId: string) {
   const showError = (e: unknown) => {
     errorBox.hidden = false
     errorBox.textContent = e instanceof ApiError ? `Ошибка: ${e.message}` : String(e)
+  }
+
+  const gone = () => {
+    errorBox.hidden = false
+    errorBox.textContent = GONE_TEXT
   }
 
   // Таймер держим за ручку: без неё сообщение, показанное секунду назад, гасил чужой таймер от
@@ -362,14 +386,17 @@ export function mountEditor(el: HTMLElement, projectId: string) {
       history.clear()
       syncBar()
       render()
-      notice('Проект изменился в другом месте, показана свежая версия')
+      if (playing) seek(Math.min(timelineTime, totalDuration(fresh.doc.clips)))
+      // Не подсказка на 6 секунд: человек должен узнать, что его правки нет.
+      errorBox.hidden = false
+      errorBox.textContent = CONFLICT_TEXT
     },
     onInvalid: (errors: FieldError[]) => {
       // Причина не гаснет по таймеру: отклонённый документ надо поправить, а не переждать.
       errorBox.hidden = false
       errorBox.textContent = `Не сохранено: ${errors.map(e => `${e.field} — ${e.message}`).join('; ')}`
     },
-    onError: showError,
+    onError: e => (e instanceof ApiError && e.status === 404 ? gone() : showError(e)),
     onStateChange: (state, sec) => (stateBox.textContent = saveStateText(state, sec)),
   })
 
@@ -776,7 +803,7 @@ export function mountEditor(el: HTMLElement, projectId: string) {
     onPick: asset => transcript.setAsset(asset),
     onTime: seconds => transcript.setTime(seconds),
     onFold: () => setFold(openFold === 'cut' ? null : 'cut'),
-  })
+  }, me.email)
 
   /**
    * Способ отрезать кусок: по времени или по словам. Открыт ровно один или ни одного.
