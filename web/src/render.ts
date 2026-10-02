@@ -173,7 +173,7 @@ function fitWord(fit: string): string {
   return fit === 'crop' ? 'обрезка' : 'поля'
 }
 
-function plural(n: number, one: string, few: string, many: string): string {
+export function plural(n: number, one: string, few: string, many: string): string {
   const tens = n % 100
   const units = n % 10
   if (tens >= 11 && tens <= 14) return many

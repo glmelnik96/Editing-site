@@ -15,6 +15,7 @@ import {
   fmtSize,
   fmtWhen,
   listAssets,
+  loadLimits,
   needsPolling,
   POLL_MS,
   withoutExt,
@@ -23,6 +24,7 @@ import {
 import { escapeHtml } from './html'
 import { ownedBy } from './overview'
 import { listJobs, loadJob, type JobListItem, type JobView } from './project'
+import { estimateRenderMinutes, plural } from './render'
 import type { Me } from './shell'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
@@ -35,6 +37,9 @@ const CONVERT_JOB_TEXT: Record<string, string> = {
 }
 const READY = new Set(['ready', 'proxy_ready'])
 const CONVERTIBLE = new Set(['video', 'audio'])
+const VIDEO_FORMATS = new Set(['mp4', 'webm'])
+// Предел кадра по короткой стороне — SHORT_SIDE в server/media/convert.py.
+const CONVERT_SHORT_SIDE = 1080
 
 export type ConversionCard = {
   id: string
@@ -56,8 +61,31 @@ export function convertibleAsset(asset: { kind: string; status: string }): boole
   return CONVERTIBLE.has(asset.kind) && READY.has(asset.status)
 }
 
-export function convertHint(): string {
-  return 'извлечь звук займёт секунды; mp4 и webm — примерно как черновик сборки этой длительности'
+/** Сколько хранится готовый файл, словами: «сутки», «3 дня», «12 часов». */
+export function keepText(hours: number): string {
+  if (hours === 24) return 'сутки'
+  if (hours % 24 === 0) {
+    const days = hours / 24
+    return `${days} ${plural(days, 'день', 'дня', 'дней')}`
+  }
+  return `${hours} ${plural(hours, 'час', 'часа', 'часов')}`
+}
+
+/**
+ * Подсказка под форматами: сколько ждать, что станет с кадром и сколько хранится результат.
+ *
+ * Видео конвертер кодирует заново тем же пресетом, что и сборку «среднего» качества, поэтому
+ * минуты — тем же расчётом, что у панели сборки. Срок хранения приходит с сервера (/limits); не
+ * доехал — о сроке молчим: обещание, разошедшееся с сервером, хуже отсутствия подписи.
+ */
+export function convertHint(fmt: string, durationSec: number | null, ttlHours: number | null): string {
+  const keep = ttlHours ? ` Готовый файл хранится ${keepText(ttlHours)}.` : ''
+  if (!VIDEO_FORMATS.has(fmt)) return `Звук конвертируется за секунды.${keep}`
+  const minutes = estimateRenderMinutes(durationSec ?? 0, 'medium', fmt === 'webm' ? 'webm' : 'mp4')
+  return (
+    `Видео кодируется заново: около ${minutes} мин, если очередь свободна. ` +
+    `Кадр больше ${CONVERT_SHORT_SIDE}p уменьшится до ${CONVERT_SHORT_SIDE}p.${keep}`
+  )
 }
 
 export function convertJobText(status: string, progress: number): string {
@@ -157,6 +185,9 @@ export function mountConvert(el: HTMLElement, me: Me) {
   const errorBox = el.querySelector('#cv-error') as HTMLPreElement
   const pending = new Map<string, string>()
   const jobs = new Map<string, JobView>()
+  // Срок хранения для подсказки — один раз за экран; не доехал — подсказка молчит о сроке.
+  const limits = loadLimits().catch(() => null)
+  let ttlHours: number | null = null
   let assets: Asset[] = []
   let selectedId = ''
   let selectedFormat = 'mp3'
@@ -245,7 +276,7 @@ export function mountConvert(el: HTMLElement, me: Me) {
       <div class="stack" style="gap:8px">
         <span class="meta">Формат</span>
         <span class="row" style="margin:0">${formatChipsHtml(asset.kind, selectedFormat, locked)}</span>
-        <p class="meta" style="margin:0">${escapeHtml(convertHint())}</p>
+        <p class="meta" style="margin:0">${escapeHtml(convertHint(selectedFormat, asset.duration, ttlHours))}</p>
         <button type="button" class="btn btn-key" id="cv-go"${locked ? ' disabled' : ''}>Конвертировать</button>
       </div>
       ${jobHtml(asset.id)}
@@ -313,6 +344,7 @@ export function mountConvert(el: HTMLElement, me: Me) {
       const listed = await listAssets(true)
       if (stopped) return
       assets = listed.assets
+      ttlHours = (await limits)?.render_ttl_hours ?? null
       const { jobs: listedJobs } = await listJobs()
       if (stopped) return
       for (const row of runningConvertsFromJobs(listedJobs, me.email)) {

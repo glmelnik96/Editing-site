@@ -131,6 +131,8 @@ export type Limits = {
   max_upload_bytes: number
   max_still_sec: number
   formats: Record<string, string[]>
+  /** Сколько живут готовый ролик и конвертация: подсказка конвертера называет срок по нему. */
+  render_ttl_hours: number
 }
 
 export function loadLimits(): Promise<Limits> {

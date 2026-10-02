@@ -164,6 +164,9 @@ class LimitsView(BaseModel):
     max_upload_bytes: int
     max_still_sec: int
     formats: dict[str, list[str]]
+    # Сколько живут готовый ролик и конвертация (VIDEO_RENDER_TTL_HOURS): подсказка конвертера
+    # называет срок по нему, а не своей копией.
+    render_ttl_hours: int
 
 
 @me_router.get("/limits", response_model=LimitsView)
@@ -182,4 +185,5 @@ def limits(
         max_upload_bytes=settings.max_upload_bytes,
         max_still_sec=settings.max_still_sec,
         formats=known_exts(),
+        render_ttl_hours=settings.render_ttl_hours,
     )

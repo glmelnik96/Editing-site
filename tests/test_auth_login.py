@@ -266,6 +266,8 @@ def test_limits_tells_the_client_what_can_be_uploaded(client, login_as):
     assert "mp4" in body["formats"]["video"]
     assert "png" in body["formats"]["image"] and "jpg" in body["formats"]["image"]
     assert body["formats"]["subtitle"] == ["srt", "vtt"]
+    # Сколько живут ролик и конвертация: подсказка конвертера берёт срок отсюда, а не пишет свой.
+    assert body["render_ttl_hours"] == 24
     # Списки отсортированы: подпись на экране не должна прыгать между загрузками страницы.
     assert all(group == sorted(group) for group in body["formats"].values())
 

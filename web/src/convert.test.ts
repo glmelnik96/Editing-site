@@ -7,6 +7,7 @@ import {
   convertibleAsset,
   emptyConvertHtml,
   formatChipsHtml,
+  keepText,
   pickConvertFile,
   runningConvertsFromJobs,
 } from './convert'
@@ -61,9 +62,40 @@ describe('convert screen helpers', () => {
     expect(html).toContain('data-drop-conversion="cnv_1"')
   })
 
-  it('поясняет звук и черновик видео', () => {
-    expect(convertHint()).toMatch(/звук/)
-    expect(convertHint()).toMatch(/mp4/)
+  it('подсказка видео: минуты по длительности, кадр до 1080p, срок с сервера', () => {
+    const hint = convertHint('mp4', 600, 24)
+    expect(hint).toContain('кодируется заново')
+    // Тот же расчёт, что у панели сборки при «среднем» качестве: 600 с / 1.04 → 10 мин.
+    expect(hint).toContain('около 10 мин')
+    expect(hint).toContain('Кадр больше 1080p уменьшится до 1080p')
+    expect(hint).toContain('хранится сутки')
+  })
+
+  it('webm кодируется вдвое дольше mp4', () => {
+    expect(convertHint('webm', 600, 24)).toContain('около 20 мин')
+  })
+
+  it('подсказка звука — без кадра и минут', () => {
+    const hint = convertHint('mp3', 600, 24)
+    expect(hint).toContain('за секунды')
+    expect(hint).not.toContain('1080')
+    expect(hint).toContain('хранится сутки')
+  })
+
+  it('срок не доехал с сервера — о нём молчим', () => {
+    expect(convertHint('mp4', 60, null)).not.toContain('хранится')
+    expect(convertHint('mp3', 60, null)).not.toContain('хранится')
+  })
+
+  it('срок словами', () => {
+    expect(keepText(24)).toBe('сутки')
+    expect(keepText(72)).toBe('3 дня')
+    expect(keepText(168)).toBe('7 дней')
+    expect(keepText(12)).toBe('12 часов')
+    expect(keepText(1)).toBe('1 час')
+  })
+
+  it('ход конвертации — в процентах', () => {
     expect(convertJobText('running', 0.4)).toContain('%')
   })
 
