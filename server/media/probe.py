@@ -16,6 +16,16 @@ PROBE_TIMEOUT_SEC = 60
 IMAGE_FORMATS = {"image2", "image2pipe", "gif"}
 
 
+class NoDuration(MediaError):
+    """В файле не записана длительность. container — format_name ffprobe: по нему видно, чем
+    лечить. WebM, записанный в браузере, приходит без длительности и без индекса — его
+    переупаковывают без перекодирования (media/remux.py)."""
+
+    def __init__(self, container: str) -> None:
+        super().__init__("no_duration", "Не удалось определить длительность файла")
+        self.container = container
+
+
 @dataclass(frozen=True)
 class MediaInfo:
     duration: float | None
@@ -67,7 +77,7 @@ def _duration(data: dict, video: dict | None, audio: dict | None) -> float:
             continue
         if value > 0:
             return round(value, 3)
-    raise MediaError("no_duration", "Не удалось определить длительность файла")
+    raise NoDuration(str((data.get("format") or {}).get("format_name") or ""))
 
 
 def _frames(stream: dict) -> int | None:

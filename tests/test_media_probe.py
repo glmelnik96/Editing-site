@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from server.app.config import Settings
-from server.media.probe import MediaInfo, parse_probe, probe_args, probe_file
+from server.media.probe import MediaInfo, NoDuration, parse_probe, probe_args, probe_file
 from server.media.run import MediaError, run_tool, tail_lines
 
 VIDEO_JSON = {
@@ -223,3 +223,13 @@ def test_a_picture_with_sound_is_not_a_picture():
     })
     assert info.kind != "image"
     assert info.duration == 180.0
+
+
+def test_missing_duration_names_the_container():
+    """WebM из браузера приходит без длительности; по контейнеру видно, поможет ли переупаковка."""
+    with pytest.raises(NoDuration) as e:
+        parse_probe({"format": {"format_name": "matroska,webm"}, "streams": [
+            {"codec_type": "video", "codec_name": "vp8", "width": 2, "height": 2},
+        ]})
+    assert e.value.reason == "no_duration" and e.value.container == "matroska,webm"
+    assert e.value.message == "Не удалось определить длительность файла"

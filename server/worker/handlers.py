@@ -44,8 +44,9 @@ from server.media.convert import (
     has_ogg_encoder,
     has_webm_encoder,
 )
-from server.media.probe import probe_file
+from server.media.probe import MediaInfo, NoDuration, probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
+from server.media.remux import can_remux, remux_args
 from server.media.render import (
     RenderInvalid,
     SourceInfo,
@@ -129,6 +130,36 @@ def _stop_if_canceled(conn: sqlite3.Connection, job: sqlite3.Row) -> None:
         raise MediaError("canceled", "Отменено")
 
 
+def _probe_or_repack(conn: sqlite3.Connection, settings: Settings, asset: sqlite3.Row) -> MediaInfo:
+    """Параметры файла. Matroska без длительности — так пишет WebM запись экрана или камеры в
+    браузере — сначала переупаковываем без перекодирования: ffmpeg при этом записывает и
+    длительность, и индекс. Потом спрашиваем ffprobe ещё раз."""
+    src = _source(settings, asset)
+    try:
+        return probe_file(settings, str(src))
+    except NoDuration as exc:
+        if not can_remux(exc.container):
+            raise
+        missing = exc
+    if disk_free_bytes(settings.data_dir) < src.stat().st_size * SIZE_SAFETY:
+        raise MediaError(
+            "disk_low", "на диске мало места, чтобы подготовить запись, освободите его и повторите"
+        )
+    tmp = src.with_name(src.name + ".part")
+    try:
+        run_tool(remux_args(settings, str(src), str(tmp)), timeout=settings.analyze_timeout_sec)
+    except MediaError as exc:
+        tmp.unlink(missing_ok=True)
+        # Человеку — прежняя понятная причина, а не код выхода ffmpeg; хвост stderr — в журнал.
+        log.warning("analyze: %s не переупаковался: %s\n%s", asset["id"], exc.message, exc.stderr)
+        raise missing from exc
+    tmp.replace(src)
+    # Вес записи — у файла, который теперь лежит на диске: индекс добавляет к нему немного.
+    conn.execute("UPDATE assets SET size = ? WHERE id = ?", (src.stat().st_size, asset["id"]))
+    log.info("analyze: %s переупакован — в контейнере не было длительности", asset["id"])
+    return probe_file(settings, str(src))
+
+
 def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Row) -> None:
     from server.worker.queue import set_progress  # локально: очередь не должна зависеть от обработчиков
 
@@ -140,7 +171,7 @@ def handle_analyze(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
     folder = asset_dir(settings, asset["user_id"], asset_id)
     conn.execute("UPDATE assets SET status = 'analyzing', error = NULL WHERE id = ?", (asset_id,))
     try:
-        info = probe_file(settings, str(_source(settings, asset)))
+        info = _probe_or_repack(conn, settings, asset)
     except MediaError as exc:
         _set_asset_failed(conn, asset_id, exc.message)
         raise

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from functools import cache
 from pathlib import Path
 
 FFMPEG = shutil.which("ffmpeg")
@@ -57,4 +58,37 @@ def make_audio(path: Path, *, seconds: int = 4) -> Path:
 
 def make_broken(path: Path) -> Path:
     path.write_bytes(b"not a video at all" * 100)
+    return path
+
+
+@cache
+def have_encoders(*names: str) -> bool:
+    """Есть ли кодеки в сборке ffmpeg: VP8 и Opus внешние, их может не оказаться."""
+    if not HAVE_FFMPEG:
+        return False
+    listing = subprocess.run(
+        [FFMPEG, "-v", "error", "-encoders"], capture_output=True, text=True, check=False
+    ).stdout
+    found = set(listing.split())
+    return all(name in found for name in names)
+
+
+def make_browser_webm(path: Path, *, seconds: int = 4) -> Path:
+    """WebM, как его пишет запись экрана или камеры в браузере: потоком, без длительности и индекса.
+
+    -live 1 и вывод в трубу — так же поступает MediaRecorder: заголовок уходит раньше, чем
+    известна длина, и вернуться дописать её некуда."""
+    with open(path, "wb") as out:
+        subprocess.run(
+            [
+                FFMPEG, "-v", "error", "-y",
+                "-t", str(seconds), "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25",
+                "-t", str(seconds), "-f", "lavfi", "-i", "sine=frequency=440",
+                "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "300k",
+                "-c:a", "libopus", "-live", "1", "-f", "webm", "pipe:1",
+            ],
+            check=True,
+            stdout=out,
+            stderr=subprocess.PIPE,
+        )
     return path

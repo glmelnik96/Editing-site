@@ -9,7 +9,7 @@ from server.app.storage import asset_dir
 from server.app.util import now_iso
 from server.db.core import connect
 from server.db.migrate import migrate
-from server.media.probe import MediaInfo
+from server.media.probe import MediaInfo, NoDuration
 from server.media.run import MediaError
 from server.worker import handlers
 from server.worker.queue import claim_job
@@ -238,3 +238,87 @@ def test_analyze_stops_between_steps_when_canceled(conn, settings, monkeypatch):
     assert e.value.reason == "canceled"
     assert conn.execute("SELECT count(*) FROM jobs WHERE type = 'proxy'").fetchone()[0] == 0
     assert not (asset_dir(settings, USER, asset_id) / "peaks.json").exists()
+
+
+def _answers(*items):
+    """probe_file по очереди: исключение бросает, сведения отдаёт."""
+    queue = list(items)
+
+    def probe(*a, **k):
+        item = queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    return probe
+
+
+def _skip_media_steps(monkeypatch):
+    monkeypatch.setattr(handlers, "extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "analyze_audio", lambda *a, **k: fake_analysis())
+    monkeypatch.setattr(handlers, "build_thumbs", lambda *a, **k: {"count": 1})
+
+
+def test_analyze_repacks_a_browser_webm_without_duration(conn, settings, monkeypatch):
+    """Запись из браузера: в контейнере нет длительности. Переупаковка без перекодирования её
+    записывает, и анализ идёт дальше; вес записи — у нового файла."""
+    asset_id = make_asset(conn, settings, ext="webm")
+    calls = []
+
+    def tool(args, **k):
+        calls.append(args)
+        Path(args[-1]).write_bytes(b"\1" * 25)
+        return ""
+
+    monkeypatch.setattr(handlers, "probe_file", _answers(NoDuration("matroska,webm"), VIDEO))
+    monkeypatch.setattr(handlers, "run_tool", tool)
+    _skip_media_steps(monkeypatch)
+    handlers.handle_analyze(conn, settings, take(conn))
+
+    row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    assert (row["status"], row["duration"], row["size"], row["error"]) == ("ready", 12.0, 25, None)
+    src = asset_dir(settings, USER, asset_id) / "source.webm"
+    assert src.read_bytes() == b"\1" * 25
+    assert not src.with_name("source.webm.part").exists()
+    assert len(calls) == 1 and calls[0][calls[0].index("-c") + 1] == "copy"
+
+
+def test_analyze_does_not_repack_other_containers(conn, settings, monkeypatch):
+    asset_id = make_asset(conn, settings)
+    monkeypatch.setattr(handlers, "probe_file", _answers(NoDuration("mov,mp4,m4a,3gp,3g2,mj2")))
+    monkeypatch.setattr(handlers, "run_tool", lambda *a, **k: pytest.fail("переупаковка mp4 не поможет"))
+    with pytest.raises(MediaError):
+        handlers.handle_analyze(conn, settings, take(conn))
+    row = conn.execute("SELECT status, error FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    assert (row["status"], row["error"]) == ("failed", "Не удалось определить длительность файла")
+
+
+def test_analyze_refuses_to_repack_on_a_full_disk(conn, settings, monkeypatch):
+    asset_id = make_asset(conn, settings, ext="webm")
+    monkeypatch.setattr(handlers, "probe_file", _answers(NoDuration("matroska,webm")))
+    monkeypatch.setattr(handlers, "disk_free_bytes", lambda *a: 0)
+    monkeypatch.setattr(handlers, "run_tool", lambda *a, **k: pytest.fail("места нет — копию не начинаем"))
+    with pytest.raises(MediaError):
+        handlers.handle_analyze(conn, settings, take(conn))
+    row = conn.execute("SELECT status, error FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    assert row["status"] == "failed" and "мало места" in row["error"]
+
+
+def test_a_failed_repack_keeps_the_readable_reason(conn, settings, monkeypatch):
+    """ffmpeg не справился: человек видит прежнюю понятную причину, а не код выхода ffmpeg;
+    исходник не тронут, недописанная копия убрана."""
+    asset_id = make_asset(conn, settings, ext="webm")
+
+    def tool(args, **k):
+        Path(args[-1]).write_bytes(b"half")
+        raise MediaError("tool_failed", "ffmpeg завершился с кодом 1")
+
+    monkeypatch.setattr(handlers, "probe_file", _answers(NoDuration("matroska,webm")))
+    monkeypatch.setattr(handlers, "run_tool", tool)
+    with pytest.raises(MediaError):
+        handlers.handle_analyze(conn, settings, take(conn))
+    row = conn.execute("SELECT status, error FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    assert (row["status"], row["error"]) == ("failed", "Не удалось определить длительность файла")
+    src = asset_dir(settings, USER, asset_id) / "source.webm"
+    assert src.read_bytes() == b"\0" * 10
+    assert not src.with_name("source.webm.part").exists()

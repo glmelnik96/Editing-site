@@ -9,10 +9,18 @@ from server.app.storage import asset_dir
 from server.app.util import now_iso
 from server.db.core import connect
 from server.db.migrate import migrate
-from server.media.probe import probe_file
+from server.media.probe import NoDuration, probe_file
 from server.media.run import MediaError
 from server.worker import __main__ as worker_main
-from tests.media_fixtures import HAVE_FFMPEG, make_audio, make_broken, make_silent_video, make_video
+from tests.media_fixtures import (
+    HAVE_FFMPEG,
+    have_encoders,
+    make_audio,
+    make_broken,
+    make_browser_webm,
+    make_silent_video,
+    make_video,
+)
 
 pytestmark = pytest.mark.skipif(not HAVE_FFMPEG, reason="нужен ffmpeg в PATH")
 
@@ -140,3 +148,22 @@ def test_proxy_of_a_deleted_asset_does_nothing(conn, settings):
 def test_probe_reports_a_broken_file(settings, tmp_path):
     with pytest.raises(MediaError):
         probe_file(settings, str(make_broken(tmp_path / "broken.mp4")))
+
+
+@pytest.mark.skipif(not have_encoders("libvpx", "libopus"), reason="нужны libvpx и libopus")
+def test_browser_webm_without_duration_is_repacked_and_processed(conn, settings):
+    """Запись экрана из браузера: WebM без длительности доходит до прокси, как обычный ролик."""
+    folder = add_asset(
+        conn, settings, make_browser_webm, asset_id="ast_000000000009", kind="video", ext="webm"
+    )
+    source = folder / "source.webm"
+    with pytest.raises(NoDuration):  # файл и правда такой, какой пишет браузер
+        probe_file(settings, str(source))
+    drain(conn, settings)
+
+    row = conn.execute("SELECT * FROM assets WHERE id = 'ast_000000000009'").fetchone()
+    assert row["status"] == "proxy_ready", row["error"]
+    assert row["duration"] == pytest.approx(4.0, abs=0.3)
+    assert row["video_codec"] == "vp8" and row["has_audio"] == 1
+    assert row["size"] == source.stat().st_size  # вес — у переупакованного файла
+    assert probe_file(settings, str(source)).duration == pytest.approx(4.0, abs=0.3)
