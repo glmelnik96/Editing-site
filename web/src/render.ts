@@ -3,6 +3,7 @@ import { ApiError, isRetryable } from './api'
 import { downloadFileName, fmtDuration, fmtSize, fmtWhen, type Asset } from './assets'
 import { BURN_BLOCKED } from './blocked'
 import { escapeHtml } from './html'
+import { screenProgress } from './work'
 import {
   cancelJob,
   deleteRender,
@@ -455,9 +456,9 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
   })
   burnBox.addEventListener('change', () => handlers.onBurn(burnBox.checked))
 
-  function showJob(status: JobView['status']): void {
+  function showJob(status: JobView['status'], progress = 0): void {
     jobBox.hidden = false
-    const running = adopted ? 'Сборка уже идёт — ход вверху' : 'Собираю — ход вверху'
+    const running = screenProgress(adopted ? 'Сборка уже идёт' : 'Собираю', status, progress)
     statusBox.textContent = RUNNING.has(status) ? running : (JOB_TEXT[status] ?? status)
     cancelButton.hidden = !RUNNING.has(status)
     startButton.disabled = RUNNING.has(status) || empty
@@ -524,7 +525,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
     }
     if (stopped || job.id !== jobId) return
     clearError() // опрос снова доходит: жалобу на прошлый оборванный запрос убираем
-    showJob(job.status)
+    showJob(job.status, job.progress)
     if (RUNNING.has(job.status)) {
       scheduleNext()
       return
@@ -553,7 +554,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
     if (!found) return
     jobId = found.id
     adopted = true
-    showJob(found.status)
+    showJob(found.status, found.progress)
     scheduleNext()
   }
 

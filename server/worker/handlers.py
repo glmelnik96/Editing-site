@@ -43,6 +43,7 @@ from server.media.convert import (
     has_mp3_encoder,
     has_ogg_encoder,
     has_webm_encoder,
+    has_webp_encoder,
 )
 from server.media.probe import MediaInfo, NoDuration, probe_file
 from server.media.proxy import parse_progress, proxy_args, proxy_name
@@ -474,6 +475,8 @@ def handle_convert(conn: sqlite3.Connection, settings: Settings, job: sqlite3.Ro
             mp3_encoder=has_mp3_encoder(settings) if fmt == "mp3" else True,
             webm_encoder=has_webm_encoder(settings) if fmt == "webm" else True,
             ogg_encoder=has_ogg_encoder(settings) if fmt == "ogg" else True,
+            webp_encoder=has_webp_encoder(settings) if fmt == "webp" else True,
+            still=asset["kind"] == "image",
         )
     except ConvertUnavailable as exc:
         raise MediaError(exc.code, exc.message) from exc

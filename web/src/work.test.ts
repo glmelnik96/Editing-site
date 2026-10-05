@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { JobListItem } from './project'
-import { FLASH_MS, foldIncoming, jobTitle, toWorkJob, workRows, type WorkJob, type WorkState } from './work'
+import {
+  FLASH_MS,
+  fmtSpan,
+  foldIncoming,
+  jobDetail,
+  jobTitle,
+  liveTitle,
+  toWorkJob,
+  workRows,
+  type WorkJob,
+  type WorkState,
+} from './work'
 
 const job = (over: Partial<WorkJob> = {}): WorkJob => ({
   id: 'job_1',
@@ -12,6 +23,9 @@ const job = (over: Partial<WorkJob> = {}): WorkJob => ({
   cancelable: false,
   quality: null,
   owner: null,
+  createdAt: null,
+  startedAt: null,
+  format: null,
   ...over,
 })
 
@@ -27,7 +41,7 @@ const empty = (): WorkState => ({
 describe('подписи', () => {
   it('ставит кавычки в действии', () => {
     expect(jobTitle(job())).toBe('Анализ «Нарезка.mp4»')
-    expect(jobTitle(job({ type: 'proxy' }))).toBe('Прокси «Нарезка.mp4»')
+    expect(jobTitle(job({ type: 'proxy' }))).toBe('Превью «Нарезка.mp4»')
     expect(jobTitle(job({ type: 'transcribe' }))).toBe('Расшифровка «Нарезка.mp4»')
     expect(jobTitle(job({ type: 'render', quality: 'draft', label: 'Ролик' }))).toBe('Сборка черновика «Ролик»')
     expect(jobTitle(job({ type: 'render', quality: 'final', label: 'Ролик' }))).toBe('Сборка финала «Ролик»')
@@ -40,7 +54,41 @@ describe('подписи', () => {
       'Сборка с заданным битрейтом «Ролик»',
     )
     expect(jobTitle(job({ type: 'render', quality: null, label: 'Ролик' }))).toBe('Сборка черновика «Ролик»')
-    expect(jobTitle(job({ type: 'convert', label: 'утренний.mp3' }))).toBe('Конвертер «утренний.mp3»')
+    expect(jobTitle(job({ type: 'convert', label: 'утренний.mp3' }))).toBe('Конвертация «утренний.mp3»')
+  })
+
+  it('живое задание говорит, что делает, и куда конвертирует', () => {
+    expect(liveTitle(job({ status: 'running' }))).toBe('Разбираю «Нарезка.mp4»')
+    expect(liveTitle(job({ type: 'proxy', status: 'queued' }))).toBe('В очереди: превью «Нарезка.mp4»')
+    expect(liveTitle(job({ type: 'convert', status: 'running', format: 'mp4', label: 'demo.webm' }))).toBe(
+      'Конвертирую «demo.webm» в MP4',
+    )
+    expect(liveTitle(job({ type: 'render', status: 'running', quality: 'medium', label: 'Ролик' }))).toBe(
+      'Собираю в среднем качестве «Ролик»',
+    )
+  })
+
+  it('ход называет процент, сколько уже идёт и сколько осталось', () => {
+    const started = new Date(1_000_000).toISOString()
+    const now = 1_000_000 + 4 * 3600 * 1000
+    const text = jobDetail(
+      job({ status: 'running', progress: 0.8, startedAt: started, type: 'convert', format: 'mp4' }),
+      now,
+    )
+    expect(text).toContain('Перекодирую в MP4')
+    expect(text).toContain('Готово 80%')
+    expect(text).toContain('Идёт 4 ч')
+    expect(text).toContain('осталось около')
+    expect(fmtSpan(45_000)).toBe('1 мин')
+    expect(fmtSpan(10_000)).toBe('меньше минуты')
+  })
+
+  it('очередь не рисует нулевой процент', () => {
+    const rows = workRows({ ...empty(), jobs: [job({ status: 'queued', createdAt: new Date(0).toISOString() })] }, 120_000)
+    expect(rows[0]?.title).toContain('В очереди')
+    expect(rows[0]?.bar).toBe(false)
+    expect(rows[0]?.percent).toBeUndefined()
+    expect(rows[0]?.detail).toContain('Ждёт очереди')
   })
 
   it('подписывает чужое задание владельцем', () => {

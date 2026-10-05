@@ -138,6 +138,42 @@ def test_webm_convert_queues_for_video(client, login_as, settings):
     assert r.status_code == 202, r.text
 
 
+def test_webp_convert_queues_for_video_and_image(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    video = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webp"})
+    assert video.status_code == 202, video.text
+    job = client.get(f"/api/v1/jobs/{video.json()['job_id']}").json()
+    assert job["format"] == "webp" and job["started_at"] is None
+
+    seed_asset(
+        settings, me["id"], kind="image", name="кадр.png", asset_id="ast_000000000002",
+        duration=None,
+    )
+    image = client.post("/api/v1/assets/ast_000000000002/convert", json={"format": "webp"})
+    assert image.status_code == 202, image.text
+
+
+def test_audio_cannot_become_webp(client, login_as, settings):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"], kind="audio", name="a.mp3")
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webp"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "not_picture"
+
+
+def test_missing_webp_encoder_is_503(client, login_as, settings, monkeypatch):
+    login_as()
+    me = client.get("/api/v1/me").json()
+    seed_asset(settings, me["id"])
+    from server.app.conversions import routes as conv_routes
+
+    monkeypatch.setattr(conv_routes, "missing_encoder", lambda _s, fmt: "нет WebP" if fmt == "webp" else None)
+    r = client.post(f"/api/v1/assets/{ASSET}/convert", json={"format": "webp"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "encoder_unavailable"
+
+
 def test_audio_cannot_become_webm(client, login_as, settings):
     login_as()
     me = client.get("/api/v1/me").json()

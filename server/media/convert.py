@@ -8,11 +8,13 @@ from __future__ import annotations
 from server.app.config import Settings
 from server.media.run import MediaError, run_tool
 
-FORMATS = ("mp3", "m4a", "aac", "wav", "flac", "ogg", "mp4", "webm")
+FORMATS = ("mp3", "m4a", "aac", "wav", "flac", "ogg", "mp4", "webm", "webp")
 MP3_ENCODER = "libmp3lame"
 OGG_ENCODER = "libvorbis"
 WEBM_VIDEO = "libvpx-vp9"
 WEBM_AUDIO = "libopus"
+WEBP_STILL = "libwebp"
+WEBP_ANIM = "libwebp_anim"
 
 # Кодеки, которых может не оказаться в сборке: они внешние, а не родные ffmpeg. Всё остальное
 # (aac, wav, flac, mp4) есть в любой сборке. Формат, которого тут нет, спрашивать незачем.
@@ -20,15 +22,25 @@ EXTERNAL_ENCODERS: dict[str, tuple[tuple[str, ...], str]] = {
     "mp3": ((MP3_ENCODER,), "В этой сборке ffmpeg нет кодека MP3, выберите m4a или wav"),
     "ogg": ((OGG_ENCODER,), "В этой сборке ffmpeg нет кодека Vorbis, выберите m4a или wav"),
     "webm": ((WEBM_VIDEO, WEBM_AUDIO), "В этой сборке ffmpeg нет VP9 или Opus, выберите mp4"),
+    "webp": ((WEBP_STILL, WEBP_ANIM), "В этой сборке ffmpeg нет WebP, выберите другой формат"),
 }
 
 _ENCODERS: dict[str, frozenset[str]] = {}
 SHORT_SIDE = 1080
-# Короткая сторона не больше 1080, кадр меньше не растягиваем (min).
-MP4_SCALE = (
-    f"scale=w='if(gte(iw,ih),-2,min(iw,{SHORT_SIDE}))'"
-    f":h='if(gte(iw,ih),min(ih,{SHORT_SIDE}),-2)'"
-)
+# Анимированный WebP на длинном ролике иначе раздувается: реже кадры и меньше картинка.
+WEBP_SHORT_SIDE = 720
+WEBP_FPS = 10
+
+
+def short_side_scale(short: int) -> str:
+    """Короткая сторона не больше short, кадр меньше не растягиваем (min)."""
+    return (
+        f"scale=w='if(gte(iw,ih),-2,min(iw,{short}))'"
+        f":h='if(gte(iw,ih),min(ih,{short}),-2)'"
+    )
+
+
+MP4_SCALE = short_side_scale(SHORT_SIDE)
 
 
 class ConvertInvalid(Exception):
@@ -63,11 +75,15 @@ CONVERT_BYTES_PER_SEC = {
     "flac": 48_000 * 2 * 2,
     "mp4": 2_000_000 // 8,
     "webm": 2_000_000 // 8,
+    "webp": 1_500_000 // 8,
 }
 SIZE_SAFETY = 2
 
 
 def estimate_convert_bytes(fmt: str, duration: float) -> int:
+    # У картинки длительности нет: WebP одного кадра — мегабайты, не ноль.
+    if fmt == "webp" and duration <= 0:
+        return 8 * 1024 * 1024
     rate = CONVERT_BYTES_PER_SEC.get(fmt, CONVERT_BYTES_PER_SEC["mp4"])
     return int(rate * max(duration, 0) * SIZE_SAFETY)
 
@@ -123,6 +139,12 @@ def has_ogg_encoder(settings: Settings) -> bool:
     return OGG_ENCODER in encoders(settings)
 
 
+def has_webp_encoder(settings: Settings) -> bool:
+    """Есть ли и кадр WebP, и анимация. Нет любого — 503, не сырой stderr ffmpeg."""
+    have = encoders(settings)
+    return WEBP_STILL in have and WEBP_ANIM in have
+
+
 def build_convert_command(
     settings: Settings,
     src: str,
@@ -133,6 +155,8 @@ def build_convert_command(
     mp3_encoder: bool = True,
     webm_encoder: bool = True,
     ogg_encoder: bool = True,
+    webp_encoder: bool = True,
+    still: bool = False,
 ) -> list[str]:
     """Список аргументов из белого списка. dst обычно *.part — контейнер задаём явно через -f."""
     if fmt not in FORMATS:
@@ -151,6 +175,11 @@ def build_convert_command(
         raise ConvertUnavailable(
             "encoder_unavailable",
             "В этой сборке ffmpeg нет кодека Vorbis, выберите m4a или wav",
+        )
+    if fmt == "webp" and not webp_encoder:
+        raise ConvertUnavailable(
+            "encoder_unavailable",
+            "В этой сборке ffmpeg нет WebP, выберите другой формат",
         )
 
     args = [
@@ -182,6 +211,20 @@ def build_convert_command(
         else:
             args += ["-an"]
         args += ["-f", "webm"]
+    elif fmt == "webp":
+        # Картинка — один кадр libwebp. Видео — libwebp_anim: обычный libwebp оставляет один кадр.
+        if still:
+            args += [
+                "-vf", short_side_scale(SHORT_SIDE),
+                "-c:v", WEBP_STILL, "-quality", "80", "-compression_level", "4",
+            ]
+        else:
+            args += [
+                "-vf", f"fps={WEBP_FPS},{short_side_scale(WEBP_SHORT_SIDE)}",
+                "-c:v", WEBP_ANIM, "-quality", "70", "-compression_level", "4",
+                "-loop", "0", "-an",
+            ]
+        args += ["-f", "webp"]
     else:
         args += [
             "-vf", MP4_SCALE,

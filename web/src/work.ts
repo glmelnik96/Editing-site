@@ -23,6 +23,10 @@ export type WorkJob = {
   quality: RenderQuality | null
   /** Чьё, если не моё: ход всей команды видят все, и без имени не понять, чья это сборка. */
   owner: string | null
+  createdAt: string | null
+  startedAt: string | null
+  /** Куда конвертируем или в каком контейнере собираем ролик. */
+  format: string | null
 }
 
 export type UploadWork = {
@@ -51,6 +55,8 @@ export type WorkState = {
 export type WorkRow = {
   key: string
   title: string
+  /** Что сейчас происходит, человеческим языком: очередь, процент, сколько уже идёт. */
+  detail?: string
   percent?: number
   cancelable: boolean
   closeable: boolean
@@ -60,10 +66,45 @@ export type WorkRow = {
 
 const VERB: Record<WorkJob['type'], string> = {
   analyze: 'Анализ',
-  proxy: 'Прокси',
+  proxy: 'Превью',
   transcribe: 'Расшифровка',
   render: 'Сборка',
-  convert: 'Конвертер',
+  convert: 'Конвертация',
+}
+
+const QUEUED: Record<WorkJob['type'], string> = {
+  analyze: 'разбор',
+  proxy: 'превью',
+  transcribe: 'расшифровка',
+  render: 'сборка',
+  convert: 'конвертация',
+}
+
+const FORMAT_LABEL: Record<string, string> = {
+  mp3: 'MP3',
+  m4a: 'M4A',
+  aac: 'AAC',
+  wav: 'WAV',
+  flac: 'FLAC',
+  ogg: 'OGG',
+  mp4: 'MP4',
+  webm: 'WebM',
+  webp: 'WebP',
+}
+
+function formatLabel(fmt: string | null): string {
+  if (!fmt) return ''
+  return FORMAT_LABEL[fmt] ?? fmt.toUpperCase()
+}
+
+/** Именительный: «собираю черновик», не «собираю черновика». */
+const QUALITY_LIVE: Record<RenderQuality, string> = {
+  draft: 'черновик',
+  final: 'финал',
+  preview: 'превью',
+  medium: 'в среднем качестве',
+  high: 'в высоком качестве',
+  target: 'с заданным битрейтом',
 }
 
 // Родительный падеж: «Сборка черновика «Ролик»». Без качества — как раньше, «черновика»: так
@@ -84,6 +125,95 @@ export function jobTitle(job: WorkJob): string {
     return `Сборка ${kind} «${job.label}»${who}`
   }
   return `${VERB[job.type]} «${job.label}»${who}`
+}
+
+/** Строка живого задания: глагол и, у конвертации, куда. Очередь названа отдельно от работы. */
+export function liveTitle(job: WorkJob): string {
+  const who = job.owner ? ` · ${job.owner}` : ''
+  const name = `«${job.label}»`
+  const into = job.type === 'convert' && job.format ? ` в ${formatLabel(job.format)}` : ''
+  if (job.status === 'queued') {
+    const what = job.type === 'render'
+      ? `сборка ${QUALITY_OF[job.quality ?? 'draft'] ?? QUALITY_OF.draft}`
+      : QUEUED[job.type]
+    return `В очереди: ${what} ${name}${into}${who}`
+  }
+  if (job.type === 'render') {
+    const kind = QUALITY_LIVE[job.quality ?? 'draft'] ?? QUALITY_LIVE.draft
+    return `Собираю ${kind} ${name}${who}`
+  }
+  if (job.type === 'proxy') return `Готовлю превью ${name}${who}`
+  if (job.type === 'analyze') return `Разбираю ${name}${who}`
+  if (job.type === 'transcribe') return `Расшифровываю ${name}${who}`
+  return `Конвертирую ${name}${into}${who}`
+}
+
+/** «3 ч 12 мин». Короче минуты не дробим: на длинном файле секунды ничего не значат. */
+export function fmtSpan(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000))
+  if (sec < 45) return 'меньше минуты'
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min} мин`
+  const hours = Math.floor(min / 60)
+  const rest = min % 60
+  return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`
+}
+
+function since(iso: string | null, now: number): number | null {
+  if (!iso) return null
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return null
+  return Math.max(0, now - t)
+}
+
+function stageLine(job: WorkJob): string {
+  if (job.type === 'analyze') return 'Смотрю длительность, звук и кадры.'
+  if (job.type === 'proxy') return 'Делаю лёгкую копию для просмотра. Исходник не меняется.'
+  if (job.type === 'transcribe') return 'Расшифровываю речь.'
+  if (job.type === 'render') return 'Кодирую ролик. На длинной записи это часы.'
+  if (job.format === 'webp') return 'Собираю WebP: у видео это анимация без звука, у картинки — один кадр.'
+  if (job.format) return `Перекодирую в ${formatLabel(job.format)}. На длинной записи это часы.`
+  return 'Перекодирую файл. На длинной записи это часы.'
+}
+
+/**
+ * Что происходит с заданием, одной-двумя фразами.
+ *
+ * Процент без времени на двухчасовом файле выглядит застывшим. Оценка остатка — из уже
+ * прошедшего: раньше 5% она врёт, поэтому молчим и говорим только сколько уже идёт.
+ */
+export function jobDetail(job: WorkJob, now: number): string {
+  if (job.status === 'queued') {
+    const waited = since(job.createdAt, now)
+    const how = waited !== null && waited >= 45_000 ? ` уже ${fmtSpan(waited)}` : ''
+    return `Ждёт очереди${how}. Начнётся, когда сервер освободится.`
+  }
+  if (job.status !== 'running') return ''
+  const note = stageLine(job)
+  const elapsed = since(job.startedAt ?? job.createdAt, now)
+  const pct = Math.round(Math.min(1, Math.max(0, job.progress)) * 100)
+  if (pct < 1) {
+    const going = elapsed !== null && elapsed >= 45_000 ? ` Идёт ${fmtSpan(elapsed)}.` : ''
+    return `${note}${going} Процент появится, когда обработка сдвинется.`
+  }
+  let time = ''
+  if (elapsed !== null && elapsed >= 20_000 && job.progress >= 0.05 && job.progress < 1) {
+    const left = (elapsed * (1 - job.progress)) / job.progress
+    time = ` Идёт ${fmtSpan(elapsed)}, осталось около ${fmtSpan(left)}.`
+  } else if (elapsed !== null && elapsed >= 45_000) {
+    time = ` Идёт ${fmtSpan(elapsed)}.`
+  }
+  return `${note} Готово ${pct}%.${time}`
+}
+
+/** Коротко на панели экрана: процент и куда смотреть за отменой. */
+export function screenProgress(verb: string, status: string, progress: number): string {
+  if (status === 'queued') return 'В очереди — ход и отмена вверху'
+  if (status === 'running') {
+    const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100)
+    return `${verb}, ${pct > 0 ? `${pct}%` : 'начинается'} — ход и отмена вверху`
+  }
+  return verb
 }
 
 function live(status: WorkJob['status']): boolean {
@@ -170,11 +300,12 @@ export function workRows(state: WorkState, now: number): WorkRow[] {
     if (!live(job.status) || flashing.has(job.id)) continue
     rows.push({
       key: job.id,
-      title: jobTitle(job),
-      percent: percentOf(job.progress, 1),
+      title: liveTitle(job),
+      detail: jobDetail(job, now),
+      percent: job.status === 'running' ? percentOf(job.progress, 1) : undefined,
       cancelable: job.cancelable,
       closeable: false,
-      bar: true,
+      bar: job.status === 'running',
     })
   }
 
@@ -225,6 +356,9 @@ export function toWorkJob(job: JobListItem, myEmail: string): WorkJob {
     cancelable: job.cancelable,
     quality: job.quality,
     owner: ownedBy(job, myEmail) ? null : ownerLabel(job),
+    createdAt: job.created_at,
+    startedAt: job.started_at ?? null,
+    format: job.format ?? null,
   }
 }
 
@@ -277,7 +411,8 @@ export function mountWork(el: HTMLElement): WorkControls {
       rows
         .map(row => {
           const err = row.error || rowErrors.get(row.key) || ''
-          const pct = row.percent !== undefined ? `<span class="meta">${row.percent} %</span>` : ''
+          const pct = row.percent !== undefined ? `<span class="meta">${row.percent}%</span>` : ''
+          const detail = row.detail ? `<p class="meta work-detail">${escapeHtml(row.detail)}</p>` : ''
           const cancel = row.cancelable
             ? row.key.startsWith('up:')
               ? `<button type="button" class="btn btn-ghost" data-cancel-up="${escapeHtml(row.key.slice(3))}">Отменить</button>`
@@ -296,7 +431,7 @@ export function mountWork(el: HTMLElement): WorkControls {
               ${pct}
               ${cancel}${close}
             </div>
-            ${bar}${error}
+            ${detail}${bar}${error}
           </div>`
         })
         .join('') + staleNote

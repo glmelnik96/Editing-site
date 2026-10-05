@@ -377,6 +377,9 @@ export type JobView = {
   status: 'queued' | 'running' | 'done' | 'failed' | 'canceled'
   progress: number
   error: string | null
+  created_at?: string
+  started_at?: string | null
+  format?: string | null
 }
 
 export function startRender(
@@ -408,10 +411,12 @@ export type JobListItem = {
   progress: number
   error: string | null
   created_at: string
+  started_at?: string | null
   finished_at: string | null
   label: string
   cancelable: boolean
   quality: RenderQuality | null
+  format?: string | null
   target_id: string
   /** Чьё задание: у сборки — автор проекта, у записи — её автор. Видят все. */
   owner_email: string

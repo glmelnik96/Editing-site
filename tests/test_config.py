@@ -114,7 +114,7 @@ def test_versions_kept_is_bounded():
 
 def test_render_settings_have_sane_defaults():
     s = Settings(_env_file=None)
-    assert s.render_timeout_sec == 4 * 3600
+    assert s.render_timeout_sec == 12 * 3600
     assert s.render_ttl_hours == 24
     assert s.max_renders_queued == 2
     assert s.draft_short_side == 720

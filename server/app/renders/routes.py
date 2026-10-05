@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from fastapi import APIRouter, Depends, Response
@@ -29,7 +30,9 @@ class JobView(BaseModel):
     progress: float
     error: str | None
     created_at: str
+    started_at: str | None
     finished_at: str | None
+    format: str | None = None
 
 
 class JobListItem(BaseModel):
@@ -39,10 +42,12 @@ class JobListItem(BaseModel):
     progress: float
     error: str | None
     created_at: str
+    started_at: str | None
     finished_at: str | None
     label: str
     cancelable: bool
     quality: str | None
+    format: str | None
     target_id: str
     # Чьё задание: у сборки — автор проекта, у анализа, прокси и расшифровки — автор записи.
     owner_email: str
@@ -103,9 +108,13 @@ def job(
     conn: sqlite3.Connection = Depends(get_db),  # noqa: B008
 ) -> JobView:
     row = _job(conn, job_id)
+    params = json.loads(row["params"] or "{}")
+    raw_format = params.get("format")
     return JobView(
         id=row["id"], type=row["type"], status=row["status"], progress=row["progress"],
-        error=row["error"], created_at=row["created_at"], finished_at=row["finished_at"],
+        error=row["error"], created_at=row["created_at"], started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        format=raw_format if isinstance(raw_format, str) else None,
     )
 
 

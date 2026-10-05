@@ -27,6 +27,20 @@ def tail_lines(text: str, count: int = STDERR_TAIL_LINES) -> str:
     return "\n".join(lines[-count:])
 
 
+def timeout_message(tool: str, timeout: float) -> str:
+    """Срок, который можно прочитать. «14400 с» после четырёх часов работы ни о чём не говорит."""
+    if timeout >= 3600:
+        hours = max(1, int(round(timeout / 3600)))
+        return (
+            f"Не успело закончиться за {hours} ч. "
+            "Запустите ещё раз: файл длинный или сервер был занят."
+        )
+    if timeout >= 120:
+        minutes = int(round(timeout / 60))
+        return f"Не успело закончиться за {minutes} мин. Запустите ещё раз."
+    return f"{tool} не уложился в {timeout:.0f} с"
+
+
 def run_tool(args: list[str], *, timeout: float, capture_stderr: bool = False) -> str:
     """Запускает инструмент и возвращает stdout. При ненулевом коде или таймауте бросает MediaError.
 
@@ -48,7 +62,7 @@ def run_tool(args: list[str], *, timeout: float, capture_stderr: bool = False) -
     except PermissionError as exc:
         raise MediaError("tool_missing", f"Нет прав на запуск {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise MediaError("timeout", f"{args[0]} не уложился в {timeout:.0f} с") from exc
+        raise MediaError("timeout", timeout_message(args[0], timeout)) from exc
     if proc.returncode != 0:
         raise MediaError(
             "tool_failed",
@@ -137,7 +151,7 @@ def run_streaming(
     stderr_text = tail_lines("".join(stderr_parts))
     if reasons:
         reason = reasons[0]
-        message = "Отменено" if reason == "canceled" else f"{args[0]} не уложился в {timeout:.0f} с"
+        message = "Отменено" if reason == "canceled" else timeout_message(args[0], timeout)
         raise MediaError(reason, message, stderr_text)
     if proc.returncode != 0:
         raise MediaError("tool_failed", f"{args[0]} завершился с кодом {proc.returncode}", stderr_text)

@@ -14,6 +14,7 @@ import { ApiError, isRetryable } from './api'
 import { loadAsset, type Asset } from './assets'
 import { foldHtml, wireFold } from './fold'
 import { escapeHtml } from './html'
+import { screenProgress } from './work'
 import {
   loadJob,
   loadTranscript,
@@ -297,7 +298,7 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
     clearError() // опрос снова доходит: жалобу на прошлый оборванный запрос убираем
     showJob(
       RUNNING.has(job.status)
-        ? `${JOB_TEXT[job.status]} — ход и отмена вверху`
+        ? screenProgress('Расшифровываю', job.status, job.progress)
         : (JOB_TEXT[job.status] ?? job.status),
     )
     if (RUNNING.has(job.status)) {
@@ -387,7 +388,7 @@ export function mountTranscript(el: HTMLElement, handlers: TranscriptHandlers) {
       blindUntil = Date.now() + BLIND_WAIT_MS
     }
     waiting = true
-    showJob(jobId ? `${JOB_TEXT.queued} — ход и отмена вверху` : 'расшифровка уже идёт')
+    showJob(jobId ? screenProgress('Расшифровываю', 'queued', 0) : 'расшифровка уже идёт')
     scheduleNext()
   }
   runButton.addEventListener('click', () => void run())

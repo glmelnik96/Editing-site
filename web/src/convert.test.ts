@@ -13,18 +13,20 @@ import {
 } from './convert'
 
 describe('convert screen helpers', () => {
-  it('берёт только готовые видео и звук, не субтитры', () => {
+  it('берёт только готовые видео, звук и картинки, не субтитры', () => {
     expect(convertibleAsset({ kind: 'video', status: 'ready' })).toBe(true)
     expect(convertibleAsset({ kind: 'audio', status: 'proxy_ready' })).toBe(true)
+    expect(convertibleAsset({ kind: 'image', status: 'ready' })).toBe(true)
     expect(convertibleAsset({ kind: 'subtitle', status: 'ready' })).toBe(false)
     expect(convertibleAsset({ kind: 'video', status: 'analyzing' })).toBe(false)
   })
 
-  it('даёт mp4 и webm только видео', () => {
+  it('даёт mp4 и webm только видео, webp — видео и картинке', () => {
     expect(convertFormatsFor('video')).toEqual([
-      'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'mp4', 'webm',
+      'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'mp4', 'webm', 'webp',
     ])
     expect(convertFormatsFor('audio')).toEqual(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg'])
+    expect(convertFormatsFor('image')).toEqual(['webp'])
   })
 
   it('пустой склад — ссылка в записи, без чипов', () => {
@@ -73,6 +75,16 @@ describe('convert screen helpers', () => {
 
   it('webm кодируется вдвое дольше mp4', () => {
     expect(convertHint('webm', 600, 24)).toContain('около 20 мин')
+  })
+
+  it('webp из видео — анимация без звука, из картинки — секунды', () => {
+    const video = convertHint('webp', 600, 24)
+    expect(video).toContain('анимированным WebP без звука')
+    expect(video).toContain('720p')
+    expect(video).toContain('10 кадров')
+    const still = convertHint('webp', null, 24)
+    expect(still).toContain('за секунды')
+    expect(still).not.toContain('без звука')
   })
 
   it('подсказка звука — без кадра и минут', () => {
@@ -166,7 +178,16 @@ describe('convert screen helpers', () => {
     expect(rows).toEqual([
       {
         assetId: 'ast_1',
-        job: { id: 'job_1', type: 'convert', status: 'running', progress: 0.4, error: null },
+        job: {
+          id: 'job_1',
+          type: 'convert',
+          status: 'running',
+          progress: 0.4,
+          error: null,
+          created_at: '',
+          started_at: undefined,
+          format: undefined,
+        },
       },
     ])
   })

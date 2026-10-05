@@ -30,7 +30,7 @@ def job_label(type_: str, asset_name: str | None, project_name: str | None) -> s
 
 _JOB_SELECT = """
     SELECT jobs.id, jobs.type, jobs.status, jobs.progress, jobs.error, jobs.created_at,
-           jobs.finished_at, jobs.params, jobs.target_id,
+           jobs.started_at, jobs.finished_at, jobs.params, jobs.target_id,
            assets.original_name AS asset_name, projects.name AS project_name,
            users.email AS owner_email, users.name AS owner_name
     FROM jobs
@@ -70,6 +70,7 @@ def list_jobs(conn: sqlite3.Connection, *, now: datetime, owner: str | None = No
 def _job_item(row: sqlite3.Row) -> dict:
     params = json.loads(row["params"] or "{}")
     quality = params.get("quality") if row["type"] == "render" else None
+    raw_format = params.get("format") if row["type"] in ("convert", "render") else None
     return {
         "id": row["id"],
         "type": row["type"],
@@ -77,10 +78,12 @@ def _job_item(row: sqlite3.Row) -> dict:
         "progress": row["progress"],
         "error": row["error"],
         "created_at": row["created_at"],
+        "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "label": job_label(row["type"], row["asset_name"], row["project_name"]),
         "cancelable": job_cancelable(row["type"], row["status"]),
         "quality": quality if quality in RENDER_QUALITIES else None,
+        "format": raw_format if isinstance(raw_format, str) else None,
         "target_id": row["target_id"],
         "owner_email": row["owner_email"] or "",
         "owner_name": row["owner_name"] or "",

@@ -26,6 +26,8 @@ router = APIRouter(prefix="/api/v1", tags=["conversions"])
 READY = ("ready", "proxy_ready")
 AUDIO_FORMATS = {"mp3", "m4a", "aac", "wav", "flac", "ogg"}
 VIDEO_FORMATS = {"mp4", "webm"}
+# WebP — картинка или анимация из видео. Звук в контейнер не кладётся.
+PICTURE_FORMATS = {"webp"}
 
 
 class ConvertRequest(BaseModel):
@@ -83,6 +85,8 @@ def convert(
         raise ApiError(422, "no_audio", "В файле нет звука")
     if fmt in VIDEO_FORMATS and asset["kind"] != "video":
         raise ApiError(422, "not_video", "В этот формат можно собрать только видео")
+    if fmt in PICTURE_FORMATS and asset["kind"] not in ("video", "image"):
+        raise ApiError(422, "not_picture", "WebP можно собрать из картинки или видео")
     duration = float(asset["duration"] or 0)
     settings = request.app.state.settings
     if duration > settings.max_total_duration_sec:

@@ -89,6 +89,7 @@ def test_convert_ext_matches_whitelist():
     assert convert_ext("ogg") == "ogg"
     assert convert_ext("mp4") == "mp4"
     assert convert_ext("webm") == "webm"
+    assert convert_ext("webp") == "webp"
     with pytest.raises(ConvertInvalid):
         convert_ext("gif")
 
@@ -131,6 +132,27 @@ def test_webm_without_audio_drops_the_sound_track():
     args = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webm", has_audio=False)
     assert "-an" in args
     assert "-c:a" not in args
+
+
+def test_webp_still_is_one_frame_and_video_is_animation():
+    still = build_convert_command(s(), "/x/a.png", "/x/out.part", fmt="webp", still=True)
+    assert still[still.index("-c:v") + 1] == "libwebp"
+    assert still[still.index("-f") + 1] == "webp"
+    assert "fps=" not in still[still.index("-vf") + 1]
+    assert "-an" not in still
+    video = build_convert_command(s(), "/x/a.mp4", "/x/out.part", fmt="webp", has_audio=True)
+    assert video[video.index("-c:v") + 1] == "libwebp_anim"
+    assert "fps=10" in video[video.index("-vf") + 1]
+    assert "720" in video[video.index("-vf") + 1]
+    assert "-an" in video
+    assert "-c:a" not in video
+
+
+def test_missing_webp_encoder_is_unavailable():
+    with pytest.raises(ConvertUnavailable) as exc:
+        build_convert_command(s(), "/x/a.png", "/x/out.part", fmt="webp", webp_encoder=False)
+    assert exc.value.code == "encoder_unavailable"
+    assert "WebP" in exc.value.message
 
 
 def test_missing_webm_encoder_is_unavailable_not_raw_stderr():

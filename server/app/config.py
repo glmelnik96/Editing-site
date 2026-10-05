@@ -44,8 +44,10 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     worker_poll_sec: float = Field(default=2.0, ge=0.1, le=60.0)
-    analyze_timeout_sec: int = Field(default=1800, ge=10)
-    proxy_timeout_sec: int = Field(default=14400, ge=10)
+    # Часы, не минуты: двухчасовой файл на занятой двухъядерной машине не укладывается
+    # в полчаса разбора и в четыре часа кодирования. Прежние 4 часа обрывали WebM→MP4 на 81%.
+    analyze_timeout_sec: int = Field(default=3 * 3600, ge=10)
+    proxy_timeout_sec: int = Field(default=12 * 3600, ge=10)
     peaks_per_sec: int = Field(default=50, ge=1, le=200)
     thumb_width: int = Field(default=160, ge=32, le=640)
     thumb_interval_sec: float = Field(default=2.0, gt=0)
@@ -72,7 +74,9 @@ class Settings(BaseSettings):
     max_cues: int = Field(default=2000, ge=1, le=20000)
 
     # Рендер (раздел 9 спеки). Короткая сторона кадра задаёт разрешение вместе с пропорцией.
-    render_timeout_sec: int = Field(default=4 * 3600, ge=60)
+    # Тот же запас, что у прокси: конвертация берёт этот предел. 3 часа видео при ~0.25×
+    # реального времени на занятой машине — около 12 часов.
+    render_timeout_sec: int = Field(default=12 * 3600, ge=60)
     render_ttl_hours: int = Field(default=24, ge=1)
     max_renders_queued: int = Field(default=2, ge=1, le=20)
     draft_short_side: int = Field(default=720, ge=240, le=2160)

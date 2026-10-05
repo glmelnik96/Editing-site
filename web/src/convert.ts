@@ -26,6 +26,7 @@ import { ownedBy } from './overview'
 import { listJobs, loadJob, type JobListItem, type JobView } from './project'
 import { estimateRenderMinutes, plural } from './render'
 import type { Me } from './shell'
+import { jobDetail, liveTitle, type WorkJob } from './work'
 
 const CONVERT_RUNNING = new Set(['queued', 'running'])
 const CONVERT_JOB_TEXT: Record<string, string> = {
@@ -36,10 +37,13 @@ const CONVERT_JOB_TEXT: Record<string, string> = {
   canceled: 'отменено',
 }
 const READY = new Set(['ready', 'proxy_ready'])
-const CONVERTIBLE = new Set(['video', 'audio'])
+const CONVERTIBLE = new Set(['video', 'audio', 'image'])
 const VIDEO_FORMATS = new Set(['mp4', 'webm'])
 // Предел кадра по короткой стороне — SHORT_SIDE в server/media/convert.py.
 const CONVERT_SHORT_SIDE = 1080
+// Анимированный WebP: WEBP_SHORT_SIDE и WEBP_FPS в server/media/convert.py.
+const WEBP_SHORT_SIDE = 720
+const WEBP_FPS = 10
 
 export type ConversionCard = {
   id: string
@@ -53,10 +57,12 @@ export type ConversionCard = {
 
 export function convertFormatsFor(kind: string): string[] {
   const audio = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg']
-  return kind === 'audio' ? audio : [...audio, 'mp4', 'webm']
+  if (kind === 'audio') return audio
+  if (kind === 'image') return ['webp']
+  return [...audio, 'mp4', 'webm', 'webp']
 }
 
-/** Готовое видео или звук: субтитры в конвертер не кладём. */
+/** Готовое видео, звук или картинка: субтитры в конвертер не кладём. */
 export function convertibleAsset(asset: { kind: string; status: string }): boolean {
   return CONVERTIBLE.has(asset.kind) && READY.has(asset.status)
 }
@@ -80,6 +86,19 @@ export function keepText(hours: number): string {
  */
 export function convertHint(fmt: string, durationSec: number | null, ttlHours: number | null): string {
   const keep = ttlHours ? ` Готовый файл хранится ${keepText(ttlHours)}.` : ''
+  if (fmt === 'webp') {
+    if (!durationSec) {
+      return (
+        `Картинка сжимается в WebP за секунды. ` +
+        `Кадр больше ${CONVERT_SHORT_SIDE}p уменьшится до ${CONVERT_SHORT_SIDE}p.${keep}`
+      )
+    }
+    const minutes = estimateRenderMinutes(durationSec, 'medium', 'webm')
+    return (
+      `Видео станет анимированным WebP без звука: около ${minutes} мин, если очередь свободна. ` +
+      `Кадр больше ${WEBP_SHORT_SIDE}p уменьшится до ${WEBP_SHORT_SIDE}p, ${WEBP_FPS} кадров в секунду.${keep}`
+    )
+  }
   if (!VIDEO_FORMATS.has(fmt)) return `Звук конвертируется за секунды.${keep}`
   const minutes = estimateRenderMinutes(durationSec ?? 0, 'medium', fmt === 'webm' ? 'webm' : 'mp4')
   return (
@@ -110,6 +129,9 @@ export function runningConvertsFromJobs(
         status: job.status,
         progress: job.progress,
         error: job.error,
+        created_at: job.created_at,
+        started_at: job.started_at,
+        format: job.format,
       },
     }))
 }
@@ -211,12 +233,38 @@ export function mountConvert(el: HTMLElement, me: Me) {
     return readyList().find(a => a.id === selectedId)
   }
 
-  function jobHtml(assetId: string): string {
-    const job = jobs.get(assetId)
+  function asWork(asset: Asset, job: JobView): WorkJob {
+    return {
+      id: job.id,
+      type: 'convert',
+      status: job.status,
+      progress: job.progress,
+      error: job.error,
+      label: asset.original_name,
+      cancelable: true,
+      quality: null,
+      owner: null,
+      createdAt: job.created_at ?? null,
+      startedAt: job.started_at ?? null,
+      format: job.format ?? selectedFormat,
+    }
+  }
+
+  function jobHtml(asset: Asset): string {
+    const job = jobs.get(asset.id)
     if (!job || job.status === 'done') return ''
-    const where = CONVERT_RUNNING.has(job.status) ? ' — ход и отмена вверху' : ''
+    if (!CONVERT_RUNNING.has(job.status)) {
+      return `<p class="meta" style="margin:0">${escapeHtml(convertJobText(job.status, job.progress))}</p>`
+    }
+    const work = asWork(asset, job)
+    const pct = Math.round(Math.min(1, Math.max(0, job.progress)) * 100)
+    const bar = job.status === 'running'
+      ? `<div class="progress"><i style="width:${pct}%"></i></div>`
+      : ''
     return `<div class="stack" style="gap:4px">
-      <span class="meta">${escapeHtml(convertJobText(job.status, job.progress))}${where}</span>
+      <span>${escapeHtml(liveTitle(work))}</span>
+      <p class="meta" style="margin:0">${escapeHtml(jobDetail(work, Date.now()))} Отмена — вверху.</p>
+      ${bar}
     </div>`
   }
 
@@ -279,7 +327,7 @@ export function mountConvert(el: HTMLElement, me: Me) {
         <p class="meta" style="margin:0">${escapeHtml(convertHint(selectedFormat, asset.duration, ttlHours))}</p>
         <button type="button" class="btn btn-key" id="cv-go"${locked ? ' disabled' : ''}>Конвертировать</button>
       </div>
-      ${jobHtml(asset.id)}
+      ${jobHtml(asset)}
       ${conversionsListHtml(conversions)}`
   }
 
@@ -310,6 +358,9 @@ export function mountConvert(el: HTMLElement, me: Me) {
           status: 'queued',
           progress: 0,
           error: null,
+          created_at: new Date().toISOString(),
+          started_at: null,
+          format: selectedFormat,
         })
         await refresh()
       } catch (e) {
