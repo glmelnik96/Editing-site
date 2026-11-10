@@ -1,9 +1,8 @@
 /**
- * Блок «Таймлайн» наверху «Свойств»: пропорция и растяжка кадра всего ролика.
+ * Формат ролика в шапке проекта: пропорция и растяжка кадра.
  *
  * Эти настройки меняют то, что видно на сцене, поэтому живут рядом с ней, а не только во вкладке
- * «Рендер». Когда на шкале выбран кусок, блок свёрнут в строку сводки: сводку видно всегда,
- * переключатели — по щелчку.
+ * «Рендер». Сводка видна всегда, переключатели раскрываются по щелчку.
  */
 import type { Output } from './project'
 import { segmentedHtml, setSegmented, type Segment } from './segmented'
@@ -22,17 +21,17 @@ export const FIT_HINT = 'Поля — кадр целиком, с полосам
 
 /** Сводка в голове блока: видна и у свёрнутого. */
 export function rollSummary(output: Pick<Output, 'aspect' | 'fit'>): string {
-  return `Таймлайн · ${output.aspect} · ${output.fit === 'crop' ? 'обрезка' : 'поля'}`
+  return `${output.aspect} · ${output.fit === 'crop' ? 'обрезка' : 'поля'}`
 }
 
 export type RollFold = { picked: boolean; open: boolean }
 
 /**
  * Раскрыт ли блок. Правило срабатывает, когда выбор меняется с пустого на непустой и обратно:
- * пусто — раскрыт, выбран кусок — свёрнут. Иначе держится положение, выбранное вручную.
+ * при смене выбора закрываем параметры. Иначе держится положение, выбранное вручную.
  */
 export function nextRollFold(prev: RollFold | null, picked: boolean): RollFold {
-  if (!prev || prev.picked !== picked) return { picked, open: !picked }
+  if (!prev || prev.picked !== picked) return { picked, open: false }
   return prev
 }
 
@@ -40,10 +39,10 @@ export type RollHandlers = { onChange: (patch: Partial<Output>) => void }
 
 export function mountRoll(el: HTMLElement, handlers: RollHandlers) {
   el.innerHTML = `
-    <button type="button" class="roll-head" id="roll-head" aria-expanded="true" aria-controls="roll-body">
+    <button type="button" class="roll-head" id="roll-head" aria-expanded="false" aria-controls="roll-body" title="Формат ролика">
       <span class="fold-mark" aria-hidden="true">▾</span><span id="roll-summary">Таймлайн</span>
     </button>
-    <div class="roll-body" id="roll-body">
+    <div class="roll-body" id="roll-body" hidden>
       ${segmentedHtml('roll-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
       ${segmentedHtml('roll-fit', 'Растянуть кадр', FIT_ITEMS, 'pad', FIT_HINT)}
     </div>`
@@ -54,7 +53,7 @@ export function mountRoll(el: HTMLElement, handlers: RollHandlers) {
   let fold: RollFold | null = null
 
   function paintFold(): void {
-    const open = fold?.open ?? true
+    const open = fold?.open ?? false
     body.hidden = !open
     head.setAttribute('aria-expanded', String(open))
     mark.textContent = open ? '▾' : '▸'
@@ -65,6 +64,19 @@ export function mountRoll(el: HTMLElement, handlers: RollHandlers) {
     fold = { ...fold, open: !fold.open }
     paintFold()
   })
+  const closeOutside = (event: PointerEvent) => {
+    if (!fold?.open || el.contains(event.target as Node)) return
+    fold = { ...fold, open: false }
+    paintFold()
+  }
+  document.addEventListener('pointerdown', closeOutside)
+  el.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !fold?.open) return
+    event.stopPropagation()
+    fold = { ...fold, open: false }
+    paintFold()
+    head.focus()
+  })
   el.addEventListener('change', event => {
     const input = event.target as HTMLInputElement
     if (input.name === 'roll-aspect') handlers.onChange({ aspect: input.value as Output['aspect'] })
@@ -72,6 +84,7 @@ export function mountRoll(el: HTMLElement, handlers: RollHandlers) {
   })
 
   return {
+    stop(): void { document.removeEventListener('pointerdown', closeOutside) },
     /** Показать настройки ролика; свернуть или раскрыть блок по выбору на шкале (nextRollFold). */
     set(output: Output, picked: boolean): void {
       summary.textContent = rollSummary(output)

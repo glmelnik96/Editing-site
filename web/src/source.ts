@@ -51,7 +51,7 @@ export function canOverlay(kind: string | undefined): boolean {
 
 /** Надпись кнопки: куда ляжет кусок. Звук не встаёт в очередь клипов, и кнопка обязана это сказать. */
 export function addLabel(kind: string | undefined): string {
-  return kind === 'audio' ? 'на A2' : 'на V1'
+  return kind === 'audio' ? 'Добавить звук' : 'Добавить'
 }
 
 /** Подсказка той же кнопки: куда именно ляжет кусок. */
@@ -72,17 +72,14 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
     <main class="card">
       <select id="src-pick"><option value="">— выберите файл —</option></select>
       <div id="src-player"></div>
-      <!-- Положить на таймлайн — сразу под роликом: сначала смотрят, что взяли, потом кладут.
-           «на V1» — в основу ролика, «на V2» — поверх основы. Без выбранного отрезка ляжет весь
-           файл: об этом говорит подпись под складками. Заголовка «Исходники» нет — его называет
-           вкладка. -->
-      <p class="src-put">Положить на таймлайн</p>
-      <div class="row src-add-row">
-        <button id="src-add" type="button" title="Кусок встанет в конец основы — на дорожку V1">на V1</button>
+      <!-- Действия появляются после выбора файла. Подрезка и расшифровка раскрываются отдельно. -->
+      <div class="row src-add-row" id="src-actions" hidden>
+        <button id="src-add" class="btn btn-key" type="button" title="Без выделения добавится весь файл">Добавить</button>
         <button id="src-over" type="button"
-          title="Картинка или видео поверх основы — на дорожку V2, под курсор шкалы">на V2</button>
+          title="Картинка или видео поверх основы — на дорожку V2, под курсор шкалы">Наложить</button>
       </div>
       <p class="muted" id="src-note"></p>
+      <div id="src-trim-tools" hidden>
       ${foldHtml(
         'src-cut',
         'Выбрать фрагмент',
@@ -115,6 +112,7 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
           </div>
         </div>`,
       )}
+      </div>
     </main>`
   const showCut = wireFold(el, 'src-cut', () => handlers.onFold?.())
   const pick = el.querySelector('#src-pick') as HTMLSelectElement
@@ -132,6 +130,13 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
   const addButton = el.querySelector('#src-add') as HTMLButtonElement
   const overButton = el.querySelector('#src-over') as HTMLButtonElement
   const note = el.querySelector('#src-note') as HTMLElement
+  const actions = el.querySelector('#src-actions') as HTMLElement
+  const trimTools = el.querySelector('#src-trim-tools') as HTMLElement
+
+  function showNote(message: string): void {
+    note.textContent = message
+    note.hidden = !message
+  }
 
   let assets: Asset[] = []
   let current: Asset | null = null
@@ -238,6 +243,8 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
 
   function choose(asset: Asset | null): void {
     current = asset
+    actions.hidden = asset === null
+    trimTools.hidden = asset === null
     inPiece = true
     handlers.onPick?.(asset)
     from = 0
@@ -256,8 +263,9 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
     if (!assets.length) {
       note.innerHTML = sourcePoolNote(0)
     } else {
-      note.textContent = asset && !asset.files.proxy ? 'Прокси ещё готовится: выделять можно будет после обработки.' : ''
+      note.textContent = asset && !asset.files.proxy ? 'Готовится предпросмотр.' : ''
     }
+    note.hidden = !note.textContent
     if (asset?.kind === 'image') secsInput.value = String(STILL_DEFAULT)
     addButton.textContent = addLabel(asset?.kind)
     // Подсказку серой кнопки хранит setBlocked: меняем и её, иначе у звука осталась бы подсказка про V1.
@@ -314,13 +322,13 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
 
   addButton.addEventListener('click', () => {
     const reason = blockedReason(addButton)
-    if (reason) return void (note.textContent = reason)
+    if (reason) return showNote(reason)
     if (!current) return
     handlers.onAdd(current, { from, to })
   })
   overButton.addEventListener('click', () => {
     const reason = blockedReason(overButton)
-    if (reason) return void (note.textContent = reason)
+    if (reason) return showNote(reason)
     if (!current) return
     handlers.onOverlay?.(current, { from, to })
   })
@@ -343,6 +351,7 @@ export function mountSource(el: HTMLElement, handlers: SourceHandlers, myEmail =
       else choose(null)
       if (!assets.length) note.innerHTML = sourcePoolNote(0)
       else if (!current || current.files.proxy) note.textContent = ''
+      note.hidden = !note.textContent
     },
     current(): Asset | null {
       return current

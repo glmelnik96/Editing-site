@@ -34,9 +34,9 @@ test('на шкалу идут готовые видео, картинки и з
 })
 
 test('кнопка говорит, куда ляжет кусок', () => {
-  expect(addLabel('audio')).toBe('на A2')
-  expect(addLabel('video')).toBe('на V1')
-  expect(addLabel(undefined)).toBe('на V1')
+  expect(addLabel('audio')).toBe('Добавить звук')
+  expect(addLabel('video')).toBe('Добавить')
+  expect(addLabel(undefined)).toBe('Добавить')
   expect(addTitle('audio')).toContain('A2')
   expect(addTitle('video')).toContain('V1')
 })

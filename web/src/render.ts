@@ -299,56 +299,61 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
   // Пустая шкала: вкладка живёт ради скачивания старых роликов, но собирать из ничего нельзя.
   let empty = true
   el.innerHTML = `
-    <main class="card">
-      <h3>Рендер</h3>
-      <!-- Сначала — каким будет ролик, потом — каким файлом его отдать: список разрешений зависит
-           от пропорции. Пропорция и растяжка кадра — те же, что в блоке «Таймлайн» у «Свойств». -->
+    <main class="card" aria-label="Рендер">
+      <!-- Основные параметры файла на виду, подробные настройки ролика раскрываются отдельно. -->
       <section class="rnd-block" aria-label="Параметры ролика">
-        <p class="rnd-title">Параметры ролика</p>
-        ${segmentedHtml('rnd-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
-        ${segmentedHtml('rnd-fit', 'Растянуть кадр', FIT_ITEMS, 'pad', FIT_HINT)}
-        ${segmentedHtml('rnd-fps', 'Кадров в секунду', FPS_ITEMS, '30')}
-        <label class="burn"><input id="rnd-burn" type="checkbox" /> Вшить субтитры</label>
-        <p class="meta" id="rnd-burn-note" hidden></p>
         <div class="render-opts">
           <label>Формат
             <select id="rnd-format">
-              <option value="mp4">MP4 — откроется везде</option>
-              <option value="webm">WebM — для сайта</option>
-              <option value="m4a">Только звук (m4a)</option>
+              <option value="mp4">MP4</option>
+              <option value="webm">WebM</option>
+              <option value="m4a">Только звук (M4A)</option>
             </select>
           </label>
-          <label>Качество
-            <select id="rnd-quality">
-              <option value="preview">Превью — быстро и легко</option>
-              <option value="medium">Среднее</option>
-              <option value="high">Высокое — не хуже исходников</option>
-              <option value="target">Целевое — свой битрейт</option>
-            </select>
-          </label>
-          <label>Битрейт, кбит/с
-            <input id="rnd-bitrate" class="tc" type="number" min="300" max="50000" step="100" />
-          </label>
-          <label>Разрешение
+          <label id="rnd-size-field">Разрешение
             <select id="rnd-size"></select>
           </label>
+          <label id="rnd-quality-field">Качество
+            <select id="rnd-quality">
+              <option value="preview">Превью</option>
+              <option value="medium">Среднее</option>
+              <option value="high">Высокое</option>
+              <option value="target">Свой битрейт</option>
+            </select>
+          </label>
+          <label id="rnd-bitrate-field" hidden>Битрейт, кбит/с
+            <input id="rnd-bitrate" class="tc" type="number" min="300" max="50000" step="100" />
+          </label>
         </div>
-        <p class="meta" id="rnd-sources"></p>
+        <details class="panel-details" id="rnd-settings">
+          <summary>Дополнительно</summary>
+          <div class="panel-details-body">
+            <div class="stack" id="rnd-video-settings">
+              ${segmentedHtml('rnd-aspect', 'Пропорция', ASPECT_ITEMS, '16:9')}
+              ${segmentedHtml('rnd-fit', 'Заполнение кадра', FIT_ITEMS, 'pad', FIT_HINT)}
+              ${segmentedHtml('rnd-fps', 'Кадров в секунду', FPS_ITEMS, '30')}
+              <label class="burn"><input id="rnd-burn" type="checkbox" /> Вшить субтитры</label>
+              <p class="meta" id="rnd-burn-note" hidden></p>
+            </div>
+            <p class="meta" id="rnd-sources"></p>
+            <div class="muted" id="rnd-summary"></div>
+          </div>
+        </details>
       </section>
-      <div class="muted stack" id="rnd-summary"></div>
       <!-- «Собрать» и ход сборки прилипают к низу панели: в невысоком окне их видно без прокрутки.
            Итог стоит прямо над ними и прокручивается с настройками: прилипший вместе с кнопкой,
            он в пять строк закрывал в низкой панели все настройки. -->
       <div class="rnd-go">
+        <p class="meta" id="rnd-estimate"></p>
         <div class="row">
-          <button id="rnd-start" type="button" class="btn btn-key">Отрендерить</button>
+          <button id="rnd-start" type="button" class="btn btn-key">Собрать файл</button>
         </div>
         <div id="rnd-job" hidden>
           <span class="muted" id="rnd-status"></span>
           <button id="rnd-cancel" type="button">Отменить сборку</button>
         </div>
       </div>
-      <ul id="rnd-list" class="versions"><li class="muted">Нет готовых роликов</li></ul>
+      <ul id="rnd-list" class="versions" aria-label="Готовые файлы" hidden></ul>
       <pre id="rnd-error" hidden></pre>
     </main>`
   const formatPick = el.querySelector('#rnd-format') as HTMLSelectElement
@@ -357,6 +362,11 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
   const sizePick = el.querySelector('#rnd-size') as HTMLSelectElement
   const sourcesBox = el.querySelector('#rnd-sources') as HTMLElement
   const summaryBox = el.querySelector('#rnd-summary') as HTMLElement
+  const estimateBox = el.querySelector('#rnd-estimate') as HTMLElement
+  const videoSettings = el.querySelector('#rnd-video-settings') as HTMLElement
+  const qualityField = el.querySelector('#rnd-quality-field') as HTMLElement
+  const sizeField = el.querySelector('#rnd-size-field') as HTMLElement
+  const bitrateField = el.querySelector('#rnd-bitrate-field') as HTMLElement
   const startButton = el.querySelector('#rnd-start') as HTMLButtonElement
   const jobBox = el.querySelector('#rnd-job') as HTMLElement
   const statusBox = el.querySelector('#rnd-status') as HTMLElement
@@ -383,8 +393,7 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
   /**
    * Настройки, сводка и подпись об исходниках — из одного состояния.
    *
-   * Недоступное гасим, а не прячем: битрейт виден и при «среднем», просто серый, и так понятно,
-   * при каком качестве он заработает. Появляющееся поле переставляло бы панель под руками.
+   * Показываем только применимые поля: у звука нет кадра, а свой битрейт нужен целевому качеству.
    */
   function sync(): void {
     formatPick.value = options.format
@@ -395,6 +404,10 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
     qualityPick.disabled = audioOnly
     bitrateInput.disabled = audioOnly || options.quality !== 'target'
     sizePick.disabled = audioOnly
+    qualityField.hidden = audioOnly
+    sizeField.hidden = audioOnly
+    bitrateField.hidden = bitrateInput.disabled
+    videoSettings.hidden = audioOnly
     const stats = doc ? sourceStats(doc, assets) : { maxBitrate: null, maxShort: null }
     const aspect = doc?.output.aspect ?? '16:9'
     sizePick.innerHTML = sizeOptions(aspect, stats.maxShort)
@@ -402,13 +415,22 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
       .join('')
     sizePick.value = String(options.short_side)
     sourcesBox.textContent = sourcesLine(stats)
+    sourcesBox.hidden = audioOnly || !sourcesBox.textContent
     if (!doc || empty) {
       // Раньше панель обещала «Черновик: 720p… около 1 мин» пустому проекту, а сервер отвечал
       // 422 сырым текстом в <pre>. Отказ понятнее до нажатия, чем после.
-      summaryBox.innerHTML = `<p>Собирать нечего: на шкале нет ни одного куска.
-        Положите запись во вкладке «Исходники»</p>`
+      summaryBox.textContent = ''
+      estimateBox.textContent = 'Добавьте клип во вкладке «Исходники».'
     } else {
       summaryBox.innerHTML = `<p>${escapeHtml(renderSummary(doc, options, totalDuration(doc.clips)))}</p>`
+      const duration = totalDuration(doc.clips)
+      const minutes = estimateRenderMinutes(duration, options.quality, options.format, overlaysOf(doc).length)
+      const bytes = estimateRenderBytes(duration, options)
+      const subs = audioOnly ? null : subsLine(doc)
+      estimateBox.textContent = [
+        `Около ${minutes} мин без учёта очереди${bytes ? ` · ≈ ${fmtSize(bytes)}` : ''}.`,
+        subs,
+      ].filter(Boolean).join(' ')
     }
     startButton.disabled = empty || jobId !== null
   }
@@ -489,7 +511,8 @@ export function mountRender(el: HTMLElement, projectId: string, handlers: Render
     const { renders } = await listRenders(projectId)
     if (stopped) return
     handlers.onCount?.(renders.length)
-    list.innerHTML = renders.map(row).join('') || '<li class="muted">Нет готовых роликов</li>'
+    list.innerHTML = renders.map(row).join('')
+    list.hidden = renders.length === 0
     list.querySelectorAll<HTMLButtonElement>('button[data-drop]').forEach(b =>
       b.addEventListener('click', async () => {
         if (!window.confirm('Удалить готовый ролик? Файл пропадёт без возможности восстановления.')) return

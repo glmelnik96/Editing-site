@@ -131,8 +131,7 @@ export function plural(count: number): string {
 
 export function mountSubtitles(el: HTMLElement, projectId: string, handlers: SubtitleHandlers) {
   el.innerHTML = `
-    <main class="card stack">
-      <h3 class="display-m" style="margin:0">Субтитры</h3>
+    <main class="card stack" aria-label="Субтитры">
       <div id="sub-cards" class="stack"></div>
       <pre id="sub-error" hidden></pre>
     </main>`
@@ -191,27 +190,23 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     const busy = busyAsset()
     if (jobId || busy) {
       const name = timelineAssets.find(a => a.id === (transcribeId ?? busy?.id))?.name
-      paint(`<p class="lead" style="margin:0">Расшифровываю${name ? ` «${escapeHtml(name)}»` : ''} — ход вверху. Можно уйти
-        на другую вкладку, работа не прервётся</p>`)
+      paint(`<p class="muted" style="margin:0">Расшифровывается${name ? ` «${escapeHtml(name)}»` : ' запись'}…</p>`)
       return
     }
     if (!list.length && timelineAssets.length === 0) {
-      paint(`<p class="lead" style="margin:0">Субтитры собираются из кусков на шкале,
-        а не из пула исходников. Добавьте запись в ролик</p>`)
+      paint(`<p class="muted" style="margin:0">Добавьте видео с речью на шкалу.</p>`)
       return
     }
     const need = missing()
     if (!list.length && need.length) {
       const names = need.map(a => `«${escapeHtml(a.name)}»`).join(', ')
-      paint(`<p class="lead" style="margin:0">На шкале без расшифровки: ${names}.
-        Расшифровка занимает несколько минут и делается один раз на файл</p>
+      paint(`<p class="muted" style="margin:0">Нужна расшифровка: ${names}.</p>
         <button class="btn btn-key" id="sub-transcribe">Расшифровать</button>`)
       el.querySelector('#sub-transcribe')?.addEventListener('click', () => void transcribe())
       return
     }
     if (!list.length) {
-      paint(`<p class="lead" style="margin:0">Расшифровка шкалы готова. Соберите из неё
-        реплики — потом их можно будет поправить</p>
+      paint(`<p class="muted" style="margin:0">Расшифровка готова.</p>
         <button class="btn btn-key" id="sub-build">Собрать субтитры</button>`)
       el.querySelector('#sub-build')?.addEventListener('click', () => void build())
       return
@@ -219,9 +214,8 @@ export function mountSubtitles(el: HTMLElement, projectId: string, handlers: Sub
     // Реплики собраны, но на шкалу добавили запись без расшифровки: «Собрать заново» её не
     // возьмёт и молча ничего не сделает, а другой двери к расшифровке в редакторе нет.
     const late = need.length
-      ? `<p class="lead" style="margin:0">На шкале без расшифровки:
-          ${need.map(a => `«${escapeHtml(a.name)}»`).join(', ')}. Пока эти куски пойдут в ролик
-          без субтитров</p>
+      ? `<p class="muted" style="margin:0">Проверьте субтитры для: ${need.map(a => `«${escapeHtml(a.name)}»`).join(', ')}.
+          Для пересборки нужна расшифровка.</p>
           <button class="btn btn-key" id="sub-transcribe">Расшифровать</button>`
       : ''
     paint(`

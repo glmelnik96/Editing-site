@@ -24,7 +24,6 @@ const CARD_STYLE = [
 
 type Step = {
   href: string
-  step: string
   title: string
   lead: string
   key: boolean
@@ -35,16 +34,14 @@ type Step = {
 // Номером «2.1» он читался как под-шаг редактора, хотя редактор ему не нужен вовсе.
 const UPLOAD: Step = {
   href: '#/files',
-  step: 'Шаг 1',
   title: 'Загрузить исходники',
-  lead: 'Записи, музыка, готовые субтитры — всё, из чего будет собран ролик',
+  lead: 'Видео, музыка и субтитры',
   key: true,
 }
 const EDITOR: Step = {
   href: '#/new',
-  step: 'Шаг 2',
   title: 'Открыть редактор',
-  lead: 'Вырезать лишнее, расшифровать речь, собрать готовый файл',
+  lead: 'Монтаж и сборка ролика',
   key: false,
 }
 const ROW_STYLE = [
@@ -60,7 +57,6 @@ function card(step: Step, delayMs: number): string {
   return `
     <a class="card appear step-card${step.key ? ' step-key' : ''}"
       href="${step.href}" style="${CARD_STYLE};--delay:${delayMs}ms">
-      <span class="meta step-mark">${step.step}</span>
       <h2 class="display-m" style="margin:0">${step.title}</h2>
       <p class="lead" style="margin:0">${step.lead}</p>
       <span class="step-arrow">→</span>
@@ -92,11 +88,9 @@ export function homeStepsHtml(): string {
   return `
       <div class="steps">
         ${card(UPLOAD, 60)}
-        <span class="step-then meta" aria-hidden="true">потом</span>
         ${card(EDITOR, 120)}
       </div>
-      <p class="lead side-tool appear" style="--delay:180ms;margin:0">Нужен только другой формат,
-        без нарезки и сборки? <a href="#/convert">Откройте конвертер</a></p>`
+      <p class="side-tool" style="margin:0"><a href="#/convert">Открыть конвертер</a></p>`
 }
 
 export function mountHome(el: HTMLElement, me: Me): { stop: () => void } {

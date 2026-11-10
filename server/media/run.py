@@ -30,13 +30,13 @@ def tail_lines(text: str, count: int = STDERR_TAIL_LINES) -> str:
 def timeout_message(tool: str, timeout: float) -> str:
     """Срок, который можно прочитать. «14400 с» после четырёх часов работы ни о чём не говорит."""
     if timeout >= 3600:
-        hours = max(1, int(round(timeout / 3600)))
+        hours = max(1, round(timeout / 3600))
         return (
             f"Не успело закончиться за {hours} ч. "
             "Запустите ещё раз: файл длинный или сервер был занят."
         )
     if timeout >= 120:
-        minutes = int(round(timeout / 60))
+        minutes = round(timeout / 60)
         return f"Не успело закончиться за {minutes} мин. Запустите ещё раз."
     return f"{tool} не уложился в {timeout:.0f} с"
 

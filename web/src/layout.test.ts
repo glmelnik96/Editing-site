@@ -18,6 +18,16 @@ describe('сцена в верхнем ряду', () => {
   it('без места — нулевой размер, а не отрицательный', () => {
     expect(stageBox(400, -10, 16 / 9)).toEqual({ width: 0, height: 0 })
   })
+
+  it('в одноколоночном редакторе видео использует ширину без вычета боковых панелей', () => {
+    expect(stageBox(366, 320, 16 / 9, true)).toEqual({ width: 366, height: 206 })
+    expect(stageBox(366, 320, 9 / 16, true)).toEqual({ width: 180, height: 320 })
+  })
+
+  it('без выбранного клипа монитор получает место пустой панели свойств', () => {
+    expect(stageBox(1200, 600, 16 / 9, false, false)).toEqual({ width: 912, height: 513 })
+    expect(stageBox(366, 320, 16 / 9, true, false)).toEqual({ width: 366, height: 206 })
+  })
 })
 
 describe('боковые колонки', () => {

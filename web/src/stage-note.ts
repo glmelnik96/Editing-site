@@ -34,8 +34,8 @@ export function stageNoteHtml(note: StageNote): string {
   switch (note.kind) {
     case 'empty':
       return (
-        '<p><b>Здесь будет ролик.</b> Выберите запись в «Исходниках» слева и нажмите «на V1».</p>' +
-        (note.noRecords ? '<p>Записей пока нет — <a href="#/files">загрузите их на экране «Записи»</a>.</p>' : '')
+        '<p>Здесь будет ролик.</p>' +
+        (note.noRecords ? '<p><a href="#/files">Загрузить исходники</a></p>' : '')
       )
     case 'loading':
       return '<p>Готовлю кадр…</p><i class="stage-bar" aria-hidden="true"></i>'

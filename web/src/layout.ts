@@ -20,8 +20,9 @@ export type Box = { width: number; height: number }
  * Сцена во всю высоту верхнего ряда, ширина — по пропорции. Не помещается между минимальными
  * боковыми колонками — упирается в ширину, и высота тогда меньше ряда.
  */
-export function stageBox(gridWidth: number, rowHeight: number, ratio: number): Box {
-  const room = Math.max(0, gridWidth - 2 * COLUMN_GAP - SIDE_MIN - PROPS_MIN)
+export function stageBox(gridWidth: number, rowHeight: number, ratio: number, stacked = false, inspector = true): Box {
+  const reserved = inspector ? 2 * COLUMN_GAP + SIDE_MIN + PROPS_MIN : COLUMN_GAP + SIDE_MIN
+  const room = Math.max(0, stacked ? gridWidth : gridWidth - reserved)
   const height = Math.max(0, rowHeight)
   const width = height * ratio
   if (width <= room) return { width: Math.round(width), height: Math.round(height) }

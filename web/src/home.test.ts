@@ -3,11 +3,10 @@ import { homeStepsHtml, recentRowHtml } from './home'
 import type { ProjectCard } from './project'
 
 describe('шаги кабинета', () => {
-  it('ведёт двумя шагами: сначала исходники, потом редактор', () => {
+  it('показывает исходники и редактор без декоративных номеров', () => {
     const html = homeStepsHtml()
-    expect(html).toContain('Шаг 1')
+    expect(html).not.toMatch(/Шаг\s*\d/)
     expect(html).toContain('Загрузить исходники')
-    expect(html).toContain('Шаг 2')
     expect(html).toContain('Открыть редактор')
     expect(html.indexOf('Загрузить исходники')).toBeLessThan(html.indexOf('Открыть редактор'))
   })

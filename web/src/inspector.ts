@@ -95,7 +95,7 @@ function checkRow(id: string, label: string, checked: boolean, title = ''): stri
 function clipHtml(sel: Extract<Selected, { kind: 'clip' }>): string {
   const fade =
     sel.index === 0
-      ? '<p class="muted pr-hint">Первый клип: переходить в него не из чего.</p>'
+      ? ''
       : numberRow(
           'pr-fade',
           'Переход из предыдущего, с',
@@ -103,8 +103,8 @@ function clipHtml(sel: Extract<Selected, { kind: 'clip' }>): string {
           'Плавный переход в этот клип из предыдущего. Ноль — стык.',
         )
   const audio = sel.hasAudio
-    ? `<h4 class="pr-sub">Звук клипа</h4>${volumeRow('pr-volume', sel.clip.volume ?? 1)}`
-    : '<p class="muted pr-hint">У этого клипа нет звуковой дорожки.</p>'
+    ? volumeRow('pr-volume', sel.clip.volume ?? 1)
+    : ''
   return `${fade}${audio}`
 }
 
@@ -127,16 +127,15 @@ function overlayHtml(sel: Extract<Selected, { kind: 'overlay' }>): string {
         p => `<option value="${p.value}"${p.value === o.place ? ' selected' : ''}>${escapeHtml(p.label)}</option>`,
       ).join('')}</select>
     </label>
-    <label class="pr-row">Размер, % ширины кадра
+    <label class="pr-row" id="pr-size-field"${sized ? '' : ' hidden'}>Размер, % ширины кадра
       <span class="pr-range"><input id="pr-size" type="range" min="5" max="100" step="1" value="${o.size}"${sized ? '' : ' disabled'} />
       <output id="pr-size-out">${o.size}</output></span>
-      <span class="pr-note muted" id="pr-size-note"${sized ? ' hidden' : ''}>у «весь кадр» и половин размер задаёт сама коробка</span>
     </label>
     <div class="pr-pair">
       ${numberRow('pr-fade-in', 'Появление, с', o.fade_in)}
       ${numberRow('pr-fade-out', 'Исчезновение, с', o.fade_out)}
     </div>
-    ${sel.isImage ? '<p class="muted pr-hint">У картинки звука нет.</p>' : `<h4 class="pr-sub">Звук наложения</h4>${volumeRow('pr-volume', o.volume)}`}`
+    ${sel.isImage ? '' : volumeRow('pr-volume', o.volume)}`
 }
 
 export function mountInspector(el: HTMLElement, handlers: InspectorHandlers) {
@@ -302,8 +301,8 @@ export function mountInspector(el: HTMLElement, handlers: InspectorHandlers) {
       const size = q<HTMLInputElement>('#pr-size')
       const sized = SIZED_PLACES.has(o.place)
       if (size) size.disabled = !sized
-      const sizeNote = q<HTMLElement>('#pr-size-note')
-      if (sizeNote) sizeNote.hidden = sized
+      const sizeField = q<HTMLElement>('#pr-size-field')
+      if (sizeField) sizeField.hidden = !sized
       set('pr-fade-in', o.fade_in)
       set('pr-fade-out', o.fade_out)
       set('pr-volume', o.volume)

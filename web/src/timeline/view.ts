@@ -84,10 +84,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
            закрывали подпись первого клипа. Коды — как в монтажных программах, расшифровка в подсказке. -->
       <div class="tl-heads">
         <div class="tl-head-top"></div>
-        <div class="tl-head tl-head-overlay" title="V2 — наложения: картинки и видео поверх клипов">V2</div>
-        <div class="tl-head tl-head-track" title="V1 — клипы ролика по порядку">V1</div>
-        <div class="tl-head tl-head-audio" title="A1 — звук клипов, двигается вместе с ними">A1 (клипов)</div>
-        <div class="tl-head tl-head-sound" title="A2 — озвучка, шумы и музыка со своим местом">A2</div>
+        <div class="tl-head tl-head-overlay" title="V2 — наложения" hidden>Наложения</div>
+        <div class="tl-head tl-head-track" title="V1 — клипы ролика">Видео</div>
+        <div class="tl-head tl-head-audio" title="A1 — звук клипов" hidden>Звук</div>
+        <div class="tl-head tl-head-sound" title="A2 — отдельные звуковые файлы" hidden>Музыка</div>
       </div>
       <div class="timeline" id="tl-view">
         <div class="ruler" id="tl-ruler"></div>
@@ -97,17 +97,15 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
           <div class="scrub" id="tl-scrub" title="Перемотка: тяните за хват или щёлкните по полосе"></div>
           <!-- Наложения — колея над клипами: картинка или видео поверх основы лежат по своему
                времени и клипы не сдвигают. Пустая видна всегда, как и звуки. -->
-          <div class="overlay-track empty" id="tl-overlays"
-            data-empty="Картинка или видео поверх клипов. В «Исходниках» — кнопка «на V2»"></div>
+          <div class="overlay-track empty" id="tl-overlays" hidden></div>
           <div class="track" id="tl-track"><div class="blocks" id="tl-blocks"></div><div class="drop-ghost" id="tl-drop" hidden></div></div>
           <!-- Звук клипов — своя колея под картинкой, привязанная к ней: блок звука повторяет блок
                клипа, выбирается и двигается вместе с ним, а волну речи читают на своей высоте. -->
-          <div class="track-audio" id="tl-clip-audio"><div class="blocks" id="tl-audio-blocks"></div></div>
+          <div class="track-audio" id="tl-clip-audio" hidden><div class="blocks" id="tl-audio-blocks"></div></div>
           <!-- Звуки — своя колея под клипами: звук лежит по своему времени и клипы не сдвигает.
                Пустая она видна всё равно: появляющаяся колея переставляла бы шкалу под руками,
                а подпись в ней объясняет, откуда туда класть. -->
-          <div class="sound-track empty" id="tl-sounds"
-            data-empty="Озвучка, шумы и музыка поверх речи. В «Исходниках» — кнопка «на A2»"></div>
+          <div class="sound-track empty" id="tl-sounds" hidden></div>
           <div class="playhead" id="tl-playhead"><i class="playhead-grip"></i></div>
         </div>
       </div>
@@ -131,6 +129,9 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
   let sayUntil = 0
   const hint = el.querySelector('#tl-hint') as HTMLElement
   const frame = el.querySelector('#tl-frame') as HTMLElement
+  const overlayHead = el.querySelector('.tl-head-overlay') as HTMLElement
+  const audioHead = el.querySelector('.tl-head-audio') as HTMLElement
+  const soundHead = el.querySelector('.tl-head-sound') as HTMLElement
   // Низкие дорожки — в окне ниже 760 px (layout.ts): числа одни на стили и на кадры с волной.
   const compactQuery = window.matchMedia(COMPACT_QUERY)
   let sizes: LaneSizes = laneSizes(compactQuery.matches)
@@ -267,6 +268,10 @@ export function mountTimeline(el: HTMLElement, handlers: TimelineHandlers) {
     })
     soundLane.paint(current.sounds)
     overlayLane.paint(current.overlays)
+    // Показываем только заполненные дополнительные дорожки; во время жеста render отложен.
+    overlayTrack.hidden = overlayHead.hidden = current.overlays.length === 0
+    soundTrack.hidden = soundHead.hidden = current.sounds.length === 0
+    audioTrack.hidden = audioHead.hidden = audioBox.childElementCount === 0
     // Сказанное под шкалой перерисовка не стирает: автосохранение отвечает через полсекунды после
     // правки, и отказ на следующую правку исчезал, не успев быть прочитанным.
     if (!drag && Date.now() >= sayUntil) hint.textContent = emptyTrackHint(current.clips.length)

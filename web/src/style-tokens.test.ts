@@ -12,10 +12,30 @@ const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'style.cs
 const root = css.match(/:root\s*\{([^}]*)\}/)?.[1] ?? ''
 const body = css.replace(/:root\s*\{[^}]*\}/, '').replace(/\/\*[\s\S]*?\*\//g, '')
 
+function luminance(token: string): number {
+  const hex = root.match(new RegExp(`--${token}:\\s*#([0-9a-f]{6})`, 'i'))?.[1]
+  if (!hex) throw new Error(`Missing color token: ${token}`)
+  const rgb = [0, 2, 4].map(i => {
+    const s = parseInt(hex.slice(i, i + 2), 16) / 255
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
+}
+
+function contrast(a: string, b: string): number {
+  const x = luminance(a), y = luminance(b)
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
 describe('токены', () => {
   it('серый текст и рамка полей проходят WCAG', () => {
-    expect(root).toMatch(/--dim:\s*#7d817f/i)
-    expect(root).toMatch(/--border-field:\s*#616563/i)
+    for (const surface of ['ink', 'panel', 'surface-control']) {
+      for (const text of ['paper', 'muted', 'dim']) {
+        expect(contrast(text, surface), `${text} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+      }
+      expect(contrast('border-field', surface)).toBeGreaterThanOrEqual(3)
+    }
+    expect(contrast('brand-ink', 'brand')).toBeGreaterThanOrEqual(4.5)
     const field =
       css.match(/input:not\(\[type='checkbox'\]\):not\(\[type='radio'\]\),\s*select,\s*textarea\s*\{[^}]*\}/)?.[0] ?? ''
     expect(field).toContain('var(--border-field)')

@@ -88,6 +88,7 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
       <strong id="ed-name" class="project-name">Проект</strong>
       <span class="small" id="ed-state">загрузка…</span>
       <span id="ed-notice" class="meta"></span>
+      <section class="roll project-output" id="ed-roll" aria-label="Формат ролика"></section>
       <div class="saves" id="ed-saves">
         <button type="button" class="btn btn-ghost" id="ed-saves-toggle" aria-expanded="false">
           Версии
@@ -111,8 +112,7 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
                способ отрезать. Подпись под складками говорит, что будет без выбранного отрезка. -->
           <div id="ed-source" class="card src-window" data-panel="source">
             <div id="ed-source-main"></div>
-            <div id="ed-transcript"></div>
-            <p class="meta src-cut-hint">Выбрать конкретный отрезок видео, без этого ролик будет помещён целиком</p>
+            <div id="ed-transcript" hidden></div>
           </div>
           <div id="ed-subtitles" data-panel="subtitles" hidden></div>
           <section id="ed-renders" data-panel="renders" hidden></section>
@@ -124,18 +124,13 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
       <!-- Свойства выбранного — справа от сцены. Раньше стояли строкой над шкалой и гасли по выбору;
            панель читается сверху вниз и показывает только то, что у куска есть. Заголовка над ней
            нет: она сама называет, что выбрано. -->
-      <section class="props" id="ed-props">
-        <!-- «Таймлайн» всегда сверху: пропорцию и растяжку кадра видно и при выбранном куске. -->
-        <section class="roll" id="ed-roll" aria-label="Настройки таймлайна"></section>
+      <section class="props" id="ed-props" hidden>
         <div class="props-body" id="ed-props-body"></div>
       </section>
-      <!-- Одна строка во всю ширину, группы через черту: отмена, просмотр, правка шкалы, масштаб;
-           «?» — у правого края. Настройки готового файла живут в «Свойствах» и во вкладке «Рендер»:
-           рядом с «Разрезать» они читались как ещё одна правка шкалы. -->
+      <!-- Основные действия остаются на виду, остальные доступны в меню «Ещё». -->
       <div class="row bar-edit">
         <span class="bar-group" id="ed-undo-group">
           <button id="ed-undo" type="button" title="Отменить последнее действие (Ctrl+Z)">Отменить</button>
-          <button id="ed-redo" type="button" title="Вернуть отменённое (Ctrl+Shift+Z)">Вернуть</button>
         </span>
         <span class="bar-group" id="ed-play-group">
           <button id="ed-play" type="button" title="Играть (пробел)">▶</button>
@@ -144,9 +139,13 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
         </span>
         <span class="bar-group" id="ed-edit-group">
           <button id="ed-split" type="button" title="Разрезать по курсору (S)">Разрезать</button>
-          <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
           <button id="ed-delete" type="button" title="Удалить выбранный кусок (Del)">Удалить</button>
         </span>
+        <details class="editor-more" id="ed-more">
+          <summary>Ещё</summary>
+          <div class="editor-more-menu">
+            <button id="ed-redo" type="button" title="Вернуть отменённое (Ctrl+Shift+Z)">Вернуть</button>
+            <button id="ed-copy" type="button" title="Копия клипа встанет следом (Ctrl+D)">Дублировать</button>
         <span class="bar-group" id="ed-zoom-group">
           <!-- Подпись нужна: три контрола без неё читались как «минус, ползунок, плюс» к чему угодно
                — к громкости, к переходу, — а не к масштабу шкалы. -->
@@ -156,10 +155,10 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
             title="Масштаб шкалы" />
           <button id="ed-zoom-in" type="button" class="btn-square" title="Крупнее (+)">+</button>
         </span>
-        <span class="bar-group" id="ed-help-group">
-          <button id="ed-help" type="button" class="btn-square" title="Горячие клавиши (?)"
-            aria-label="Горячие клавиши" aria-expanded="false">?</button>
-        </span>
+          <button id="ed-help" type="button" title="Горячие клавиши (?)"
+            aria-expanded="false">Горячие клавиши</button>
+          </div>
+        </details>
       </div>
       <div id="ed-timeline"></div>
     </div>
@@ -180,6 +179,21 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
   const totalBox = el.querySelector('#ed-total') as HTMLElement
   const errorBox = el.querySelector('#ed-error') as HTMLPreElement
   const propsBody = el.querySelector('#ed-props-body') as HTMLElement
+  const propsPanel = el.querySelector('#ed-props') as HTMLElement
+  const moreMenu = el.querySelector('#ed-more') as HTMLDetailsElement
+  const closeMoreOutside = (event: PointerEvent) => {
+    if (!moreMenu.contains(event.target as Node)) moreMenu.open = false
+  }
+  document.addEventListener('pointerdown', closeMoreOutside)
+  moreMenu.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return
+    event.stopPropagation()
+    moreMenu.open = false
+    moreMenu.querySelector('summary')?.focus()
+  })
+  moreMenu.addEventListener('click', event => {
+    if ((event.target as HTMLElement).closest('#ed-redo, #ed-copy, #ed-help')) moreMenu.open = false
+  })
   const history = createHistory<ProjectDoc>()
   const undoButton = el.querySelector('#ed-undo') as HTMLButtonElement
   const redoButton = el.querySelector('#ed-redo') as HTMLButtonElement
@@ -800,7 +814,10 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
         ? addSound(asset.id, range.from, range.to)
         : addClip(asset.id, range.from, range.to, false),
     onOverlay: (asset, range) => addOverlay(asset.id, range.from, range.to),
-    onPick: asset => transcript.setAsset(asset),
+    onPick: asset => {
+      transcript.setAsset(asset)
+      ;(el.querySelector('#ed-transcript') as HTMLElement).hidden = asset === null
+    },
     onTime: seconds => transcript.setTime(seconds),
     onFold: () => setFold(openFold === 'cut' ? null : 'cut'),
   }, me.email)
@@ -822,7 +839,7 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
     savePref(FOLD_KEY, next ?? 'none')
   }
 
-  const savedFold = readPref(FOLD_KEY, 'cut')
+  const savedFold = readPref(FOLD_KEY, 'none')
   setFold(savedFold === 'words' ? 'words' : savedFold === 'none' ? null : 'cut')
 
   const subtitles = mountSubtitles(el.querySelector('#ed-subtitles') as HTMLElement, projectId, {
@@ -1150,19 +1167,27 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
     // и мерить ею место значило бы замкнуть круг — сетка перестала бы следовать за окном.
     const style = getComputedStyle(grid)
     const gridWidth = grid.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-    const box = stageBox(gridWidth, stageCell.clientHeight, aspectRatio(project.doc.output.aspect))
+    // Узкая раскладка CSS ставит зоны вертикально: боковые панели не отнимают ширину кадра.
+    const stacked = window.matchMedia('(max-width: 899px)').matches
+    const rowHeight = stacked ? Math.min(window.innerHeight * 0.5, 480) : stageCell.clientHeight
+    const showProps = !propsPanel.hidden
+    const box = stageBox(gridWidth, rowHeight, aspectRatio(project.doc.output.aspect), stacked, showProps)
     const { props } = sideWidths(gridWidth, box.width)
-    const key = `${gridWidth}:${box.width}x${box.height}`
+    const key = `${stacked}:${showProps}:${gridWidth}:${box.width}x${box.height}`
     if (key === fitted) return
     fitted = key
     // Исходники — остаток (1fr): даже если окно поменяется раньше пересчёта, сетка не разойдётся.
-    grid.style.gridTemplateColumns = `minmax(0, 1fr) ${box.width}px ${props}px`
+    grid.style.gridTemplateColumns = stacked ? 'minmax(0, 1fr)' : showProps
+      ? `minmax(0, 1fr) ${box.width}px ${props}px`
+      : '280px minmax(0, 1fr)'
     stage.style.width = `${box.width}px`
     stage.style.height = `${box.height}px`
   }
   const fitObserver = new ResizeObserver(() => fitStage())
   fitObserver.observe(grid)
   fitObserver.observe(stageCell)
+  // В вертикальной раскладке высота окна меняется независимо от размеров самой сетки.
+  window.addEventListener('resize', fitStage)
 
   function render(): void {
     if (!project) return
@@ -1255,7 +1280,10 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
    */
   function syncSelection(): void {
     syncBar()
-    inspector.set(currentSelection())
+    const selected = currentSelection()
+    propsPanel.hidden = selected.kind === 'none'
+    inspector.set(selected)
+    fitStage()
     if (project) roll.set(project.doc.output, pickedKind() !== 'none')
   }
 
@@ -1598,6 +1626,8 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
     // В поле ввода клавиши принадлежат полю: Delete стирает букву, а не клип со шкалы.
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
     if (target?.isContentEditable) return
+    // Пробел активирует сфокусированную кнопку или раскрывает нативное меню.
+    if (event.code === 'Space' && target && ['BUTTON', 'SUMMARY'].includes(target.tagName)) return
     const what = shortcutFor(event)
     if (!what) return
     if (what === 'undo') {
@@ -1734,6 +1764,9 @@ export function mountEditor(el: HTMLElement, projectId: string, me: Me) {
     stop(): void {
       document.body.classList.remove('editor-fit')
       fitObserver.disconnect()
+      window.removeEventListener('resize', fitStage)
+      document.removeEventListener('pointerdown', closeMoreOutside)
+      roll.stop()
       pauseSounds()
       pauseOverlays()
       soundPlayers.forEach(player => player.removeAttribute('src'))
